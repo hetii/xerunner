@@ -23,9 +23,10 @@ front of a 4 GB eMMC. A part that really is 64 MB exists in a developer Xenon, Z
 Falcon, and the image built for it is the same 16 MB as for its 16 MB sibling.
 
 `block_size` is the part's erase block, which is how much room CF and CG are given.
-`round_to` is what the bootloader region's start rounds up to, and it follows the image's
-size rather than the part's: every 64 MB image rounds to 0x20000 and every smaller one to
-0x4000. So a Trinity with a big block part states 0x10000 and rounds to 0x20000.
+`round_to` is what the bootloader region's start rounds up to, and it follows the
+image's size rather than the part's: every 64 MB image rounds to 0x20000 and every
+smaller one to 0x4000. So a Trinity with a big block part states 0x10000 and rounds
+to 0x20000.
 
 Measured off images, with the filesystem base read from a real directory entry -- taking
 it from the bytes the CG tail ends in finds the CG's own body instead, because the two
@@ -169,8 +170,8 @@ class FlatBigNand(Flash):
 
     The shape a `devkit` or a `testkit` image takes whatever board it is built for: the
     layout routine tests the image type before the board, and those two take this arm.
-    It is where the `16` in `devkit16` and `testkit16` comes from -- those two are tested
-    and fall through to the board's own shape instead.
+    It is where the `16` in `devkit16` and `testkit16` comes from -- those two are
+    tested and fall through to the board's own shape instead.
 
     Flat means the filesystem starts where the bootloaders end. Every other 64 MB shape
     reserves a large region below it and counts directory blocks from the far side.

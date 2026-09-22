@@ -10,3 +10,18 @@ requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+# Two families are left out on measurement rather than taste. `UP031` -- rewrite `%`
+# formatting as f-strings -- was 24 of the 25 findings over this tree, and the project
+# writes `%` throughout. `TRY003` objects to messages that say what went wrong, which
+# every refusal here does on purpose, and `TRY004` wants a TypeError where an option was
+# named with no value after it, which is a missing value and not a wrong type.
+select = ["E", "W", "F", "I", "B", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# A package's `__init__.py` re-exports on purpose, so every name in it reads as unused.
+"**/__init__.py" = ["F401"]

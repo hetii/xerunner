@@ -13,7 +13,8 @@ class Zephyr(Board):
     copyright_year = 2005
     jtag_copyright_year = 2005
 
-    # It has a stock image of its own and no glitched one, so it takes Falcon's for both.
+    # It has a stock image of its own and no glitched one, so it takes Falcon's
+    # for both.
     smc_clean = "ZEPHYR_CLEAN.bin"
     smc_cr4 = "FALCON_CR4.bin"
     smc_plus = "FALCON_SMC+.bin"

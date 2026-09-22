@@ -94,7 +94,7 @@ class Board:
         return self.flash.offset_of(block, bigffs)
 
     def stated_block_size(self) -> int:
-        """What the image's header carries at 0x70, which is zero where it says nothing."""
+        """What the header carries at 0x70, which is zero where it says nothing."""
         return self.flash.block_size if self.flash.states_block_size else 0
 
     def __repr__(self) -> str:
