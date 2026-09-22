@@ -28,16 +28,6 @@ from __future__ import annotations
 
 PAGE = 512
 ENTRY = 0x20
-NAME_LENGTH = 22
-RELEASED = 0x05  # what the first byte of a name becomes when the file is let go
-# The four things a map word says instead of naming a block. Read off an image the
-# original built: the bootloader region and everything past the last usable block are
-# RESERVED, an unused block is FREE, a file's last block is CHAIN_END, and the one block
-# the table itself sits in is TABLE.
-RESERVED, TABLE, FREE, CHAIN_END = 0x1FFB, 0x1FFD, 0x1FFE, 0x1FFF
-# Which bits of a word are the block. The rest are a console's flags: measured, masking
-# them off is what makes an older copy of a table read back the right file lengths.
-BLOCK_MASK = 0x1FFF
 
 
 class Entry:
@@ -49,14 +39,17 @@ class Entry:
     @property
     def name(self) -> str:
         """The name as stored, first byte and all. Nothing is repaired here."""
-        raw = self.row[:NAME_LENGTH]
+        raw = self.row[:22]
         end = raw.find(b"\x00")
         return (raw if end < 0 else raw[:end]).decode("latin-1")
 
     @property
     def released(self) -> bool:
-        """Whether the filesystem has let this file go and reused its blocks."""
-        return bool(self.row) and self.row[0] == RELEASED
+        """Whether the filesystem has let this file go and reused its blocks.
+
+        0x05 is what a deletion writes over the name's first byte.
+        """
+        return bool(self.row) and self.row[0] == 0x05
 
     @property
     def sector(self) -> int:
@@ -116,8 +109,10 @@ class Directory:
         `chain` stops at a marker without needing to know which it is.
         """
         words = self._halves(0)
+        # Thirteen bits are the block; above them are a console's flags, and masking
+        # them off is what makes an older copy of a table read the right file lengths.
         return tuple(
-            int.from_bytes(words[at : at + 2], "big") & BLOCK_MASK
+            int.from_bytes(words[at : at + 2], "big") & 0x1FFF
             for at in range(0, len(words), 2)
         )
 

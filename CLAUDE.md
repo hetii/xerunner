@@ -17,6 +17,17 @@ source.
 Nothing is asserted that was not measured. Where a value came off an image, a binary or
 a running console, the comment says which.
 
+## Names at module level
+
+A name at module level has to earn it. It earns it by being used more than once in its own
+file, or by being something outside the module reads. A value used in exactly one place
+belongs in that place, as a local, however tempting it is to give it a capitalised name at
+the top -- `MAGIC = 0xFF4F` read once in one predicate is noise, not documentation. The
+comment that would have gone above it goes above the line that uses it.
+
+This has been corrected more than once. Before writing a constant at module level, count
+its uses.
+
 ## Logging
 
 The standard library's `logging`, used as it was meant to be: a module logger, and

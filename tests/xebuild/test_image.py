@@ -17,8 +17,7 @@ import unittest
 
 from xebuild.boards import for_name
 from xebuild.boards.flash import SmallNand
-from xebuild.image import Directory, Header, Image
-from xebuild.image.directory import CHAIN_END, FREE, RESERVED, TABLE
+from xebuild.image import Directory, Header, Image, Keyvault, order
 
 PAGE = 512
 
@@ -150,7 +149,8 @@ class TheFileTable(unittest.TestCase):
         file's last, and TABLE exactly once on the block the table sits in. 0x5FFE it
         never writes; both consoles here carry it.
         """
-        for marker in (RESERVED, TABLE, FREE, CHAIN_END):
+        # RESERVED, TABLE, FREE, CHAIN_END, as the original writes them
+        for marker in (0x1FFB, 0x1FFD, 0x1FFE, 0x1FFF):
             with self.subTest(marker=hex(marker)):
                 block = a_table([("two.bin", 1, 0x8000, 0)], 4,
                                 following={1: 2, 2: marker})
@@ -286,3 +286,185 @@ class AgainstAConsoleSOwnDump(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AConsoleSOwnSecrets(unittest.TestCase):
+    """The keyvault, which opens with one console's key and no other."""
+
+    KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
+
+    def a_keyvault(self, serial="123456789012", made="10-21-10",
+                   dvd=b"\xab" * 16, hashed=True):
+        plain = bytearray(0x4000)
+        plain[0xB0:0xBC] = serial.encode("latin-1")
+        plain[0x100:0x110] = dvd
+        plain[0x9E4:0x9EC] = made.encode("latin-1")
+        if hashed:
+            plain[0x1DF8:0x1E08] = b"\x5a" * 16
+        return Keyvault(bytes(plain))
+
+    def test_what_it_says_about_the_console(self):
+        made = self.a_keyvault()
+        self.assertEqual(made.serial, "123456789012")
+        self.assertEqual(made.made_on, "10-21-10")
+        self.assertEqual(made.dvd_key, b"\xab" * 16)
+        self.assertTrue(made.looks_opened)
+
+    def test_sealing_and_opening_come_back_to_the_same_bytes(self):
+        one = self.a_keyvault()
+        sealed = one.sealed(self.KEY)
+        self.assertEqual(len(sealed), 0x4000)
+        self.assertNotEqual(sealed[0x100:0x110], b"\xab" * 16)
+        again = Keyvault.opened(sealed, self.KEY)
+        self.assertEqual(again.plain[0x10:], one.plain[0x10:])
+        self.assertEqual(again.serial, "123456789012")
+
+    def test_the_nonce_is_derived_so_sealing_twice_gives_the_same_bytes(self):
+        """Measured on two consoles: the nonce is HMAC(cpu key, plaintext + 07 12).
+
+        It matters because it means a rebuilt image carries the console's own keyvault
+        bytes exactly, with nothing taken from the dump to make it so.
+        """
+        one = self.a_keyvault()
+        self.assertEqual(one.sealed(self.KEY), one.sealed(self.KEY))
+        other = bytes(byte ^ 1 for byte in self.KEY)
+        self.assertNotEqual(one.sealed(self.KEY)[:0x10], one.sealed(other)[:0x10])
+
+    def test_the_wrong_key_opens_it_to_nothing_that_reads_as_a_serial(self):
+        sealed = self.a_keyvault().sealed(self.KEY)
+        wrong = Keyvault.opened(sealed, bytes(byte ^ 1 for byte in self.KEY))
+        self.assertFalse(wrong.looks_opened)
+
+    def test_the_two_kinds_the_original_names(self):
+        self.assertTrue(self.a_keyvault(hashed=True).hashed)
+        self.assertFalse(self.a_keyvault(hashed=False).hashed)
+
+    def test_all_ones_is_no_hash_either(self):
+        """Its own test: type 2 the moment a word is neither zero nor all ones."""
+        plain = bytearray(0x4000)
+        plain[0x1DF8:0x1E08] = b"\xff" * 16
+        self.assertFalse(Keyvault(bytes(plain)).hashed)
+
+
+class AConsoleSOwnKeyvault(unittest.TestCase):
+    """Skipped unless `XEBUILD_DUMP` and `XEBUILD_CPUKEY` name a dump and its key."""
+
+    def setUp(self):
+        where = os.environ.get("XEBUILD_DUMP", "")
+        key = os.environ.get("XEBUILD_CPUKEY", "")
+        if not os.path.isfile(where) or len(key.strip()) != 32:
+            raise unittest.SkipTest("XEBUILD_DUMP and XEBUILD_CPUKEY are not both set")
+        board, _ = for_name("trinity")
+        with open(where, "rb") as handle:
+            self.image = Image(handle.read(), board.flash)
+        self.key = bytes.fromhex(key.strip())
+
+    def test_it_opens_to_a_serial_and_seals_back_to_the_same_bytes(self):
+        sealed = self.image.flat[0x4000:0x8000]
+        found = Keyvault.opened(sealed, self.key)
+        self.assertTrue(found.looks_opened, "the key does not open this keyvault")
+        self.assertEqual(found.sealed(self.key), sealed)
+
+    def test_the_serial_is_the_one_in_the_dump_s_own_name(self):
+        wanted = os.environ.get("XEBUILD_SERIAL", "")
+        if not wanted:
+            raise unittest.SkipTest("XEBUILD_SERIAL does not say which console")
+        found = Keyvault.opened(self.image.flat[0x4000:0x8000], self.key)
+        self.assertEqual(found.serial, wanted)
+
+
+class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
+    """Every rule here was measured by handing the original a dump made for the purpose.
+
+    A tiny flash again, but one with a pool: eight blocks of which five may be used, so
+    blocks 6 and 7 are where a replacement may live.
+    """
+
+    class PooledFlash(SmallNand):
+        blocks = 8
+        last_block = 5
+
+    def a_dump(self):
+        """Eight blocks, each holding its own number and claiming it in its spare."""
+        flash = self.PooledFlash()
+        step, per = PAGE + flash.spare.length, flash.spare.pages_a_block
+        out = bytearray()
+        for block in range(flash.blocks):
+            data = bytes([block]) * PAGE
+            fields = flash.spare.written(block, sequence=1, kind=0)
+            out += (data + flash.spare.with_ecc(data, fields)) * per
+        return bytes(out), flash, step, per
+
+    def mark_bad(self, raw, flash, block, step, per):
+        out = bytearray(raw)
+        for page in range(per):
+            at = (block * per + page) * step
+            fields = bytearray(out[at + PAGE : at + step])
+            fields[flash.spare.mark_at] = 0x00
+            data = out[at : at + PAGE]
+            out[at + PAGE : at + step] = flash.spare.with_ecc(data, fields)
+        return bytes(out)
+
+    def stand_in(self, raw, flash, bad, pool, step, per):
+        """Put the bad block's data in the pool, claiming the bad block's number."""
+        out = bytearray(raw)
+        for page in range(per):
+            at = (pool * per + page) * step
+            data = bytes([bad]) * PAGE
+            fields = flash.spare.written(bad, sequence=1, kind=0)
+            out[at : at + PAGE] = data
+            out[at + PAGE : at + step] = flash.spare.with_ecc(data, fields)
+        return bytes(out)
+
+    def test_a_dump_whose_blocks_are_all_in_place_comes_back_unchanged(self):
+        """Which is every dump off a console that has never replaced a block."""
+        raw, flash, _, _ = self.a_dump()
+        self.assertEqual(order.logical(raw, flash), raw)
+        self.assertEqual(order.marked_bad(raw, flash), ())
+        self.assertEqual(order.failing(raw, flash), ())
+        self.assertEqual(order.replacements(raw, flash), {})
+
+    def test_a_block_the_chip_wrote_off_is_found(self):
+        raw, flash, step, per = self.a_dump()
+        raw = self.mark_bad(raw, flash, 3, step, per)
+        self.assertEqual(order.marked_bad(raw, flash), (3,))
+
+    def test_its_contents_come_from_the_pool(self):
+        """What the original does: "copying nanddump data from block X to block Y"."""
+        raw, flash, step, per = self.a_dump()
+        raw = self.mark_bad(raw, flash, 3, step, per)
+        raw = self.stand_in(raw, flash, 3, 7, step, per)
+        self.assertEqual(order.replacements(raw, flash), {3: 7})
+        span = step * per
+        out = order.logical(raw, flash)
+        self.assertEqual(out[3 * span : 4 * span], raw[7 * span : 8 * span])
+
+    def test_a_block_claiming_another_s_number_outside_the_pool_is_no_replacement(self):
+        """The original turns one away: "bad LBA at block 0x387, block LBA ignored"."""
+        raw, flash, step, per = self.a_dump()
+        raw = self.mark_bad(raw, flash, 3, step, per)
+        raw = self.stand_in(raw, flash, 3, 4, step, per)  # 4 is inside the usable area
+        self.assertEqual(order.replacements(raw, flash), {})
+        self.assertEqual(order.logical(raw, flash), raw)
+
+    def test_a_page_whose_code_no_longer_fits_its_data_moves_the_block(self):
+        """One flipped byte: "ECD error at block 0x2a, block will be remapped"."""
+        raw, flash, step, per = self.a_dump()
+        broken = bytearray(raw)
+        broken[(3 * per + 1) * step + 100] ^= 0x01
+        self.assertEqual(order.failing(bytes(broken), flash), (3,))
+
+    def test_what_the_two_options_turn_off(self):
+        raw, flash, step, per = self.a_dump()
+        with_bad = self.stand_in(self.mark_bad(raw, flash, 3, step, per),
+                                 flash, 3, 7, step, per)
+        self.assertNotEqual(order.logical(with_bad, flash), with_bad)
+        self.assertEqual(order.logical(with_bad, flash, remap=False), with_bad)
+        broken = bytearray(raw)
+        broken[(3 * per + 1) * step + 100] ^= 0x01
+        self.assertEqual(order.logical(bytes(broken), flash, ecd=False), bytes(broken))
+
+    def test_an_emmc_image_has_nothing_to_put_in_order(self):
+        board, _ = for_name("corona4g")
+        flat = b"\x5a" * 0x8000
+        self.assertEqual(order.logical(flat, board.flash), flat)

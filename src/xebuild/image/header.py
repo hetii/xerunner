@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import struct
 
-MAGIC = 0xFF4F
-
 
 class Header:
     """What an image says about itself, read off its first page.
@@ -42,7 +40,7 @@ class Header:
     @property
     def ok(self) -> bool:
         """Whether this looks like a flash image at all."""
-        return len(self.image) > 0x80 and self.magic == MAGIC
+        return len(self.image) > 0x80 and self.magic == 0xFF4F
 
     @property
     def version(self) -> int:

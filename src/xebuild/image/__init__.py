@@ -9,3 +9,5 @@ what is in a dump needs no builder to do it.
 from .directory import Directory, Entry
 from .header import Header
 from .image import Image
+from .keyvault import Keyvault
+from .order import logical
