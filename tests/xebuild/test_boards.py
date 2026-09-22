@@ -202,6 +202,95 @@ class TheSpareLayouts(unittest.TestCase):
         self.assertEqual(spare.BigBlockChip().pages_a_block, 256)
 
 
+class TheCodeOverAPage(unittest.TestCase):
+    """What the controller keeps for every page, and what depends on it being right."""
+
+    def test_a_page_carries_the_code_its_own_bytes_ask_for(self):
+        for layout in (spare.SmallBlock(), spare.BigBlockController(),
+                       spare.BigBlockChip()):
+            with self.subTest(meta=layout.meta):
+                data = bytes(range(256)) * 2
+                fields = layout.written(0x15C, sequence=7, kind=0x31)
+                whole = layout.with_ecc(data, fields)
+                self.assertTrue(layout.ecc_ok(data + whole))
+
+    def test_one_byte_of_data_changing_makes_the_code_wrong(self):
+        layout = spare.BigBlockController()
+        data = bytes(range(256)) * 2
+        whole = layout.with_ecc(data, layout.written(1))
+        self.assertTrue(layout.ecc_ok(data + whole))
+        moved = bytearray(data)
+        moved[100] ^= 0x01
+        self.assertFalse(layout.ecc_ok(bytes(moved) + whole))
+
+    def test_writing_the_code_leaves_every_other_field_alone(self):
+        layout = spare.BigBlockChip()
+        data = b"\xa5" * 512
+        fields = layout.written(0x2E0, sequence=9, kind=0x2A)
+        whole = layout.with_ecc(data, fields)
+        self.assertEqual(whole[:layout.kind_at], fields[:layout.kind_at])
+        self.assertEqual(layout.block_number(whole), 0x2E0)
+        self.assertEqual(layout.sequence(whole), 9)
+        self.assertEqual(layout.kind(whole), 0x2A)
+
+    def test_a_short_page_has_no_code_to_check(self):
+        self.assertFalse(spare.SmallBlock().ecc_ok(b"\x00" * 100))
+
+
+class TakingAnImageApartAndPuttingItBack(unittest.TestCase):
+    def test_the_spare_comes_out_and_goes_back(self):
+        board, _ = boards.for_spelling("trinity")
+        layout = board.spare
+        pages = 40
+        flat = bytes(one % 251 for one in range(pages * 512))
+        fields = [layout.written(index // 32) for index in range(pages)]
+        raw = board.flash.unflatten(flat, fields)
+        self.assertEqual(len(raw), pages * (512 + layout.length))
+        self.assertEqual(board.flash.flatten(raw), flat)
+        for at in range(0, len(raw), 512 + layout.length):
+            self.assertTrue(layout.ecc_ok(raw[at : at + 512 + layout.length]))
+
+    def test_a_spare_of_nothing_is_left_as_it_is(self):
+        """A retired block is zeroed on purpose, code included."""
+        board, _ = boards.for_spelling("trinity")
+        raw = board.flash.unflatten(b"\xff" * 512, [bytes(16)])
+        self.assertEqual(raw[512:], bytes(16))
+
+    def test_an_emmc_image_is_the_same_either_way(self):
+        board, _ = boards.for_spelling("corona4g")
+        flat = b"\x5a" * 4096
+        self.assertIsNone(board.spare)
+        self.assertEqual(board.flash.flatten(flat), flat)
+        self.assertEqual(board.flash.unflatten(flat, []), flat)
+
+    def test_a_short_last_page_is_padded_rather_than_dropped(self):
+        board, _ = boards.for_spelling("trinity")
+        raw = board.flash.unflatten(b"\x11" * 600, [bytes(board.spare.length)] * 2)
+        self.assertEqual(len(raw), 2 * (512 + board.spare.length))
+
+    def test_against_a_console_s_own_dump(self):
+        """The only check that says the code is the one the hardware keeps.
+
+        Skipped unless `XEBUILD_DUMP` names a raw 16 MB NAND dump, so nothing here
+        depends on material this repository does not carry.
+        """
+        where = os.environ.get("XEBUILD_DUMP", "")
+        if not os.path.isfile(where):
+            raise unittest.SkipTest("XEBUILD_DUMP does not name a dump")
+        with open(where, "rb") as handle:
+            raw = handle.read()
+        board, _ = boards.for_spelling("trinity")
+        self.assertEqual(len(raw), board.raw_length)
+        step = 512 + board.spare.length
+        for at in range(0, len(raw), step):
+            self.assertTrue(board.spare.ecc_ok(raw[at : at + step]),
+                            "page at %#x does not carry its code" % at)
+        flat = board.flash.flatten(raw)
+        self.assertEqual(len(flat), board.length)
+        fields = [raw[at + 512 : at + step] for at in range(0, len(raw), step)]
+        self.assertEqual(board.flash.unflatten(flat, fields), raw)
+
+
 class WhatTheOriginalPrints(unittest.TestCase):
     def test_two_consoles_it_cannot_name(self):
         blank = {b.name for b in boards.ROSTER if not b.text}

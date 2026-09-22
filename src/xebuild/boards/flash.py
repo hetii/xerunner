@@ -38,6 +38,7 @@ from __future__ import annotations
 from .spare import BigBlockChip, BigBlockController, SmallBlock
 
 BLOCK = 0x4000
+PAGE = 512  # data bytes in one page, whatever the part; the spare follows each one
 
 
 class Flash:
@@ -67,10 +68,51 @@ class Flash:
 
     @property
     def raw_length(self) -> int:
-        """The file on disk: a spare follows every page of 512 bytes."""
+        """The file on disk: a spare follows every page."""
         if self.spare is None:
             return self.length
-        return self.length // 512 * (512 + self.spare.length)
+        return self.length // PAGE * (PAGE + self.spare.length)
+
+    def flatten(self, raw: bytes) -> bytes:
+        """The image as the console addresses it, with the spare bytes taken out.
+
+        Everything that reads an image -- the header, the chain, the filesystem --
+        counts from the flat run, and every offset in it is wrong while the spare is
+        still there. Nothing raises when it is: the chain is simply not where it should
+        be. An eMMC part has no spare, so this hands the bytes straight back.
+        """
+        if self.spare is None:
+            return bytes(raw)
+        step = PAGE + self.spare.length
+        return b"".join(
+            bytes(raw[at : at + PAGE]) for at in range(0, len(raw) - step + 1, step)
+        )
+
+    def unflatten(self, flat: bytes, spares) -> bytes:
+        """The image the way the part holds it: every page followed by its own spare.
+
+        The inverse of `flatten`, and the half of building that can be checked without a
+        console -- take a dump apart, put it back, and the bytes either match or they do
+        not. `spares` is one run of field bytes a page, and each page's code is computed
+        over what it actually ends up holding.
+
+        A spare of nothing but zeros is left alone. That is a retired block, and the
+        whole point of zeroing it is that nothing is left to read, the code included.
+        Nothing else can be all zeros: a written page carries a 0xFF mark somewhere and
+        an erased one is 0xFF throughout.
+        """
+        if self.spare is None:
+            return bytes(flat)
+        out = bytearray()
+        for index, at in enumerate(range(0, len(flat), PAGE)):
+            page = bytes(flat[at : at + PAGE]).ljust(PAGE, b"\x00")
+            fields = (
+                bytes(spares[index])
+                if index < len(spares)
+                else bytes(self.spare.length)
+            )
+            out += page + (self.spare.with_ecc(page, fields) if any(fields) else fields)
+        return bytes(out)
 
     def base_of(self, bigffs: bool = False) -> int:
         """The block the filesystem counts from, with or without the larger one."""

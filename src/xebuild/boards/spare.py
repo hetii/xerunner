@@ -25,6 +25,21 @@ An eMMC console has none of these: there is no spare area at all, so its flash a
 
 from __future__ import annotations
 
+# The shift register the flash controller runs over a page, and the table that makes it
+# quick. It exclusive-ors the polynomial *before* shifting rather than after, so read as
+# an ordinary reflected code the polynomial sits one place down, which is why it is
+# written here shifted. The table is built once because the alternative is 0x1066 bit
+# steps per page and a dump has tens of thousands of pages.
+ECC_POLY = 0x6954559 >> 1
+ECC_BITS = 0x1066  # 0x1000 of a page's data and the first 0x66 of its spare
+ECC_TABLE = []
+for _byte in range(256):
+    _value = _byte
+    for _ in range(8):
+        _value = (_value >> 1) ^ (ECC_POLY if _value & 1 else 0)
+    ECC_TABLE.append(_value)
+ECC_TABLE = tuple(ECC_TABLE)
+
 
 class Spare:
     """One layout. Only the offsets differ, so one body serves all three."""
@@ -59,6 +74,53 @@ class Spare:
         out[self.sequence_at] = sequence
         out[self.kind_at] = kind & 0x3F
         return bytes(out)
+
+    # --- the code the controller keeps over a page -------------------------------
+    # Where it sits is the same in all three layouts, which is why it is here and not
+    # in one of them: the top two bits of byte 12, whose low six the kind uses, and the
+    # three bytes after it. Twenty-six bits in all.
+    def ecc(self, data: bytes, fields: bytes) -> int:
+        """The code this page's data and fields ask for.
+
+        A shift over 0x1066 bits -- the whole 512 of data and the first 0x66 of the
+        spare -- with every byte inverted going in and the result inverted coming
+        out. An image written back without recomputing this is the right length and
+        the console refuses it, so this decides whether a rebuilt dump is usable.
+        """
+        whole, tail = ECC_BITS // 8, ECC_BITS % 8
+        body = bytes(
+            one ^ 0xFF for one in bytes(data) + bytes(fields)[: whole + 1]
+        )
+        value = 0
+        for one in body[:whole]:
+            value = (value >> 8) ^ ECC_TABLE[(value ^ one) & 0xFF]
+        last = body[whole]
+        for bit in range(tail):
+            value ^= (last >> bit) & 1
+            value = (value >> 1) ^ ECC_POLY if value & 1 else value >> 1
+        return ~value & 0xFFFFFFFF
+
+    def with_ecc(self, data: bytes, fields: bytes) -> bytes:
+        """This page's spare with its code put right and nothing else touched.
+
+        The rest of the spare carries the block number, the bad-block mark and the
+        filesystem's bookkeeping, and rewriting any of it would throw away what the
+        flash knows about itself.
+        """
+        out = bytearray(fields)
+        value = self.ecc(data, out)
+        out[self.kind_at] = (out[self.kind_at] & 0x3F) | ((value << 6) & 0xC0)
+        out[self.kind_at + 1] = (value >> 2) & 0xFF
+        out[self.kind_at + 2] = (value >> 10) & 0xFF
+        out[self.kind_at + 3] = (value >> 18) & 0xFF
+        return bytes(out)
+
+    def ecc_ok(self, page: bytes) -> bool:
+        """Whether a raw page -- data and the spare behind it -- carries its code."""
+        if len(page) < 512 + self.length:
+            return False
+        data, fields = page[:512], bytes(page[512 : 512 + self.length])
+        return self.with_ecc(data, fields)[self.kind_at :] == fields[self.kind_at :]
 
     def __repr__(self) -> str:
         return "%s(meta %d)" % (type(self).__name__, self.meta)
