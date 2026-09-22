@@ -14,6 +14,10 @@ three as C structs, field for field:
     meta 1  Big Block on a Small NAND  FsSequence0 at 0, BlockID at 1-2, BadBlock at 5
     meta 2  Big Block                  BadBlock at 0, BlockID at 1-2, FsSequence0 at 5
 
+Only meta 1 is measured to carry a version of more than one byte, and only meta 1 has a
+console here to measure. Whether meta 0 keeps its version in one byte or two is unknown,
+so it is read as one and `written` refuses a number that would not fit.
+
 free60 says a block is 16 pages, or 32 on a big block chip, with 64 spare bytes there.
 Read off images, a block is 32 pages and 256 respectively and the spare is 16 bytes in
 both: free60 describes the raw chip, where a big block part really does have 2048 byte
@@ -48,6 +52,7 @@ class Spare:
     number_at = 0  # the block number, least significant byte first
     mark_at = 0  # 0xFF unless the chip has marked the block bad
     sequence_at = 0  # free60's FsSequence0; the original's log calls it a version
+    sequence_high_at = None  # where its top eight bits are, where it has any
     pages_a_block = 32
 
     extra_at = 8  # four bytes only a settings blob uses
@@ -61,17 +66,41 @@ class Spare:
         return spare[self.mark_at] == 0xFF
 
     def sequence(self, spare: bytes) -> int:
-        return spare[self.sequence_at]
+        """The version this page's blob carries, which decides which copy is live.
+
+        Sixteen bits where the layout has room for them, and the top eight are not
+        beside the bottom eight. Measured on two consoles against what the original
+        prints: `mobileB.dat` at 114 and 2 is the 626 it reports, and another console's
+        `fsroot` at 93 and 1 is the 349 it reports. Reading only the low byte picks the
+        older of two copies whenever a version has passed 255, which is the same kind of
+        mistake as reading a stale filesystem root.
+        """
+        if self.sequence_high_at is None:
+            return spare[self.sequence_at]
+        return (spare[self.sequence_high_at] << 8) | spare[self.sequence_at]
 
     def kind(self, spare: bytes) -> int:
         return spare[self.kind_at] & 0x3F
 
     def written(self, block: int, sequence: int = 0, kind: int = 0) -> bytes:
-        """The field bytes for one page. The ECC is written over them separately."""
+        """The field bytes for one page. The ECC is written over them separately.
+
+        A version too large for the layout to hold is refused rather than cut down: a
+        page written with the low half of a number nobody asked for is a page that reads
+        back as a different, older copy.
+        """
+        most = 0xFFFF if self.sequence_high_at is not None else 0xFF
+        if not 0 <= sequence <= most:
+            raise ValueError(
+                "meta %d holds a version of 0 to %d, and this is %d"
+                % (self.meta, most, sequence)
+            )
         out = bytearray(self.length)
         out[self.mark_at] = 0xFF
         out[self.number_at : self.number_at + 2] = block.to_bytes(2, "little")
-        out[self.sequence_at] = sequence
+        out[self.sequence_at] = sequence & 0xFF
+        if self.sequence_high_at is not None:
+            out[self.sequence_high_at] = sequence >> 8
         out[self.kind_at] = kind & 0x3F
         return bytes(out)
 
@@ -136,16 +165,26 @@ class SmallBlock(Spare):
 
 
 class BigBlockController(Spare):
-    """meta 1 -- a 16 MB part read by the newer controller."""
+    """meta 1 -- a 16 MB part read by the newer controller.
+
+    The one layout measured to carry a version wider than a byte: its top eight bits sit
+    at byte 3, four bytes away from the bottom eight.
+    """
 
     meta = 1
     number_at = 1
     mark_at = 5
     sequence_at = 0
+    sequence_high_at = 3
 
 
 class BigBlockChip(Spare):
-    """meta 2 -- a 256 or 512 MB part, whose blocks hold 256 pages rather than 32."""
+    """meta 2 -- a 256 or 512 MB part, whose blocks hold 256 pages rather than 32.
+
+    Its version is one byte and stays one byte: a 64 MB image the original built carries
+    the `01` its own extract reports at byte 5, and reading a pair there would take the
+    bad-block mark for a high byte.
+    """
 
     meta = 2
     number_at = 1

@@ -196,6 +196,45 @@ class TheSpareLayouts(unittest.TestCase):
         written[layout.mark_at] = 0x00
         self.assertFalse(layout.is_good(bytes(written)))
 
+    def test_a_version_of_more_than_a_byte_is_read_whole(self):
+        """Real spare bytes off two consoles, against what the original prints.
+
+        `mobileB.dat` on one reads 626 and another's `fsroot` reads 349. The top eight
+        bits are four bytes away from the bottom eight, so reading only the low byte
+        gives 114 and 93 -- and picking the higher of two copies by that would take the
+        older one.
+        """
+        layout = spare.BigBlockController()
+        for real, wanted in (
+            ("723b010200ff00000814000071175a84", 626),
+            ("5dd2010100ff000000000000307c0039", 349),
+        ):
+            with self.subTest(version=wanted):
+                self.assertEqual(layout.sequence(bytes.fromhex(real)), wanted)
+
+    def test_what_is_written_as_a_wide_version_reads_back_whole(self):
+        layout = spare.BigBlockController()
+        written = layout.written(0x1D2, sequence=626, kind=0x31)
+        self.assertEqual(layout.sequence(written), 626)
+        self.assertEqual(layout.block_number(written), 0x1D2)
+        self.assertEqual(layout.kind(written), 0x31)
+
+    def test_the_other_two_layouts_keep_theirs_in_one_byte(self):
+        for layout, at in ((spare.SmallBlock(), 2), (spare.BigBlockChip(), 5)):
+            with self.subTest(meta=layout.meta):
+                self.assertIsNone(layout.sequence_high_at)
+                fields = bytearray(16)
+                fields[at] = 0x7B
+                self.assertEqual(layout.sequence(bytes(fields)), 0x7B)
+
+    def test_a_version_too_large_for_the_layout_is_refused(self):
+        """Not cut down: half a number nobody asked for reads back as an older copy."""
+        for layout in (spare.SmallBlock(), spare.BigBlockChip()):
+            with self.subTest(meta=layout.meta), self.assertRaises(ValueError):
+                layout.written(1, sequence=256)
+        with self.assertRaises(ValueError):
+            spare.BigBlockController().written(1, sequence=0x10000)
+
     def test_only_a_big_block_chip_holds_two_hundred_and_fifty_six_pages(self):
         self.assertEqual(spare.SmallBlock().pages_a_block, 32)
         self.assertEqual(spare.BigBlockController().pages_a_block, 32)
