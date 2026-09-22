@@ -11,9 +11,11 @@ It sits at 0x4000 and is 0x4000 long, which the header states as well.
 What is read here is what could be proved. Opening it is proved by what comes out: each
 of the two consoles measured has its own twelve-digit serial in the clear at 0xB0, and
 one of them keeps its DVD key in a file beside the dump, which is the same sixteen bytes
-this finds at 0x100. The manufacturing date reads as a date on both. The fields x360mcp
-names that nothing here can check -- the region word, the OSIG, the console id, the FCRT
-policy -- are left out until something needs them and can prove them.
+this finds at 0x100. The manufacturing date reads as a date on both.
+
+The fields x360mcp names and nothing here can check are here too, under its names, each
+with a comment saying the name is a name rather than a finding. None of them is read by
+anything that decides anything, and none is in `__repr__`.
 
 Sealing it again is deterministic, which took measuring and is worth the sentence: the
 nonce is **not drawn**, it is `HMAC(cpu key, plaintext + 07 12)`, confirmed to the byte
@@ -70,6 +72,35 @@ class Keyvault:
     def made_on(self) -> str:
         """When the console was made, as it writes it: month, day, year."""
         return self.plain[0x9E4:0x9EC].decode("latin-1")
+
+    # --- named by x360mcp, unverified here ---------------------------------------
+    # x360mcp calls this the FCRT policy. That is a name, not a finding.
+    @property
+    def fcrt_policy(self) -> bytes:
+        """`00f00000` on one console measured and `03f00000` on the other."""
+        return self.plain[0x1C:0x20]
+
+    # x360mcp calls this the console's region. That is a name, not a finding.
+    @property
+    def region(self) -> bytes:
+        """`02fe0000` on both consoles measured, so nothing here tells regions apart."""
+        return self.plain[0xC8:0xCC]
+
+    # x360mcp calls this the console id. That is a name, not a finding.
+    @property
+    def console_id(self) -> bytes:
+        """Five bytes, different on each console measured, which fits an identity."""
+        return self.plain[0x9CA:0x9CF]
+
+    # x360mcp calls this the OSIG. That is a name, not a finding.
+    @property
+    def osig(self) -> bytes:
+        """Forty bytes, and **the same on both consoles measured**.
+
+        Which is the useful thing to record about it: whatever it is, it is not an
+        identity. The first eight read `058000325b000000` on each.
+        """
+        return self.plain[0xC8A:0xC8A + 40]
 
     @property
     def hashed(self) -> bool:

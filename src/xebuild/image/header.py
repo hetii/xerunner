@@ -5,10 +5,11 @@ loud about the same image. Its extract mode prints where the keyvault and the SM
 and how long each is; its build mode prints the header's version and refuses an image
 whose magic is not 0xFF4F; and the entry point is the offset it reports the chain at.
 
-The fields this does not name are the ones nothing has verified yet. The word at 0x04,
-the flags at 0x06 and 0x48, the patch slot count at 0x68 and the keyvault version at
-0x6A are all in the layout and none has been checked against anything the original
-prints, so they are left out until something needs them and can prove them.
+The rest are here too, and each says what it stands on. Where x360mcp names a field,
+that name is used and a comment says it is a name rather than a finding; where nothing
+names one, the offset is the name, so the one thing known about it is not lost. None of
+them is read by anything that decides anything, and none is in `__repr__`: they are here
+to be looked at and measured, not to be built on.
 """
 
 from __future__ import annotations
@@ -95,6 +96,47 @@ class Header:
     def smc_at(self) -> int:
         """Measured: the original says "decrypting SMC at address 0x1000"."""
         return self._long(0x7C)
+
+    # --- not verified here, and each says what it stands on ----------------------
+    @property
+    def word_at_04(self) -> int:
+        """Zero on both consoles measured, and nothing names it, so the offset is."""
+        return self._word(0x04)
+
+    @property
+    def word_at_06(self) -> int:
+        """Zero on both consoles measured, and nothing names it."""
+        return self._word(0x06)
+
+    # x360mcp calls this the word before the boot flags. That is a name, not a finding.
+    @property
+    def before_flags(self) -> int:
+        """One on the retail dump measured and zero on the glitched one.
+
+        x360mcp records the same split -- images the original builds carry one, and an
+        RGH3 dump carries zero with the boot flag bytes beside it cleared as well. Two
+        consoles is not enough to call that a rule.
+        """
+        return self._long(0x48)
+
+    # x360mcp calls this the number of patch slots. That is a name, not a finding.
+    @property
+    def patch_slots(self) -> int:
+        """Two on both consoles measured."""
+        return self._word(0x68)
+
+    # x360mcp calls this the keyvault's version. That is a name, not a finding.
+    @property
+    def keyvault_version(self) -> int:
+        """0x0712 on both consoles measured.
+
+        Worth one more sentence, because it may not be a coincidence: 07 12 is also the
+        two bytes a keyvault's nonce is derived over, which `keyvault.py` carries as a
+        constant. If the salt is really this field, a keyvault of another version would
+        seal differently -- and both consoles here are 0x0712, so nothing tells them
+        apart.
+        """
+        return self._word(0x6A)
 
     def __repr__(self) -> str:
         if not self.ok:
