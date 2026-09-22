@@ -21,7 +21,7 @@ from .winchester import Winchester4G, Winchester16, WinchesterBigBlock
 from .xenon import Xenon
 from .zephyr import Zephyr
 
-ROSTER = (
+ALL = (
     Xenon(),
     Zephyr(),
     Falcon(),
@@ -39,23 +39,23 @@ ROSTER = (
 )
 
 
-def for_spelling(spelling: str) -> tuple[Board, bool]:
+def for_name(given: str) -> tuple[Board, bool]:
     """The console a `-c` name means, and whether it asks for the larger filesystem.
 
     The larger filesystem is a build's choice and not a property of the machine, so it
     comes back beside the console rather than selecting a different one. Four consoles
     have a spelling for it; the other ten do not, and asking is simply not possible.
     """
-    wanted = str(spelling).strip().lower()
-    for board in ROSTER:
+    wanted = str(given).strip().lower()
+    for board in ALL:
         if wanted in board.spellings:
             return board, wanted == board.bigffs
     raise ValueError(
         "%s is not a console type; the twenty-one are %s"
-        % (spelling, ", ".join(one for board in ROSTER for one in board.spellings))
+        % (given, ", ".join(names()))
     )
 
 
-def spellings() -> tuple[str, ...]:
-    """Every `-c` name there is, in roster order."""
-    return tuple(one for board in ROSTER for one in board.spellings)
+def names() -> tuple[str, ...]:
+    """Every `-c` name there is, in the order the consoles are listed."""
+    return tuple(one for board in ALL for one in board.spellings)

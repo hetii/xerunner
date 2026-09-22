@@ -26,15 +26,15 @@ FORTY_EIGHT = 48 * 1024 * 1024
 
 class TheRoster(unittest.TestCase):
     def test_fourteen_consoles_answer_to_twenty_one_spellings(self):
-        self.assertEqual(len(boards.ROSTER), 14)
-        self.assertEqual(len(boards.spellings()), 21)
+        self.assertEqual(len(boards.ALL), 14)
+        self.assertEqual(len(boards.names()), 21)
 
     def test_no_spelling_belongs_to_two_consoles(self):
-        every = boards.spellings()
+        every = boards.names()
         self.assertEqual(len(set(every)), len(every))
 
     def test_every_console_says_what_it_is(self):
-        for board in boards.ROSTER:
+        for board in boards.ALL:
             with self.subTest(board=board.name):
                 self.assertTrue(board.name)
                 self.assertTrue(board.section)
@@ -42,33 +42,33 @@ class TheRoster(unittest.TestCase):
                 self.assertIsNotNone(board.flash)
 
     def test_a_section_is_a_prefix_of_the_console_s_own_name(self):
-        for board in boards.ROSTER:
+        for board in boards.ALL:
             with self.subTest(board=board.name):
                 self.assertTrue(board.name.startswith(board.section))
 
 
 class Lookup(unittest.TestCase):
     def test_every_spelling_resolves(self):
-        for spelling in boards.spellings():
+        for spelling in boards.names():
             with self.subTest(spelling=spelling):
-                board, _ = boards.for_spelling(spelling)
+                board, _ = boards.for_name(spelling)
                 self.assertIn(spelling, board.spellings)
 
     def test_only_a_bigffs_spelling_asks_for_the_larger_filesystem(self):
-        asked = {s for s in boards.spellings() if boards.for_spelling(s)[1]}
+        asked = {s for s in boards.names() if boards.for_name(s)[1]}
         self.assertEqual(
             asked,
             {"jasperbigffs", "trinitybigffs", "coronabigffs", "winchesterbigffs"},
         )
 
     def test_case_and_space_do_not_matter(self):
-        board, big = boards.for_spelling("  TrinityBigFFS ")
+        board, big = boards.for_name("  TrinityBigFFS ")
         self.assertEqual(board.name, "trinitybb")
         self.assertTrue(big)
 
     def test_a_name_that_is_not_a_console_is_refused(self):
         with self.assertRaises(ValueError):
-            boards.for_spelling("banana")
+            boards.for_name("banana")
 
     def test_the_aliases_reach_the_console_they_belong_to(self):
         for spelling, expected in (
@@ -77,14 +77,14 @@ class Lookup(unittest.TestCase):
             ("jasper512", "jasperbb"),
         ):
             with self.subTest(spelling=spelling):
-                self.assertEqual(boards.for_spelling(spelling)[0].name, expected)
+                self.assertEqual(boards.for_name(spelling)[0].name, expected)
 
 
 class TheLargerFilesystem(unittest.TestCase):
     """It is a build's choice, so it moves the filesystem and nothing else."""
 
     def test_a_spelling_exists_exactly_where_the_flash_has_room(self):
-        for board in boards.ROSTER:
+        for board in boards.ALL:
             with self.subTest(board=board.name):
                 room = board.flash.bigffs_base is not None
                 self.assertEqual(bool(board.bigffs), room)
@@ -95,7 +95,7 @@ class TheLargerFilesystem(unittest.TestCase):
         for spelling in ("jasperbigffs", "trinitybigffs", "coronabigffs",
                          "winchesterbigffs"):
             with self.subTest(spelling=spelling):
-                board, big = boards.for_spelling(spelling)
+                board, big = boards.for_name(spelling)
                 self.assertEqual(board.offset_of(0, big), 0xB80000)
                 self.assertEqual(board.offset_of(0), 0x2B80000)
                 self.assertEqual(board.length, SIXTY_FOUR)
@@ -105,12 +105,12 @@ class Geometry(unittest.TestCase):
     """Measured against images the original built."""
 
     def test_an_image_is_one_of_three_lengths(self):
-        for board in boards.ROSTER:
+        for board in boards.ALL:
             with self.subTest(board=board.name):
                 self.assertIn(board.length, (SIXTEEN, SIXTY_FOUR, FORTY_EIGHT))
 
     def test_a_spare_adds_sixteen_bytes_to_every_page_of_five_hundred_and_twelve(self):
-        for board in boards.ROSTER:
+        for board in boards.ALL:
             with self.subTest(board=board.name):
                 if board.spare is None:
                     self.assertEqual(board.raw_length, board.length)
@@ -118,18 +118,18 @@ class Geometry(unittest.TestCase):
                     self.assertEqual(board.raw_length, board.length // 512 * 528)
 
     def test_the_three_lengths_on_disk(self):
-        self.assertEqual(boards.for_spelling("trinity")[0].raw_length, 17301504)
-        self.assertEqual(boards.for_spelling("trinitybb")[0].raw_length, 69206016)
-        self.assertEqual(boards.for_spelling("corona4g")[0].raw_length, 50331648)
+        self.assertEqual(boards.for_name("trinity")[0].raw_length, 17301504)
+        self.assertEqual(boards.for_name("trinitybb")[0].raw_length, 69206016)
+        self.assertEqual(boards.for_name("corona4g")[0].raw_length, 50331648)
 
     def test_only_a_sixty_four_megabyte_image_reserves_room_below_its_filesystem(self):
-        for board in boards.ROSTER:
+        for board in boards.ALL:
             with self.subTest(board=board.name):
                 expected = 0x2B80000 if board.length == SIXTY_FOUR else 0
                 self.assertEqual(board.offset_of(0), expected)
 
     def test_what_a_header_states_as_its_block_size(self):
-        stated = {b.name: b.stated_block_size() for b in boards.ROSTER}
+        stated = {b.name: b.stated_block_size() for b in boards.ALL}
         self.assertEqual(
             stated,
             {
@@ -143,25 +143,25 @@ class Geometry(unittest.TestCase):
         )
 
     def test_only_the_two_oldest_boards_leave_the_keyvault_length_unstated(self):
-        silent = {b.name for b in boards.ROSTER if not b.states_keyvault_size}
+        silent = {b.name for b in boards.ALL if not b.states_keyvault_size}
         self.assertEqual(silent, {"xenon", "zephyr"})
 
     def test_a_fat_chain_belongs_to_the_four_oldest_families(self):
-        fat = {b.section for b in boards.ROSTER if b.fat}
+        fat = {b.section for b in boards.ALL if b.fat}
         self.assertEqual(fat, {"xenon", "zephyr", "falcon", "jasper"})
 
     def test_an_emmc_console_is_the_one_with_no_spare_area(self):
-        flat = {b.name for b in boards.ROSTER if b.spare is None}
+        flat = {b.name for b in boards.ALL if b.spare is None}
         self.assertEqual(flat, {"corona4g", "winchester4g"})
         for name in flat:
-            self.assertTrue(boards.for_spelling(name)[0].flash.anchors)
+            self.assertTrue(boards.for_name(name)[0].flash.anchors)
 
 
 class TheFlatShape(unittest.TestCase):
     """The one shape no console carries: what `devkit` and `testkit` images take."""
 
     def test_it_belongs_to_no_console(self):
-        self.assertNotIn(flash.FlatBigNand, {type(b.flash) for b in boards.ROSTER})
+        self.assertNotIn(flash.FlatBigNand, {type(b.flash) for b in boards.ALL})
 
     def test_it_is_sixty_four_megabytes_counting_from_zero(self):
         shape = flash.FlatBigNand()
@@ -175,7 +175,7 @@ class TheFlatShape(unittest.TestCase):
 
 class TheSpareLayouts(unittest.TestCase):
     def test_there_are_three_and_they_differ(self):
-        used = {type(b.spare) for b in boards.ROSTER if b.spare is not None}
+        used = {type(b.spare) for b in boards.ALL if b.spare is not None}
         self.assertEqual(len(used), 3)
         self.assertEqual({one().meta for one in used}, {0, 1, 2})
 
@@ -239,7 +239,7 @@ class TheCodeOverAPage(unittest.TestCase):
 
 class TakingAnImageApartAndPuttingItBack(unittest.TestCase):
     def test_the_spare_comes_out_and_goes_back(self):
-        board, _ = boards.for_spelling("trinity")
+        board, _ = boards.for_name("trinity")
         layout = board.spare
         pages = 40
         flat = bytes(one % 251 for one in range(pages * 512))
@@ -252,19 +252,19 @@ class TakingAnImageApartAndPuttingItBack(unittest.TestCase):
 
     def test_a_spare_of_nothing_is_left_as_it_is(self):
         """A retired block is zeroed on purpose, code included."""
-        board, _ = boards.for_spelling("trinity")
+        board, _ = boards.for_name("trinity")
         raw = board.flash.unflatten(b"\xff" * 512, [bytes(16)])
         self.assertEqual(raw[512:], bytes(16))
 
     def test_an_emmc_image_is_the_same_either_way(self):
-        board, _ = boards.for_spelling("corona4g")
+        board, _ = boards.for_name("corona4g")
         flat = b"\x5a" * 4096
         self.assertIsNone(board.spare)
         self.assertEqual(board.flash.flatten(flat), flat)
         self.assertEqual(board.flash.unflatten(flat, []), flat)
 
     def test_a_short_last_page_is_padded_rather_than_dropped(self):
-        board, _ = boards.for_spelling("trinity")
+        board, _ = boards.for_name("trinity")
         raw = board.flash.unflatten(b"\x11" * 600, [bytes(board.spare.length)] * 2)
         self.assertEqual(len(raw), 2 * (512 + board.spare.length))
 
@@ -279,7 +279,7 @@ class TakingAnImageApartAndPuttingItBack(unittest.TestCase):
             raise unittest.SkipTest("XEBUILD_DUMP does not name a dump")
         with open(where, "rb") as handle:
             raw = handle.read()
-        board, _ = boards.for_spelling("trinity")
+        board, _ = boards.for_name("trinity")
         self.assertEqual(len(raw), board.raw_length)
         step = 512 + board.spare.length
         for at in range(0, len(raw), step):
@@ -293,21 +293,21 @@ class TakingAnImageApartAndPuttingItBack(unittest.TestCase):
 
 class WhatTheOriginalPrints(unittest.TestCase):
     def test_two_consoles_it_cannot_name(self):
-        blank = {b.name for b in boards.ROSTER if not b.text}
+        blank = {b.name for b in boards.ALL if not b.text}
         self.assertEqual(blank, {"coronabb", "winchesterbb"})
         for name in blank:
-            board, _ = boards.for_spelling(name)
+            board, _ = boards.for_name(name)
             self.assertEqual(board.named, "whoops, console type was not caught!")
 
     def test_everyone_else_is_named(self):
-        for board in boards.ROSTER:
+        for board in boards.ALL:
             if board.text:
                 with self.subTest(board=board.name):
                     self.assertEqual(board.named, board.text)
 
     def test_the_copyright_year_a_jtag_image_carries(self):
         years = {b.section: (b.notice_year(), b.notice_year("jtag"))
-                 for b in boards.ROSTER}
+                 for b in boards.ALL}
         self.assertEqual(
             years,
             {
@@ -319,7 +319,7 @@ class WhatTheOriginalPrints(unittest.TestCase):
         )
 
     def test_zephyr_has_a_stock_image_of_its_own_and_borrows_the_rest(self):
-        zephyr, _ = boards.for_spelling("zephyr")
+        zephyr, _ = boards.for_name("zephyr")
         self.assertEqual(zephyr.smc("clean"), "ZEPHYR_CLEAN.bin")
         self.assertEqual(zephyr.smc("cr4"), "FALCON_CR4.bin")
         self.assertEqual(zephyr.smc("smc+"), "FALCON_SMC+.bin")
@@ -327,7 +327,7 @@ class WhatTheOriginalPrints(unittest.TestCase):
     def test_the_boards_with_no_glitch_image(self):
         for name, missing in (("xenon", ("cr4",)),
                               ("winchester", ("cr4", "smc+"))):
-            board, _ = boards.for_spelling(name)
+            board, _ = boards.for_name(name)
             for kind in missing:
                 with self.subTest(board=name, kind=kind):
                     self.assertEqual(board.smc(kind), "")
@@ -360,7 +360,7 @@ class AgainstTheBinary(unittest.TestCase):
                 one.strip(),
             )
         }
-        self.assertEqual(set(boards.spellings()), table)
+        self.assertEqual(set(boards.names()), table)
 
 
 if __name__ == "__main__":

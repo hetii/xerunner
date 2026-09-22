@@ -117,18 +117,19 @@ class WhatBuildModeTakes(unittest.TestCase):
     def setUpClass(cls):
         cls.where = a_directory(cls)
 
-    def test_the_eleven_image_types(self):
+    def test_the_eleven_image_types_arrive_as_the_kind_they_name(self):
+        """`-t` resolves through `imagetypes`, as `-c` resolves through `boards`."""
         eleven = ("retail", "jtag", "glitch2m", "glitch2", "glitch", "devkit16",
                   "devkit", "testkit16", "testkit", "devgl16", "devgl")
         for kind in eleven:
             with self.subTest(kind=kind):
-                self.assertEqual(BuildConfig(image_type=kind).image_type, kind)
-        self.assertEqual(BuildConfig(image_type="DevGL16").image_type, "devgl16")
+                self.assertEqual(BuildConfig(image_type=kind).image_type.name, kind)
+        self.assertEqual(BuildConfig(image_type="DevGL16").image_type.name, "devgl16")
         with self.assertRaises(ValueError):
             BuildConfig(image_type="banana")
 
     def test_retail_when_nobody_says(self):
-        self.assertEqual(BuildConfig().image_type, "retail")
+        self.assertEqual(BuildConfig().image_type.name, "retail")
 
     def test_a_console_arrives_as_the_console_it_names(self):
         made = BuildConfig(console="jasper256")
@@ -364,7 +365,7 @@ class TheIni(unittest.TestCase):
         self.assertEqual(made.cfldv, 1)
 
     def test_what_it_does_not_name_keeps_its_default(self):
-        self.assertEqual(BuildConfig(ini=self.ini).image_type, "retail")
+        self.assertEqual(BuildConfig(ini=self.ini).image_type.name, "retail")
         self.assertFalse(BuildConfig(ini=self.ini).nandmu)
 
     def test_a_value_it_cannot_hold_is_refused_like_any_other(self):
@@ -466,9 +467,9 @@ class TheDoorIsTheOnlyWayIn(unittest.TestCase):
         made = BuildConfig()
         with self.assertRaises(ValueError):
             made.image_type = "banana"
-        self.assertEqual(made.image_type, "retail")
+        self.assertEqual(made.image_type.name, "retail")
         made.image_type = "glitch2"
-        self.assertEqual(made.image_type, "glitch2")
+        self.assertEqual(made.image_type.name, "glitch2")
 
     def test_a_configuration_is_a_dict_of_what_it_holds(self):
         made = BuildConfig(console="trinity", verbose=1)

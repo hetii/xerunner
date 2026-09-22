@@ -4,9 +4,11 @@ What a property holds is the value the rest of the program wants, not the text t
 typed: `-c jasper256` becomes the console it names, `-p` becomes sixteen bytes, `-8`
 becomes pairs of a file and an offset. Each setter checks its own value.
 
-The two tables that decide what a name may be were read out of the original's binary,
-where every accepted name sits beside the message logged when it is given. Its usage
-text lists six image types and sixteen console names; the tables hold eleven and
+Two of its settings arrive as the thing they name rather than as its name: `-c` becomes
+the console from `boards` and `-t` the kind of image from `imagetypes`, so neither list
+of names is written down in two places. Both lists came out of the original's binary,
+where every accepted name sits beside the message logged when it is given -- its usage
+text lists six image types and sixteen console names, and the tables hold eleven and
 twenty-one. The thirty-one `-o` settings come from a third table and are declared in
 `options.py`, which this class inherits, so a build's configuration is one object.
 """
@@ -15,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from .. import boards
+from .. import boards, imagetypes
 from .options import OptionsConfig
 from .release import ReleaseConfig
 
@@ -69,19 +71,21 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
         return found
 
     @property
-    def image_type(self) -> str:
-        """Which kind of image to build.
+    def image_type(self):
+        """Which kind of image to build, as the kind rather than as its name.
 
-        Eleven names, in the order the original compares them, so that a longer name is
-        reached before the shorter one it starts with.
+        One of the eleven from `imagetypes`, which is also where the list of names
+        lives -- a name is resolved the way `-c` is resolved to a console, so neither
+        list is written down twice.
         """
         return self["image_type"]
 
     @image_type.setter
     def image_type(self, kind):
-        known = ("retail", "jtag", "glitch2m", "glitch2", "glitch", "devkit16",
-                 "devkit", "testkit16", "testkit", "devgl16", "devgl")
-        self["image_type"] = self.check_oneof("image_type", kind, known)
+        if isinstance(kind, imagetypes.ImageType):
+            self["image_type"] = kind
+            return
+        self["image_type"] = imagetypes.for_name(kind)
 
     @property
     def console(self):
@@ -96,7 +100,7 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
         if isinstance(named, boards.Board):
             self["console"], self["bigffs"] = named, False
             return
-        board, bigffs = boards.for_spelling(named)
+        board, bigffs = boards.for_name(named)
         if str(named).strip().lower() != board.name:
             logger.info("console %s is a %s", named, board.name)
         if bigffs:
