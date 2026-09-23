@@ -262,13 +262,17 @@ AN_SMC = bytes(0x40) + bytes.fromhex("0501e502b405") + bytes(0x3A)
 
 
 class AChainOfMadeUpStages:
-    """What a dump answers about its chain: the stages, for their nonces."""
+    """What a dump answers about its chain: the stages for their nonces, and the slot
+    the console's own values come from, with its CG right behind it."""
 
     def __init__(self, tags=("CB", "CB", "CD", "CE")):
         self.walked = tuple(
             Stage(a_stage(tag, 0x40, nonce=bytes([index + 1]) * 0x10), 0)
             for index, tag in enumerate(tags)
         )
+        update = (a_stage("CF", 0x400, nonce=b"\xcf" * 0x10)
+                  + a_stage("CG", 0x100, nonce=b"\xc9" * 0x10))
+        self.slot = Stage(update, 0)
 
 
 class ADumpThatOnlyAnswersWhatIsAsked:
@@ -283,6 +287,7 @@ class ADumpThatOnlyAnswersWhatIsAsked:
         self.smc = cipher.sealed(smc, seed)
         self.sealed_keyvault = bytes(range(0x100)) * 0x40
         self.pairing = b"\x78\x02\x27"
+        self.ldv = 14
         self.chain = AChainOfMadeUpStages(tags or ("CB", "CB", "CD", "CE"))
 
 
@@ -295,7 +300,8 @@ class AReleaseWithOnePatchFile:
     """
 
     def __init__(self, sets, stages=(("CBA", 0x100), ("CBB", 0x200),
-                                     ("CD", 0x180), ("CE", 0x140))):
+                                     ("CD", 0x180), ("CE", 0x140),
+                                     ("CF", 0x400), ("CG", 0x14000))):
         self.raw = sets
         self.asked = []
         self.listed = [
@@ -307,7 +313,7 @@ class AReleaseWithOnePatchFile:
             if length is None:
                 continue
             tag = "CB" if kind in ("CBA", "CBB") else kind
-            self.bodies[one.plain] = a_stage(tag, length)
+            self.bodies[one.plain] = a_stage(tag, length, nonce=bytes(0x10))
 
     def patches(self, image_type, board, ext=""):
         named = board if isinstance(board, str) else board.section
@@ -520,7 +526,8 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         one.release = AReleaseWithOnePatchFile(
             self.sets(*sets) if sets else b"",
             stages if stages is not None else (("CBA", 0x100), ("CBB", 0x200),
-                                              ("CD", 0x180), ("CE", 0x140)),
+                                              ("CD", 0x180), ("CE", 0x140),
+                                              ("CF", 0x400), ("CG", 0x14000)),
         )
         one._dump = ADumpThatOnlyAnswersWhatIsAsked(tags=tags)
         one.config.cpu_key = bytes(range(0x10))
@@ -612,3 +619,54 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         _stages, bodies = self.opened(one)
         self.assertEqual(Fields(bodies[1]).pairing, one.dump.pairing)
         self.assertEqual(Fields(bodies[1]).ldv, 0)
+
+
+class WhatTheUpdateSlotCarries(unittest.TestCase):
+    """CF and CG, and what of the console goes into them. Their bytes are held against
+    eight reference images in `tests/xebuild/e2e/`."""
+
+    def a_slot(self, kind="glitch2", board="trinity", stages=None, tail_at=0xD0000):
+        one = WhichStagesTheChainIsMadeOf.a_chain(self, kind=kind, board=board,
+                                                  stages=stages)
+        run = one.slot(tail_at)
+        return one, sealing.under(Stage(run, 0), sealing.ONE_BL_KEY), run
+
+    def test_the_cf_says_where_the_rest_of_cg_is_in_the_flash(self):
+        """A count, then block numbers one up from the other, counted in the flash --
+        0xAE0 on a 64 MB image, where the filesystem begins."""
+        _one, cf, run = self.a_slot(tail_at=0x2B80000)
+        spill = len(run) - layout.SLOT_SPAN
+        count = -(-spill // layout.BLOCK)
+        self.assertEqual(struct.unpack_from(">H", cf, 0x30)[0], count)
+        self.assertEqual(struct.unpack_from(">%dH" % count, cf, 0x32),
+                         tuple(range(0xAE0, 0xAE0 + count)))
+
+    def test_the_pairing_and_the_lockdown_value_are_the_console_s(self):
+        one, cf, _run = self.a_slot()
+        self.assertEqual(Fields.in_cf(cf).pairing, one.dump.pairing)
+        self.assertEqual(Fields.in_cf(cf).ldv, one.dump.ldv)
+        self.assertEqual(cf[0x21B], 0)
+
+    def test_a_chain_with_no_cb_b_leaves_the_pairing_out_and_keeps_the_rest(self):
+        """Measured on a fat glitch image: three zeros, and the lockdown value."""
+        _one, cf, _run = self.a_slot(
+            kind="glitch", board="falcon",
+            stages=(("CB", 0x100), (None, None), ("CD", 0x180), ("CE", 0x140),
+                    ("CF", 0x400), ("CG", 0x14000)))
+        self.assertEqual(Fields.in_cf(cf).pairing, bytes(3))
+        self.assertEqual(Fields.in_cf(cf).ldv, 14)
+
+    def test_both_nonces_are_the_console_s_own(self):
+        _one, _cf, run = self.a_slot()
+        cf = Stage(run, 0)
+        self.assertEqual(cf.nonce, b"\xcf" * 0x10)
+        self.assertEqual(Stage(run, cf.length).nonce, b"\xc9" * 0x10)
+
+    def test_what_a_slot_cannot_be_built_without_is_refused(self):
+        one = WhichStagesTheChainIsMadeOf.a_chain(self)
+        one.config.cpu_key = None
+        with self.assertRaises(ValueError):
+            one.slot(0xD0000)
+        with self.assertRaises(ValueError):
+            WhichStagesTheChainIsMadeOf.a_chain(self, kind="jtag",
+                                                board="falcon").slot(0x90000)

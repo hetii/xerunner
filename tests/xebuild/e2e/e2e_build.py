@@ -311,3 +311,27 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 image, _ = self._reference(path, board)
                 self.assertEqual(self._build(kind, board).ce_version,
                                  image.header.version)
+
+    def test_the_update_slot_and_its_tail_are_what_the_original_laid(self):
+        """CF and CG, sealed, over the slot and on into the tail, byte for byte.
+
+        Where the tail lands is taken from `layout`, which is itself held against these
+        images above, and the CF has to say where that is -- so a wrong block count or a
+        wrong block number shows up here as a CF that does not match.
+        """
+        if not os.environ.get("XEBUILD_CPUKEY"):
+            raise unittest.SkipTest("XEBUILD_CPUKEY is what a CF binds to")
+        for path, kind, board in self._laid():
+            if not self._fits(board):
+                continue
+            with self.subTest(os.path.basename(path)):
+                image, console = self._reference(path, board)
+                last = Chain(image, console).walked[-1]
+                where = layout.for_type(type_for(kind), console.flash,
+                                        last.at + last.length)
+                slot, tail = where["slot"][0], where["tail"][0]
+                run = self._build(kind, board).slot(tail)
+                span = layout.SLOT_SPAN
+                self.assertEqual(run[:span], bytes(image.flat[slot:slot + span]))
+                spill = len(run) - span
+                self.assertEqual(run[span:], bytes(image.flat[tail:tail + spill]))

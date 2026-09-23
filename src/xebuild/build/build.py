@@ -19,6 +19,7 @@ from ..chain import Fields, sealing
 from ..chain.stage import LENGTH as STAGE_HEADER
 from ..chain.stage import Stage
 from ..crypto import smc as cipher
+from ..crypto.keys import derive
 from ..crypto.rc4 import rc4
 from ..image import Dump, Header
 from ..smc import Smc
@@ -406,6 +407,87 @@ class Build:
                         stage.tag)
             out.append(os.urandom(0x10))
         return out
+
+    def slot(self, tail_at: int) -> bytes:
+        """The update the console runs after the chain: CF, then CG, both sealed.
+
+        One run of bytes, because CG does not fit and simply carries on: the first
+        `layout.SLOT_SPAN` of it are the slot, and the rest is the tail, which lands at
+        `tail_at`. The CF has to say where that is, so the caller passes it.
+
+        Taken apart on every reference image and put back, the release's CF and CG come
+        out changed in these places and nowhere else:
+
+        * **Both nonces are the console's own**, taken from the dump's CF and the CG
+          behind it -- the slot the console's values come from, the one with the
+          largest lockdown value. Carried across releases: the dump's CF is 17502, the
+          image's is 17559, and they share a nonce.
+        * **CF says where the rest of CG is**: a count at 0x30 and then that many
+          block numbers, one up from the other. The number is the block's place in the
+          flash, not in the filesystem -- 0x34 on a 16 MB image and 0xAE0 on a 64 MB
+          one, whose filesystem starts there. x360mcp read the routine that writes it,
+          at 0x41C910, after first taking the numbers for versions.
+        * **CF carries the console's pairing and lockdown value** at 0x21C, which is
+          what `chain.Fields.in_cf` reads -- the pairing only where the chain has a CB_B
+          to bind with, zeros otherwise -- and the byte before them says which update
+          slot this is: zero, since only a JTAG image has two.
+        * **CF carries sixteen bytes binding it to the console**, at 0x220: an HMAC
+          under the CPU key over everything before them, with the nonce replaced by the
+          key it derives, so the CF is hashed as it will be read. Not the construction
+          CB_B's binding uses; J-Runner's `Nand.calcCFhash` spells out the same one.
+
+        Nothing else. CG's plaintext is the release's, byte for byte.
+        """
+        if self.image_type.name == "jtag":
+            raise ValueError(
+                "a jtag image carries two update slots and `layout` does not place them"
+            )
+        if self.dump is None:
+            raise ValueError("an update slot carries the console's own values, and "
+                             "there is no dump to take them from")
+        if not self.cpu_key:
+            raise ValueError("a CF binds itself to the console's CPU key, and none was "
+                             "given")
+        cf_listed, cg_listed = self._update_files()
+        cf = bytearray(self.release.bootloader(cf_listed))
+        cg = bytearray(self.release.bootloader(cg_listed))
+        own_cf = self.dump.chain.slot
+        own_cg = Stage(own_cf.image, own_cf.at + own_cf.length)
+        Stage(cf, 0).nonce = own_cf.nonce
+        Stage(cg, 0).nonce = own_cg.nonce
+
+        spill = len(cf) + len(cg) - layout.SLOT_SPAN
+        count = max(0, -(-spill // layout.BLOCK))
+        blocks = count.to_bytes(2, "big") + b"".join(
+            (tail_at // layout.BLOCK + step).to_bytes(2, "big") for step in range(count)
+        )
+        cf[0x30:0x68] = blocks.ljust(0x68 - 0x30, b"\x00")
+        cf[0x21B] = 0
+        # The pairing goes in only where the chain binds to the console. A chain with
+        # no CB_B binds nowhere, and its CF carries three zeros there and the lockdown
+        # value all the same -- measured on a fat glitch image, the one such chain this
+        # release builds beside a slot.
+        binds = any(one.kind == "CBB" for one in self._chain_files())
+        cf[0x21C:0x21F] = self.dump.pairing if binds else bytes(3)
+        cf[0x21F] = self.dump.ldv
+        message = bytearray(cf[:0x220])
+        message[0x20:0x30] = derive(sealing.ONE_BL_KEY, own_cf.nonce)
+        cf[0x220:0x230] = derive(self.cpu_key, bytes(message))
+
+        sealed_cf = sealing.under(Stage(bytes(cf), 0), sealing.ONE_BL_KEY)
+        sealed_cg = sealing.under(Stage(bytes(cg), 0), bytes(cf[0x330:0x340]))
+        return sealed_cf + sealed_cg
+
+    def _update_files(self) -> tuple:
+        """The CF and the CG the file list names, the first of each."""
+        found = {}
+        for one in self.release.recipe(self.image_type).stages(self.console):
+            if one.kind in ("CF", "CG") and one.kind not in found:
+                found[one.kind] = one
+        if set(found) != {"CF", "CG"}:
+            raise ValueError("this release names no CF and CG for a %s %s image"
+                             % (self.console.name, self.image_type.name))
+        return found["CF"], found["CG"]
 
     @property
     def ce_version(self) -> int:
