@@ -17,7 +17,9 @@ import unittest
 
 from xebuild.boards import for_name
 from xebuild.boards.flash import SmallNand
-from xebuild.image import Directory, Header, Image, Keyvault, order
+from xebuild.image import Anchor, Directory, Dump, Header, Image, Keyvault, order
+from xebuild.image import anchor as anchors
+from xebuild.image import dump as dumps
 
 PAGE = 512
 
@@ -235,7 +237,8 @@ class WhatIsInAnImage(unittest.TestCase):
         image = Image(flash.unflatten(bytes(flat), spares), flash)
         self.assertEqual(image.read("one.bin"), body)
 
-    def test_an_emmc_image_has_no_spare_to_scan(self):
+    def test_an_emmc_image_with_no_sound_anchor_names_no_filesystem(self):
+        """It has no spare to scan, so an anchor is the only thing that could say."""
         board, _ = for_name("corona4g")
         image = Image(b"\x00" * 0x8000, board.flash)
         with self.assertRaises(ValueError):
@@ -468,3 +471,224 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         board, _ = for_name("corona4g")
         flat = b"\x5a" * 0x8000
         self.assertEqual(order.logical(flat, board.flash), flat)
+
+
+def an_emmc_image(blobs=None, files=None) -> bytes:
+    """A 48 MB eMMC image: a header, a file, a table, and both anchors naming them.
+
+    Written whole rather than as a class of its own, the way the NAND tests do it,
+    because an anchor sits at a fixed offset near the top of the flash and a smaller
+    image has nowhere to put one.
+    """
+    board, _ = for_name("corona4g")
+    flash = board.flash
+    body = b"no spare here" * 32
+    flat = bytearray(flash.length)
+    flat[:PAGE] = a_header()
+    flat[0x4000 : 0x4000 + len(body)] = body
+    table_block = 0x380
+    flat[table_block * 0x4000 : (table_block + 1) * 0x4000] = a_table(
+        files if files is not None else [("plain.bin", 1, len(body), 0)], flash.blocks
+    )
+    return anchors.lay(bytes(flat), table_block, blobs or {})
+
+
+class AnAnchorBlock(unittest.TestCase):
+    """The structure an eMMC image says where everything went in."""
+
+    def test_it_survives_being_written_and_read_again(self):
+        one = Anchor(2, 0x390, {0x31: (0x38C, 0x800), 0x34: (0x38F, 0x200)})
+        again = Anchor.parse(one.encoded)
+        self.assertEqual(again.number, 2)
+        self.assertEqual(again.table, 0x390)
+        self.assertEqual(again.blobs, {0x31: (0x38C, 0x800), 0x34: (0x38F, 0x200)})
+
+    def test_a_slot_is_a_kind_and_a_gap_stays_a_gap(self):
+        """Measured: built with only MobileC and MobileE, slots 1 and 3 are filled."""
+        one = Anchor(1, 0x38E, {0x32: (0x38C, 0x200), 0x34: (0x38D, 0x800)})
+        block = one.encoded
+        self.assertEqual(struct.unpack_from(">HH", block, 0x20), (0, 0))
+        self.assertEqual(struct.unpack_from(">HH", block, 0x24), (0x38C, 0x200))
+        self.assertEqual(struct.unpack_from(">HH", block, 0x28), (0, 0))
+        self.assertEqual(struct.unpack_from(">HH", block, 0x2C), (0x38D, 0x800))
+
+    def test_a_hash_that_does_not_match_is_refused(self):
+        block = bytearray(Anchor(1, 0x390, {}).encoded)
+        block[0x20] ^= 0xFF
+        with self.assertRaises(ValueError):
+            Anchor.parse(bytes(block))
+
+    def test_the_number_decides_and_not_the_position(self):
+        """Measured: with 2 in the first block the original selects the first."""
+        image = bytearray(0x3000000)
+        first, second = anchors.AT
+        image[first : first + anchors.LENGTH] = Anchor(2, 0x111, {}).encoded
+        image[second : second + anchors.LENGTH] = Anchor(1, 0x222, {}).encoded
+        self.assertEqual(Anchor.chosen(bytes(image)).table, 0x111)
+        image[first : first + anchors.LENGTH] = Anchor(1, 0x111, {}).encoded
+        image[second : second + anchors.LENGTH] = Anchor(2, 0x222, {}).encoded
+        self.assertEqual(Anchor.chosen(bytes(image)).table, 0x222)
+
+    def test_a_number_that_is_neither_one_nor_two_is_not_policed(self):
+        """Measured: an anchor numbered 9 is accepted, and it wins."""
+        image = bytearray(0x3000000)
+        first, second = anchors.AT
+        image[first : first + anchors.LENGTH] = Anchor(9, 0x111, {}).encoded
+        image[second : second + anchors.LENGTH] = Anchor(2, 0x222, {}).encoded
+        self.assertEqual(Anchor.chosen(bytes(image)).number, 9)
+
+    def test_one_sound_copy_is_enough(self):
+        image = bytearray(an_emmc_image())
+        image[anchors.AT[1]] ^= 0xFF
+        self.assertEqual(Anchor.chosen(bytes(image)).number, 1)
+
+    def test_neither_copy_sound_is_a_refusal(self):
+        image = bytearray(an_emmc_image())
+        for at in anchors.AT:
+            image[at] ^= 0xFF
+        with self.assertRaises(ValueError):
+            Anchor.chosen(bytes(image))
+
+    def test_laying_them_leaves_the_rest_of_the_block_alone(self):
+        """An image the original built has zeros to 0x1000 and erased flash past it."""
+        image = bytearray(b"\xff" * 0x3000000)
+        laid = anchors.lay(bytes(image), 0x380, {})
+        for at in anchors.AT:
+            self.assertEqual(set(laid[at + anchors.LENGTH : at + 0x1000]), {0})
+            self.assertEqual(set(laid[at + 0x1000 : at + 0x4000]), {0xFF})
+
+    def test_an_anchor_that_would_not_fit_is_refused(self):
+        with self.assertRaises(ValueError):
+            anchors.lay(b"\x00" * 0x1000, 0x380, {})
+
+
+class AnEmmcImageReadsThroughItsAnchor(unittest.TestCase):
+    def test_the_table_comes_from_the_anchor_and_not_from_a_scan(self):
+        image = Image(an_emmc_image(), for_name("corona4g")[0].flash)
+        self.assertEqual(image.blobs["fsroot"]["offset"], 0x380 * 0x4000)
+        self.assertEqual(image.blobs["fsroot"]["length"], 0x4000)
+        self.assertEqual(image.read("plain.bin"), b"no spare here" * 32)
+
+    def test_a_version_is_not_in_an_anchor_so_one_is_reported(self):
+        """Measured: the original reports version 1 for every blob it reads this way."""
+        image = Image(an_emmc_image(), for_name("corona4g")[0].flash)
+        self.assertEqual(image.blobs["fsroot"]["version"], 1)
+
+    def test_the_blobs_an_anchor_names_come_back_under_the_console_s_names(self):
+        raw = an_emmc_image(blobs={0x31: (0x300, 0x800), 0x33: (0x301, 0x200)})
+        image = Image(raw, for_name("corona4g")[0].flash)
+        self.assertEqual(sorted(image.blobs), ["MobileB.dat", "MobileD.dat", "fsroot"])
+        self.assertEqual(image.blobs["MobileB.dat"]["offset"], 0x300 * 0x4000)
+        self.assertEqual(image.blobs["MobileD.dat"]["length"], 0x200)
+
+
+class TheSettingsBlockSChecksum(unittest.TestCase):
+    """The one thing the original checks before it will use a dump's settings block."""
+
+    def test_a_block_is_sound_when_its_head_holds_the_complement_of_the_sum(self):
+        block = bytearray(0x400)
+        block[0x10:0x110] = bytes(range(0x100))
+        head = dumps.checksum(block)
+        block[:2] = head.to_bytes(2, "little")
+        self.assertEqual(int.from_bytes(block[:2], "little"), dumps.checksum(block))
+
+    def test_the_span_ends_at_0x10c(self):
+        """Measured: 0x10B changes it, 0x10C does not, both checked on the original."""
+        block = bytearray(0x400)
+        block[0x10:] = bytes(0x3F0)
+        was = dumps.checksum(block)
+        inside = bytearray(block)
+        inside[0x10B] ^= 0xFF
+        self.assertNotEqual(dumps.checksum(inside), was)
+        outside = bytearray(block)
+        outside[0x10C] ^= 0xFF
+        self.assertEqual(dumps.checksum(outside), was)
+
+    def test_the_bytes_before_the_span_are_outside_it(self):
+        """Which is why the zero pair and the 05 21 beside it can be overwritten."""
+        block = bytearray(0x400)
+        was = dumps.checksum(block)
+        for at in (0x02, 0x08, 0x0E, 0x0F):
+            other = bytearray(block)
+            other[at] ^= 0xFF
+            self.assertEqual(dumps.checksum(other), was)
+
+
+class AConsoleSOwnMaterial(unittest.TestCase):
+    """What a build is entitled to take from a dump. Skipped without `XEBUILD_DUMP`."""
+
+    @classmethod
+    def setUpClass(cls):
+        where = os.environ.get("XEBUILD_DUMP", "")
+        if not where or not os.path.isfile(where):
+            raise unittest.SkipTest("XEBUILD_DUMP does not name a dump")
+        board, bigffs = for_name(os.environ.get("XEBUILD_DUMP_BOARD", "trinity"))
+        with open(where, "rb") as handle:
+            cls.dump = Dump(handle.read(), board, bigffs)
+
+    def test_the_sealed_smc_is_where_the_header_says_and_as_long_as_it_says(self):
+        head = self.dump.header
+        self.assertEqual(len(self.dump.smc), head.smc_size)
+        self.assertEqual(self.dump.smc, self.dump.image.flat[0x1000:0x4000])
+
+    def test_the_settings_block_is_sound(self):
+        """A console in use has one: "found at offset 0xf7c000" on both measured."""
+        self.assertEqual(len(self.dump.smc_config), 0x400)
+        self.assertTrue(self.dump.smc_config_ok)
+
+    def test_the_statistics_block_is_one_round_to_below_the_settings_block(self):
+        flash = self.dump.flash
+        at = flash.smc_config - flash.round_to
+        self.assertEqual(len(self.dump.statistics), 0x1000)
+        self.assertEqual(self.dump.statistics, self.dump.image.flat[at : at + 0x1000])
+
+    def test_the_security_files_are_files(self):
+        """Every one the dump holds has a directory entry, and its size matches it."""
+        entries = {one.name: one.size for one in self.dump.image.directory.entries}
+        found = self.dump.security
+        self.assertTrue(found, "a console in use carries at least one")
+        for name, body in found.items():
+            self.assertEqual(len(body), entries[name])
+
+    def test_a_dump_whose_settings_block_is_spoilt_is_not_sound(self):
+        """One byte inside the summed span, put back through the spare, and refused.
+
+        The original agrees, on this dump: the same change gives "seeking smc config in
+        dump...not found!".
+        """
+        flash = self.dump.flash
+        raw = self.dump.image.raw
+        flat = bytearray(self.dump.image.flat)
+        flat[flash.smc_config + 0x10] ^= 0xFF
+        spoilt = flash.unflatten(bytes(flat), order._spares(raw, flash))
+        self.assertFalse(Dump(spoilt, self.dump.board).smc_config_ok)
+
+
+class AnEmmcImageTheOriginalBuilt(unittest.TestCase):
+    """Skipped unless `XEBUILD_EMMC` names one."""
+
+    @classmethod
+    def setUpClass(cls):
+        where = os.environ.get("XEBUILD_EMMC", "")
+        if not where or not os.path.isfile(where):
+            raise unittest.SkipTest("XEBUILD_EMMC does not name an image")
+        with open(where, "rb") as handle:
+            cls.raw = handle.read()
+
+    def test_both_anchors_parse_and_agree_about_everything_but_their_number(self):
+        first = Anchor.parse(self.raw[anchors.AT[0] : anchors.AT[0] + anchors.LENGTH])
+        second = Anchor.parse(self.raw[anchors.AT[1] : anchors.AT[1] + anchors.LENGTH])
+        self.assertEqual((first.number, second.number), (1, 2))
+        self.assertEqual(first.table, second.table)
+        self.assertEqual(first.blobs, second.blobs)
+
+    def test_laying_what_it_says_back_gives_the_same_bytes(self):
+        one = Anchor.chosen(self.raw)
+        self.assertEqual(anchors.lay(self.raw, one.table, one.blobs), self.raw)
+
+    def test_its_filesystem_reads(self):
+        image = Image(self.raw, for_name("corona4g")[0].flash)
+        entries = image.directory.entries
+        self.assertTrue(entries)
+        for entry in entries:
+            self.assertEqual(len(image.read(entry.name)), entry.size)

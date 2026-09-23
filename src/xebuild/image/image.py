@@ -29,10 +29,12 @@ current one.
 
 from __future__ import annotations
 
+from .anchor import Anchor
 from .directory import Directory
 from .header import Header
 
 PAGE = 512
+BLOCK = 0x4000  # what an anchor counts in, and what a directory entry counts in
 
 
 class Image:
@@ -52,13 +54,36 @@ class Image:
     def blobs(self) -> dict:
         """Every settings blob, by name: which page, where, how long, which version.
 
+        Two flashes answer this two ways, because a blob is found two ways. A NAND is
+        scanned page by page through its spare bytes; an eMMC part has no spare and
+        names its blobs in an anchor block instead.
+        """
+        if self.flash.spare is None:
+            return self._from_anchor()
+        return self._from_spare()
+
+    def _from_anchor(self) -> dict:
+        """What the anchor an eMMC console would believe says is where.
+
+        A version is not in it. The original reports 1 for every blob it reads this way,
+        the filesystem table included, and 1 is what is reported here -- measured on an
+        image it built and then read back.
+        """
+        one = Anchor.chosen(self.raw)
+        out = {}
+        for kind, (block, length) in one.blobs.items():
+            out[_named(kind)] = _found(block * BLOCK, length, 1)
+        out["fsroot"] = _found(one.table * BLOCK, 0x4000, 1)
+        return out
+
+    def _from_spare(self) -> dict:
+        """Every blob a NAND's spare bytes point at.
+
         The kinds and their lengths are a table because nothing in flash states them: a
         blob is not a file and has no directory entry. The filesystem table wears 0x30
         on a 16 MB image and 0x2C on a big block chip, which is why both are here -- a
         scan that knew only 0x30 found the mobiles in a 64 MB image and no table.
         """
-        if self.flash.spare is None:
-            raise ValueError("an eMMC image has no spare to scan; its anchors do")
         lengths = {0x30: 0x4000, 0x2C: 0x4000,
                    0x31: 0x800, 0x32: 0x200, 0x33: 0x800, 0x34: 0x800}
         step = PAGE + self.flash.spare.length
@@ -78,8 +103,7 @@ class Image:
             start = last - (length // PAGE - 1)
             if start < 0:
                 continue
-            out[_named(kind)] = {"version": version, "page": start,
-                                 "offset": start * PAGE, "length": length}
+            out[_named(kind)] = _found(start * PAGE, length, version)
         return out
 
     def blob(self, name: str) -> bytes:
@@ -111,6 +135,12 @@ class Image:
         return "Image(%#x raw, %#x flat, %r)" % (
             len(self.raw), len(self.flat), self.flash
         )
+
+
+def _found(offset: int, length: int, version: int) -> dict:
+    """One blob, the same shape whichever way it was found."""
+    return {"version": version, "page": offset // PAGE,
+            "offset": offset, "length": length}
 
 
 def _named(kind: int) -> str:
