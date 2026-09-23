@@ -26,10 +26,11 @@ both 64 MB shapes, and 0x2FF8000 under 0x2FFC000 on the eMMC.
 offset the shape names and checks what is there. A dump with its block blanked and a
 sound copy planted one block lower is reported as "not found!".
 
-The two keys and the pairing data are not here. Both come out of the bootloader chain
-rather than out of the flash directly, and the chain is its own thing; the original says
-as much in the same breath -- "CB decrypt failed! Unable to get pairing data!" and
-"could not find a non-zero CF LDV to use".
+The pairing and the lockdown value come from the bootloader chain rather than from the
+flash directly, so they arrive through `chain` -- the original says as much in the same
+breath, "CB decrypt failed! Unable to get pairing data!" and "could not find a non-zero
+CF LDV to use". They are read off the CF slot this console boots, which needs no console
+secret, and they agree with what the original prints for the same dump.
 
 Decrypting the SMC is not here either, though `crypto.smc` can: what a build carries
 over is the sealed SMC exactly as the console holds it, and reading it is a separate job
@@ -119,6 +120,22 @@ class Dump:
         return self.image.flat[at : at + length]
 
     @property
+    def chain(self):
+        """This console's bootloader chain."""
+        from ..chain import Chain
+        return Chain(self.image, self.board)
+
+    @property
+    def pairing(self) -> bytes:
+        """The three bytes binding this console's bootloaders to it."""
+        return self.chain.console.pairing
+
+    @property
+    def ldv(self) -> int:
+        """The lockdown value, as the console's own CF states it."""
+        return self.chain.console.ldv
+
+    @property
     def security(self) -> dict:
         """The console's security files, by name, for those this dump carries.
 
@@ -153,6 +170,11 @@ class Dump:
                     CONFIG_LENGTH, "sound" if self.smc_config_ok else "not sound")
         logger.info("statistics at %#x of size %#x",
                     self.flash.smc_config - self.flash.round_to, len(self.statistics))
+        found = self.chain
+        logger.info("chain of %d stages%s, pairing %s, lockdown %d",
+                    len(found.stages),
+                    " with an inserted bootloader" if found.converted else "",
+                    found.console.pairing.hex(), found.console.ldv)
         for name, body in self.security.items():
             logger.info("%s in the filesystem, %#x bytes", name, len(body))
 

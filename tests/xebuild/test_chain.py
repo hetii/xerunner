@@ -1,0 +1,279 @@
+"""The bootloader chain, made up and measured.
+
+The made-up half builds a tiny chain in memory -- a few stage headers laid one after
+another -- and drives walking, the slots and the keying over it. The measured half needs
+a console's own dump and checks the numbers the original prints for it: the stages and
+their offsets, the pairing and the lockdown value, and the field in CB_B that ties the
+chain to the SMC beside it. Skipped unless `XEBUILD_DUMP` says where a dump is.
+"""
+
+import os
+import struct
+import unittest
+
+from xebuild.boards import for_name
+from xebuild.chain import Chain, Fields, sealing
+from xebuild.chain.stage import Stage
+from xebuild.crypto import smc
+from xebuild.crypto.keys import derive
+from xebuild.crypto.rc4 import rc4
+from xebuild.image import Dump
+
+
+def a_stage(tag: str, length: int, build: int = 0x1000, flags: int = 0,
+            nonce: bytes = b"") -> bytes:
+    """One stage: its header, its nonce where its kind keeps it, then filler."""
+    out = bytearray(length)
+    out[0:2] = tag.encode("latin-1")
+    struct.pack_into(">HHH", out, 0x02, build, 0, flags)
+    struct.pack_into(">II", out, 0x08, 0x3C0, length)
+    at = 0x20 if tag == "CF" else 0x10
+    out[at : at + 0x10] = (nonce or bytes(range(0x10)))
+    return bytes(out)
+
+
+class AStageSHeader(unittest.TestCase):
+    def test_the_fields_measured_on_two_consoles(self):
+        one = Stage(a_stage("CB", 0x100, build=0x23E4, flags=0x0800), 0)
+        self.assertEqual(one.tag, "CB")
+        self.assertEqual(one.build, 0x23E4)
+        self.assertEqual(one.word_at_04, 0)
+        self.assertEqual(one.flags, 0x0800)
+        self.assertEqual(one.entrypoint, 0x3C0)
+        self.assertEqual(one.length, 0x100)
+        self.assertTrue(one.dual)
+        self.assertFalse(one.manufacturing)
+
+    def test_the_flag_that_names_the_manufacturing_regime(self):
+        """0x0800 against 0x0801 is the whole difference between two shipped CB_As."""
+        self.assertFalse(Stage(a_stage("CB", 0x100, flags=0x0800), 0).manufacturing)
+        self.assertTrue(Stage(a_stage("CB", 0x100, flags=0x0801), 0).manufacturing)
+
+    def test_a_cf_keeps_its_nonce_and_body_somewhere_else(self):
+        """Measured: 0x20 and 0x30, where every other kind has 0x10 and 0x20."""
+        nonce = bytes(range(0x20, 0x30))
+        self.assertEqual(Stage(a_stage("CF", 0x400, nonce=nonce), 0).nonce, nonce)
+        self.assertEqual(Stage(a_stage("CF", 0x400), 0).shape, (0x20, 0x30))
+        self.assertEqual(Stage(a_stage("CD", 0x400), 0).shape, (0x10, 0x20))
+
+    def test_the_glitch_bootloader_an_exploit_inserts(self):
+        self.assertTrue(Stage(a_stage("CB", 0x400, build=15432), 0).payload)
+        self.assertFalse(Stage(a_stage("CB", 0x400, build=0x23E4), 0).payload)
+
+    def test_what_is_not_a_stage(self):
+        self.assertFalse(Stage(b"\x00" * 0x40, 0).looks_like_a_stage)
+        self.assertFalse(Stage(b"CB", 0).looks_like_a_stage)
+        # a length of zero would walk on the spot for ever
+        self.assertFalse(Stage(a_stage("CB", 0x100)[:0x20] + bytes(0x20), 0)
+                         .looks_like_a_stage)
+
+
+class TheSealing(unittest.TestCase):
+    def test_the_public_key_and_the_sum_the_original_states(self):
+        self.assertEqual(sealing.key_sum(sealing.ONE_BL_KEY), 0x983)
+
+    def test_a_split_cb_binds_on_its_second_half(self):
+        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CB", "CD")]
+        self.assertEqual(sealing.binding_at(stages), 1)
+
+    def test_a_single_cb_chain_binds_nowhere(self):
+        """A JTAG chain, measured: every stage keys from its nonce alone."""
+        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CD", "CE")]
+        self.assertEqual(sealing.binding_at(stages), -1)
+        keys = sealing.keys(stages)
+        self.assertTrue(all(one is not None for one in keys))
+
+    def test_without_a_cpu_key_nothing_past_the_binding_opens(self):
+        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CB", "CD", "CE")]
+        keys = sealing.keys(stages)
+        self.assertIsNotNone(keys[0])
+        self.assertEqual(keys[1:], (None, None, None))
+
+    def test_the_manufacturing_regime_puts_zeros_where_the_key_goes(self):
+        plain = [Stage(a_stage("CB", 0x100, flags=0x0800), 0)]
+        mfg = [Stage(a_stage("CB", 0x100, flags=0x0801), 0)]
+        second = Stage(a_stage("CB", 0x100), 0)
+        cpu = bytes(range(0x10))
+        self.assertEqual(sealing.message_for(second, cpu, mfg[0]),
+                         second.nonce + bytes(0x10))
+        self.assertEqual(sealing.message_for(second, cpu, plain[0]),
+                         second.nonce + cpu)
+
+    def test_the_later_regime_folds_in_the_first_head_with_its_flags_blanked(self):
+        first = Stage(a_stage("CB", 0x100, flags=0x1000), 0)
+        second = Stage(a_stage("CB", 0x100), 0)
+        cpu = bytes(range(0x10))
+        message = sealing.message_for(second, cpu, first)
+        self.assertEqual(len(message), 0x10 + len(cpu) + 0x10)
+        self.assertEqual(message[-0x10 + 0x06 : -0x10 + 0x08], bytes(2))
+
+    def test_a_fat_chain_keys_its_cd_a_second_time(self):
+        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CB", "CD")]
+        cpu = bytes(range(0x10))
+        slim = sealing.keys(stages, cpu, fat=False)
+        fat = sealing.keys(stages, cpu, fat=True)
+        self.assertEqual(slim[:2], fat[:2])
+        self.assertNotEqual(slim[2], fat[2])
+        self.assertEqual(fat[2], derive(cpu, slim[2]))
+
+    def test_code_reads_as_open_and_sealed_bytes_do_not(self):
+        """Entropy, with the numbers this bench measured either side of it."""
+        self.assertTrue(sealing.looks_open("CB", bytes(0x2000)))
+        self.assertFalse(sealing.looks_open("CB", rc4(b"key", bytes(0x2000))))
+
+    def test_a_ce_is_judged_on_its_header_and_not_on_entropy(self):
+        """Its plaintext is a compressed kernel, so entropy calls a right key wrong."""
+        opened = bytearray(0x40)
+        struct.pack_into(">II", opened, 8, 0x120000, 0)
+        self.assertTrue(sealing.looks_open("CE", bytes(opened)))
+        struct.pack_into(">II", opened, 8, 0xDF59448, 0x9B39D69D)
+        self.assertFalse(sealing.looks_open("CE", bytes(opened)))
+
+
+class AMadeUpChain(unittest.TestCase):
+    """A flash with a few stage headers in it, and nothing else."""
+
+    class Sham:
+        """The least an image can be for a chain to walk it."""
+
+        class Head:
+            def __init__(self, entrypoint, size):
+                self.entrypoint, self.size = entrypoint, size
+
+        def __init__(self, flat, entrypoint, size):
+            self.flat = flat
+            self.header = self.Head(entrypoint, size)
+
+    def an_image(self, kinds, slots=1):
+        board, _ = for_name("trinity")
+        flat = bytearray(0x200000)
+        at = 0x8000
+        for tag, length, build in kinds:
+            flat[at : at + length] = a_stage(tag, length, build=build)
+            at += length
+        slots_at = 0x100000
+        for index in range(slots):
+            where = slots_at + index * board.flash.block_size
+            flat[where : where + 0x400] = a_stage("CF", 0x400, build=0x4400 + index)
+        return Chain(self.Sham(bytes(flat), 0x8000, slots_at), board)
+
+    def test_it_walks_by_the_lengths_the_stages_state(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CB", 0x2000, 0x23E4),
+                               ("CD", 0x1000, 0x24EC)])
+        self.assertEqual([one.tag for one in chain.stages], ["CB", "CB", "CD"])
+        self.assertEqual([one.at for one in chain.stages], [0x8000, 0x9000, 0xB000])
+
+    def test_an_inserted_bootloader_is_dropped_but_reported(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CB", 0x400, 15432),
+                               ("CB", 0x2000, 0x23E4), ("CD", 0x1000, 0x24EC)])
+        self.assertEqual(len(chain.walked), 4)
+        self.assertEqual([one.tag for one in chain.stages], ["CB", "CB", "CD"])
+        self.assertTrue(chain.converted)
+        self.assertEqual(chain.stages[1].build, 0x23E4)
+
+    def test_the_slots_begin_where_the_header_says_and_step_a_flash_block(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4)], slots=2)
+        self.assertEqual([one.at for one in chain.slots], [0x100000, 0x110000])
+
+    def test_the_slot_a_console_boots_is_the_last_one(self):
+        """Measured on a JTAG image: the first pair is the exploit's, not this one's."""
+        chain = self.an_image([("CB", 0x1000, 0x23E4)], slots=2)
+        self.assertEqual(chain.slot.at, 0x110000)
+
+    def test_a_chain_that_binds_nowhere_says_so_rather_than_handing_back_a_cd(self):
+        """A single-CB chain has no binding stage, and the second stage is the CD."""
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CD", 0x1000, 0x24EC),
+                               ("CE", 0x1000, 0x760)])
+        self.assertEqual(chain.stages[1].tag, "CD")
+        self.assertIsNone(chain.bound(bytes(0x10)))
+
+    def test_a_chain_that_does_bind_hands_back_the_second_cb(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CB", 0x1000, 0x23E4),
+                               ("CD", 0x1000, 0x24EC)])
+        self.assertIsNotNone(chain.bound(bytes(0x10)))
+
+    def test_asking_for_it_without_the_console_s_key_is_refused(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CB", 0x1000, 0x23E4)])
+        with self.assertRaises(ValueError):
+            chain.bound(b"")
+
+    def test_an_image_with_no_slot_refuses_rather_than_guessing(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4)], slots=0)
+        with self.assertRaises(ValueError):
+            chain.slot  # noqa: B018
+
+
+class AConsoleSOwnChain(unittest.TestCase):
+    """The numbers the original prints for a real dump. Needs `XEBUILD_DUMP`."""
+
+    @classmethod
+    def setUpClass(cls):
+        where = os.environ.get("XEBUILD_DUMP", "")
+        key = os.environ.get("XEBUILD_CPUKEY", "")
+        if not where or not os.path.isfile(where) or not key:
+            raise unittest.SkipTest("XEBUILD_DUMP and XEBUILD_CPUKEY are not both set")
+        board, bigffs = for_name(os.environ.get("XEBUILD_DUMP_BOARD", "trinity"))
+        with open(where, "rb") as handle:
+            cls.dump = Dump(handle.read(), board, bigffs)
+        cls.cpu_key = bytes.fromhex(key)
+        cls.chain = cls.dump.chain
+
+    def test_the_chain_starts_where_the_header_says(self):
+        self.assertEqual(self.chain.stages[0].at, self.dump.header.entrypoint)
+        self.assertEqual(self.chain.stages[0].tag, "CB")
+
+    def test_the_first_slot_sits_where_the_header_says_the_chain_ends(self):
+        """Measured on seven images: that field is where the slots begin, and a CF is
+        what is there. The original says the same number as "patch slot offset"."""
+        self.assertEqual(self.chain.slots[0].at, self.dump.header.size)
+        self.assertEqual(self.chain.slots[0].tag, "CF")
+
+    def test_the_pairing_and_the_lockdown_value_come_out_of_the_cf(self):
+        """`XEBUILD_PAIRING` and `XEBUILD_LDV` say what the original printed."""
+        found = self.chain.console
+        self.assertEqual(len(found.pairing), 3)
+        wanted = os.environ.get("XEBUILD_PAIRING", "")
+        if wanted:
+            self.assertEqual(found.pairing.hex(), wanted.strip().lower())
+        ldv = os.environ.get("XEBUILD_LDV", "")
+        if ldv:
+            self.assertEqual(found.ldv, int(ldv, 0))
+
+    def test_a_cf_needs_no_console_secret(self):
+        """It is sealed under the key every console carries, which is why extract
+        mode can read a pairing out of a dump it holds no key for."""
+        slot = self.chain.slot
+        plain = slot.head + rc4(derive(sealing.ONE_BL_KEY, slot.nonce), slot.body)
+        self.assertEqual(Fields.in_cf(plain).pairing, self.chain.console.pairing)
+
+    def test_the_field_in_cb_b_ties_the_chain_to_the_smc_beside_it(self):
+        """This is what proves `crypto.smc.fingerprint`, so it is the test that matters.
+
+        Skipped on a chain an exploit has converted: such a console keeps its CB_B in
+        the clear and does not need the field to be right, because the check is patched
+        out rather than recomputed.
+        """
+        if self.chain.converted:
+            raise unittest.SkipTest("this chain is converted, so the field is not kept")
+        fields = self.chain.bound(self.cpu_key)
+        key = self.chain.keys(self.cpu_key)[sealing.binding_at(self.chain.stages)]
+        self.assertTrue(
+            fields.agrees(self.cpu_key, key, smc.fingerprint(self.dump.smc))
+        )
+
+    def test_the_pairing_in_cb_b_is_the_one_the_cf_states(self):
+        if self.chain.converted:
+            raise unittest.SkipTest("this chain is converted")
+        self.assertEqual(self.chain.bound(self.cpu_key).pairing,
+                         self.chain.console.pairing)
+
+    def test_every_stage_but_the_kernel_opens_to_something_that_reads_as_code(self):
+        """And the kernel is the exception on purpose: it is compressed, so its
+        plaintext is as dense as ciphertext. It is judged on its header instead."""
+        for stage, key in zip(self.chain.stages, self.chain.keys(self.cpu_key),
+                              strict=True):
+            if key is None:
+                continue
+            with self.subTest(tag=stage.tag, at=stage.at):
+                self.assertTrue(sealing.looks_open(stage.tag,
+                                                   self.chain.plain(stage, key)))

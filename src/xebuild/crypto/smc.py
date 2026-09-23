@@ -104,17 +104,17 @@ def fingerprint(sealed_image: bytes) -> bytes:
     different answer, and a wrong one. The seed is therefore part of what is measured,
     which is the mechanism by which two images of the same SMC are told apart.
 
-    **Not proved here, and this says so.** What would prove it is the field stored in a
-    real console's CB_B coming back byte for byte, and computing that needs the chain,
-    which does not exist yet. What it does stand on is two independent readings that
-    agree with this to the byte:
+    **Proved against a console.** The sixteen bytes stored in this bench console's own
+    CB_B are `55aa5e9aa6306d1b0286006eba64ee96`, and `HMAC-SHA1(cpu key, the stage's
+    key + its console fields + this)` computes exactly them. The comparison lives in
+    `chain.console.Fields.agrees`. Nothing here was adjusted to make it come out.
 
-    - A literal transcription of J-Runner's `Nand.CalculateSMCHash`, its own spelling of
-      the rotations kept ("rotate left 29" and "rotate left 31", which on 64 bits are
-      these two rotations right), over both consoles' sealed SMCs and over random input
-      of four lengths.
-    - The x360mcp tree, which measured the same arithmetic against six images of one
-      console whose SMCs, and so whose digests, all differed.
+    Two independent readings agree with the arithmetic as well, which is what it stood
+    on before the chain existed: a literal transcription of J-Runner's
+    `Nand.CalculateSMCHash`, its own spelling of the rotations kept ("rotate left 29"
+    and "rotate left 31", which on 64 bits are these two rotations right), over both
+    consoles' sealed SMCs and random input of four lengths; and the x360mcp tree, which
+    measured it against six images of one console whose digests all differed.
 
     The sixteen bytes are **not** serialised J-Runner's way. It renders each
     accumulator with `ToString("X")`, which drops leading zero nibbles and then copies
