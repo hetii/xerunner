@@ -7,11 +7,11 @@ import os
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.chain import Fields, sealing
+from xebuild.chain import Chain, Fields, sealing
 from xebuild.crypto import smc
 from xebuild.crypto.keys import derive
 from xebuild.crypto.rc4 import rc4
-from xebuild.image import Dump
+from xebuild.image import Dump, Image
 
 
 class AConsoleSOwnChain(unittest.TestCase):
@@ -88,3 +88,51 @@ class AConsoleSOwnChain(unittest.TestCase):
             with self.subTest(tag=stage.tag, at=stage.at):
                 self.assertTrue(sealing.looks_open(stage.tag,
                                                    self.chain.plain(stage, key)))
+
+
+class AgainstAnImageTheOriginalBuilt(unittest.TestCase):
+    """What the original wrote into CB_B, against what this would write.
+
+    Needs `XEBUILD_REFERENCE_IMAGE` naming an image the original built from the dump
+    `XEBUILD_DUMP` names, with `XEBUILD_CPUKEY` for that console. Where the original
+    cannot read a dump's keyvault alone, it builds one of these once it is handed the
+    keyvault this code extracts.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        where = os.environ.get("XEBUILD_REFERENCE_IMAGE", "")
+        dump = os.environ.get("XEBUILD_DUMP", "")
+        key = os.environ.get("XEBUILD_CPUKEY", "")
+        if not (where and dump and key) or not os.path.isfile(where):
+            raise unittest.SkipTest("reference image, dump and cpu key not all named")
+        board, bigffs = for_name(os.environ.get("XEBUILD_DUMP_BOARD", "trinity"))
+        cls.board = board
+        cls.cpu_key = bytes.fromhex(key)
+        with open(dump, "rb") as handle:
+            cls.dump = Dump(handle.read(), board, bigffs)
+        with open(where, "rb") as handle:
+            cls.image = Image(handle.read(), board.flash)
+
+    def test_the_fields_it_wrote_are_the_fields_this_writes(self):
+        chain = Chain(self.image, self.board)
+        stages, keys = chain.stages, chain.keys(self.cpu_key)
+        at = sealing.binding_at(stages)
+        theirs = chain.plain(stages[at], keys[at])[:0x20]
+        head = self.image.header
+        sealed = self.image.flat[head.smc_at : head.smc_at + head.smc_size]
+        ours = Fields.write(self.dump.pairing, self.cpu_key, keys[at],
+                            smc.fingerprint(sealed))
+        self.assertEqual(ours, theirs)
+
+    def test_every_stage_of_it_reseals_to_the_bytes_it_holds(self):
+        """RC4 is symmetric, so this is the whole of writing a stage, and it is
+        checked against an image rather than asserted."""
+        chain = Chain(self.image, self.board)
+        for stage, key in zip(chain.stages, chain.keys(self.cpu_key), strict=True):
+            if key is None:
+                continue
+            with self.subTest(tag=stage.tag, at=stage.at):
+                sealed = self.image.flat[stage.at : stage.at + stage.length]
+                again = stage.head + rc4(key, chain.plain(stage, key))
+                self.assertEqual(again, sealed)
