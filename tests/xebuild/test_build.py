@@ -7,14 +7,18 @@ business.
 
 import os
 import shutil
+import struct
 import tempfile
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.build import Filesystem, Material, layout
-from xebuild.image import Directory, Image
+from xebuild.build import Build, Filesystem, Material, layout
+from xebuild.config import BuildConfig
+from xebuild.crypto import smc as cipher
+from xebuild.image import Directory, Header, Image
 from xebuild.image.directory import CHAIN_END
 from xebuild.imagetypes import for_name as type_for
+from xebuild.release import Patches
 
 
 def a_directory(case, files=None):
@@ -197,6 +201,13 @@ class WhereEachRegionGoes(unittest.TestCase):
         self.assertEqual(layout.slots_at(0x6C5C0, xell=True, round_to=0x4000), 0xB0000)
         self.assertEqual(layout.slots_at(0x6C5C0, xell=True, round_to=0x20000), 0xC0000)
 
+    def test_the_smc_ends_where_the_keyvault_begins(self):
+        """Fifty-seven put a 0x3000 SMC at 0x1000; five put a 0x3800 one at 0x800."""
+        self.assertEqual(layout.smc_at(0x3000), 0x1000)
+        self.assertEqual(layout.smc_at(0x3800), 0x800)
+        with self.assertRaises(ValueError):
+            layout.smc_at(0x4000)
+
     def test_the_tail_lands_past_the_slot_and_the_patch_slot(self):
         self.assertEqual(layout.tail_at(0xB0000, base=0), 0xD0000)
         self.assertEqual(layout.tail_at(0x70000, base=0), 0x90000)
@@ -213,8 +224,7 @@ class WhereEachRegionGoes(unittest.TestCase):
     def test_every_boundary_of_a_glitch_image_on_a_16_mb_flash(self):
         board, _ = for_name("trinity")
         where = layout.for_type(type_for("glitch2"), board.flash, 0x6C5C0)
-        self.assertEqual(where["header"], (0, 0x1000))
-        self.assertEqual(where["smc"], (0x1000, 0x3000))
+        self.assertEqual(where["header"], (0, 0x200))
         self.assertEqual(where["keyvault"][0], 0x4000)
         self.assertEqual(where["chain"][0], 0x8000)
         self.assertEqual(where["xell"], (0x70000, 0x40000))
@@ -238,3 +248,208 @@ class WhereEachRegionGoes(unittest.TestCase):
                 with self.assertRaises(ValueError) as caught:
                     layout.for_type(type_for(name), board.flash, 0x6C570)
                 self.assertIn(name, str(caught.exception))
+
+
+# A plaintext SMC that the reset limit can be found in, short enough to make up here.
+# The signature is what `smc.LIMIT` looks for, and where it sits does not matter.
+AN_SMC = bytes(0x40) + bytes.fromhex("0501e502b405") + bytes(0x3A)
+
+
+class ADumpThatOnlyAnswersWhatIsAsked:
+    """Stands in for a console's dump, which is seventeen megabytes of ECC to make up.
+
+    What the regions ask a dump is two things, and a test that built a whole flash to
+    hand them over would spend a second and a half on codes nobody looks at. The bytes
+    themselves are held against a real dump in `tests/xebuild/e2e/`.
+    """
+
+    def __init__(self, smc=AN_SMC, seed=b"\xfb\xd7\x5a\x10"):
+        self.smc = cipher.sealed(smc, seed)
+        self.sealed_keyvault = bytes(range(0x100)) * 0x40
+
+
+class AReleaseWithOnePatchFile:
+    """Stands in for a release, and records which patch file was asked for."""
+
+    def __init__(self, sets):
+        self.raw = sets
+        self.asked = []
+
+    def patches(self, image_type, board, ext=""):
+        named = board if isinstance(board, str) else board.section
+        self.asked.append((image_type.name, named))
+        return Patches(self.raw)
+
+
+def a_build(case, kind="glitch2", board="trinity", files=None, dump=True, **settings):
+    """A build over a made-up directory, with a dump that answers the two questions."""
+    config = BuildConfig(image_type=kind, console=board, **settings)
+    one = Build(config, Material(a_directory(case, files)),
+                AReleaseWithOnePatchFile(b""))
+    if dump:
+        one._dump = ADumpThatOnlyAnswersWhatIsAsked()
+    return one
+
+
+class WhichSmcGoesIn(unittest.TestCase):
+    """What the original does with an SMC, measured over sixty-three builds."""
+
+    def test_the_console_s_own_is_carried_sealed_and_untouched(self):
+        """"reading data/smc.bin failed, using smc.bin from nand dump"."""
+        one = a_build(self, patchsmc=False)
+        self.assertEqual(one.smc(), one.dump.smc)
+
+    def test_a_file_in_the_per_build_directory_wins_and_is_sealed(self):
+        """Under the console's own seed, so the dump is still what says how to seal."""
+        plain = bytes(0x100)
+        one = a_build(self, files={"smc.bin": plain}, patchsmc=False)
+        self.assertEqual(one.smc(), cipher.sealed(plain, one.dump.smc[:4]))
+
+    def test_patchsmc_lifts_the_reset_limit_and_moves_nothing_else(self):
+        one = a_build(self, patchsmc=True)
+        was, now = cipher.opened(one.dump.smc), cipher.opened(one.smc())
+        self.assertEqual(now[0x40:0x42], bytes(2))
+        self.assertEqual(
+            [at for at in range(4, len(now)) if now[at] != was[at]], [0x40, 0x41]
+        )
+
+    def test_patchsmc_is_ignored_for_a_retail_image(self):
+        """The ini shipped beside the original says so, and a build of a clean image
+        with a limit left in it came out with the limit still there."""
+        one = a_build(self, kind="retail", patchsmc=True)
+        self.assertEqual(one.smc(), one.dump.smc)
+
+    def test_a_build_with_neither_a_file_nor_a_dump_is_refused(self):
+        one = a_build(self, dump=False)
+        with self.assertRaises(ValueError):
+            one.smc()
+
+
+class WhichKeyvaultGoesIn(unittest.TestCase):
+
+    def test_the_console_s_own_is_carried_as_it_stands(self):
+        one = a_build(self)
+        self.assertEqual(one.keyvault(), one.dump.sealed_keyvault)
+
+    def test_a_file_in_the_per_build_directory_wins(self):
+        one = a_build(self, files={"kv.bin": b"a keyvault" * 100})
+        self.assertEqual(one.keyvault(), b"a keyvault" * 100)
+
+    def test_a_build_with_neither_is_refused(self):
+        with self.assertRaises(ValueError):
+            a_build(self, dump=False).keyvault()
+
+
+class WhatTheSlotForPatchesHolds(unittest.TestCase):
+    """One block: 0xFF, the last set as it stands, then zeros. Byte-exact on six."""
+
+    def sets(self, *groups) -> bytes:
+        out = bytearray()
+        for group in groups:
+            for at, words in group:
+                out += struct.pack(">II", at, len(words))
+                out += struct.pack(">%dI" % len(words), *words)
+            out += b"\xff\xff\xff\xff"
+        return bytes(out)
+
+    def test_a_retail_image_leaves_the_region_erased(self):
+        one = a_build(self, kind="retail")
+        self.assertEqual(one.patch_slot(), b"\xff" * layout.BLOCK)
+
+    def test_the_last_set_lands_after_sixteen_bytes_of_0xff(self):
+        raw = self.sets([(0x10, (1,))], [(0x20, (2,))])
+        one = a_build(self)
+        one.release.raw = raw
+        slot = one.patch_slot()
+        self.assertEqual(len(slot), layout.BLOCK)
+        self.assertEqual(slot[:0x10], b"\xff" * 0x10)
+        self.assertEqual(slot[0x10:0x10 + 0x10], Patches(raw).set_raw(1))
+        self.assertEqual(set(slot[0x20:]), {0})
+
+    def test_a_glitch_image_on_a_fat_console_reads_the_fat_patch_file(self):
+        """The original's own log says patches_fat.bin for zephyr, falcon and jasper."""
+        one = a_build(self, kind="glitch", board="falcon")
+        one.release.raw = self.sets([(0x10, (1,))])
+        one.patch_slot()
+        self.assertEqual(one.release.asked, [("glitch", "fat")])
+
+    def test_a_glitch2_image_reads_the_file_named_after_the_console(self):
+        one = a_build(self, kind="glitch2", board="falcon")
+        one.release.raw = self.sets([(0x10, (1,))])
+        one.patch_slot()
+        self.assertEqual(one.release.asked, [("glitch2", "falcon")])
+
+    def test_a_manufacturing_image_is_refused_rather_than_guessed_at(self):
+        """Its slot begins with twelve fuse lines and two of them are not measured."""
+        one = a_build(self, kind="glitch2m")
+        with self.assertRaises(ValueError):
+            one.patch_slot()
+
+
+class WhichLoaderGoesIn(unittest.TestCase):
+
+    def test_a_retail_image_carries_none(self):
+        self.assertIsNone(a_build(self, kind="retail").xell())
+
+    def test_the_glitch_loader_is_taken_from_the_per_build_directory(self):
+        one = a_build(self, files={"xell-gggggg.bin": b"loader" * 100})
+        self.assertEqual(one.xell(), b"loader" * 100)
+
+
+class WhatTheHeaderSays(unittest.TestCase):
+    """The first page, built from fields; held against sixteen images in `e2e/`."""
+
+    def a_page(self, kind="glitch2", board="trinity", **settings):
+        one = a_build(self, kind=kind, board=board, **settings)
+        return Header(bytearray(one.header(0xB0000, 0x760, 0x3000)))
+
+    def test_the_slot_offset_is_stated_twice(self):
+        """A page that said one and not the other would disagree with itself."""
+        head = self.a_page()
+        self.assertEqual(head.size, 0xB0000)
+        self.assertEqual(head.cf_at, 0xB0000)
+
+    def test_the_fields_that_do_not_depend_on_anything_else(self):
+        head = self.a_page()
+        self.assertEqual(head.magic, 0xFF4F)
+        self.assertEqual(head.entrypoint, 0x8000)
+        self.assertEqual(head.keyvault_at, 0x4000)
+        self.assertEqual(head.keyvault_size, 0x4000)
+        self.assertEqual(head.patch_slots, 2)
+        self.assertEqual(head.keyvault_version, 0x712)
+        self.assertEqual(head.smc_config_at, 0)
+
+    def test_where_the_smc_went_follows_from_how_long_it_is(self):
+        """It ends where the keyvault begins, so the page cannot state a place that
+        disagrees with the length: 0x3000 lands at 0x1000 and 0x3800 at 0x800."""
+        one = a_build(self)
+        for length, at in ((0x3000, 0x1000), (0x3800, 0x800)):
+            head = Header(bytearray(one.header(0xB0000, 0x760, length)))
+            self.assertEqual((head.smc_at, head.smc_size), (at, length))
+
+    def test_the_word_at_0x48_tells_a_hack_from_a_retail_image(self):
+        self.assertEqual(self.a_page(kind="glitch2").before_flags, 1)
+        self.assertEqual(self.a_page(kind="retail").before_flags, 0)
+
+    def test_the_three_boot_flag_words_measured(self):
+        self.assertEqual(self.a_page(kind="retail").boot_flags, 0)
+        self.assertEqual(self.a_page(kind="glitch").boot_flags, 0x12)
+        self.assertEqual(self.a_page(kind="glitch2").boot_flags, 0x12)
+        self.assertEqual(self.a_page(kind="jtag", board="falcon").boot_flags, 0x40012)
+
+    def test_an_option_that_reaches_those_bytes_is_refused(self):
+        """Handing back the default would be an image starting on the wrong button."""
+        with self.assertRaises(ValueError):
+            self.a_page(xellbutton="power")
+        with self.assertRaises(ValueError):
+            self.a_page(nodvd=True)
+
+    def test_the_erase_block_is_the_console_s_own_and_not_every_board_states_it(self):
+        self.assertEqual(self.a_page(board="trinity").block_size, 0x10000)
+        self.assertEqual(self.a_page(board="falcon").block_size, 0)
+
+    def test_the_copyright_year_is_the_board_s_and_jtag_has_its_own(self):
+        self.assertIn(b"2004-2010", self.a_page(board="trinity").notice)
+        self.assertIn(b"2004-2007", self.a_page(board="falcon").notice)
+        self.assertIn(b"2004-2008",
+                      self.a_page(kind="jtag", board="jasper").notice)

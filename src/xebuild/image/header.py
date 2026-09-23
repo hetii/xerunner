@@ -1,9 +1,10 @@
 """The first page of a flash image, as named fields rather than offsets in the code.
 
-Ten of them are read here, and each was checked against something the original says out
-loud about the same image. Its extract mode prints where the keyvault and the SMC are
-and how long each is; its build mode prints the header's version and refuses an image
-whose magic is not 0xFF4F; and the entry point is the offset it reports the chain at.
+Thirteen of them are read here, and each was checked against something the original says
+out loud about the same image, or against the page of one it built. Its extract mode
+prints where the keyvault and the SMC are and how long each is; its build mode prints
+the header's version and refuses an image whose magic is not 0xFF4F; and the entry point
+is the offset it reports the chain at.
 
 Every field can be written as well as read, and a write goes straight into the image:
 a header is a view, so setting one is how a build fills the page it is assembling.
@@ -104,6 +105,63 @@ class Header:
         self._put(">I", 0x0c, value)
 
     @property
+    def notice(self) -> bytes:
+        """The copyright line, whose year is not the same on every console.
+
+        A run of bytes rather than a number, so it is read as one; every other field
+        here is a word or a long and goes through `_word` or `_long`.
+
+        What was measured is where it begins and how long it is: 0x10, and 0x37 bytes on
+        all sixteen images the original built. Where it *ends* was not measured. Nothing
+        longer has ever been seen, so the only bound is the next field anything here
+        knows of, which is the word at 0x48. That number is written out here rather
+        than shared with `before_flags`: the two are not the same fact. One is where a
+        field is, the other is as far as a line has been seen to reach.
+
+        The year in it is the board's, and a JTAG image carries the other year the board
+        has -- `Board.notice_year` is that question. Held against those sixteen images:
+        `2004-2010` on a trinity or corona, `2004-2007` on a falcon of any type.
+        """
+        return bytes(self.image[0x10:0x48]).rstrip(b"\x00")
+
+    @notice.setter
+    def notice(self, line: bytes) -> None:
+        if len(line) > 0x48 - 0x10:
+            raise ValueError(
+                "the copyright line has %#x bytes before the word at 0x48 and this is "
+                "%#x" % (0x48 - 0x10, len(line))
+            )
+        self.image[0x10:0x10 + len(line)] = line
+
+    # x360mcp calls the three bytes above this the boot flags, and it measured what each
+    # one carries: 0x4D a bitfield, 0x4E a second reason XeLL may start on, 0x4F the
+    # reason it starts on. What is checked here is the word they make up, against the
+    # pages of sixteen images: zero on a retail one, 0x12 -- the eject button -- on a
+    # glitch of any kind, and 0x40012 on a JTAG one.
+    @property
+    def boot_flags(self) -> int:
+        """How the console starts, and what starts XeLL."""
+        return self._long(0x4C)
+
+    @boot_flags.setter
+    def boot_flags(self, value: int) -> None:
+        self._put(">I", 0x4C, value)
+
+    @property
+    def cf_at(self) -> int:
+        """Where the slots begin, which the page states twice.
+
+        The same value as `size` at 0x0C on all sixteen images built, and a build that
+        set one and not the other would leave a page disagreeing with itself. x360mcp's
+        name for it, and `chain.Chain` reads the copy at 0x0C.
+        """
+        return self._long(0x64)
+
+    @cf_at.setter
+    def cf_at(self, value: int) -> None:
+        self._put(">I", 0x64, value)
+
+    @property
     def keyvault_size(self) -> int:
         """Measured: the original says "decrypting KeyVault ... of size 0x4000"."""
         return self._long(0x60)
@@ -169,7 +227,12 @@ class Header:
     # --- not verified here, and each says what it stands on ----------------------
     @property
     def word_at_04(self) -> int:
-        """Zero on both consoles measured, and nothing names it, so the offset is."""
+        """Zero everywhere it has been looked at, and nothing names it.
+
+        Both consoles' dumps and **sixty-two images the original built** -- every
+        board spelling it will build, over five image types. A field nothing has ever
+        been seen to set is not one anything here can use, so the offset stays its name.
+        """
         return self._word(0x04)
 
     @word_at_04.setter
@@ -178,7 +241,7 @@ class Header:
 
     @property
     def word_at_06(self) -> int:
-        """Zero on both consoles measured, and nothing names it."""
+        """Zero on the same sixty-two images and both dumps, and nothing names it."""
         return self._word(0x06)
 
     @word_at_06.setter
@@ -188,11 +251,14 @@ class Header:
     # x360mcp calls this the word before the boot flags. That is a name, not a finding.
     @property
     def before_flags(self) -> int:
-        """One on the retail dump measured and zero on the glitched one.
+        """One for every hack and zero for a retail image, and still nobody's name.
 
-        x360mcp records the same split -- images the original builds carry one, and an
-        RGH3 dump carries zero with the boot flag bytes beside it cleared as well. Two
-        consoles is not enough to call that a rule.
+        The word before the boot flags, as x360mcp calls it. What it is for is not
+        known; what it holds is, over sixty-two images the original built with no
+        exception either way: **one** on glitch, glitch2, glitch2m and JTAG, **zero** on
+        retail. A console's own dump carries what its history put there -- the glitched
+        console measured here says one, and x360mcp records an RGH3 dump that says zero
+        with the boot flag bytes beside it cleared as well.
         """
         return self._long(0x48)
 

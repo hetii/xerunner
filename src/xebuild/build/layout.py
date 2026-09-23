@@ -4,8 +4,8 @@ An image is regions one after another, and every boundary below follows from the
 before it. Measured across fifteen images the original built -- four image types over a
 16 MB flash, a 64 MB one and an eMMC -- and the rule is the same in all of them.
 
-    0x000000  the header, one page
-    0x001000  the SMC, as long as its own header says
+    0x000000  the header, one page, and zeros to wherever the SMC starts
+              the SMC, which ends where the keyvault begins -- `smc_at`
     0x004000  the keyvault
     0x008000  the bootloader chain, stage after stage
     0x070000  XeLL, 0x40000 long, for a glitch image; a retail one has none
@@ -67,8 +67,11 @@ reason.
 from __future__ import annotations
 
 BLOCK = 0x4000
-HEADER = 0x1000
-SMC_AT = 0x1000
+
+# The header is one page and the rest of the room before the SMC is zeros: measured on
+# every image the original built, and the eMMC one puts its SMC at 0x800, inside what a
+# NAND image leaves empty -- so the page is the floor here, not a block.
+HEADER = 0x200
 KEYVAULT_AT = 0x4000
 CHAIN_AT = 0x8000
 
@@ -94,6 +97,26 @@ UNMEASURED = {
 }
 
 
+def smc_at(length: int) -> int:
+    """Where an SMC of this length goes: it ends where the keyvault begins.
+
+    Not a property of the part, which is what this first had wrong. Measured on
+    sixty-two images the original built: fifty-seven carry a 0x3000 SMC at 0x1000 and
+    five carry a 0x3800 one at 0x800, and the same eMMC console is in both groups --
+    which rules out the flash and leaves the SMC's own length. The original says it in
+    one line as it writes: "reset smc load address to 0x1000 size 0x3000".
+
+    So a longer SMC starts lower, and the page states the pair; a build that worked one
+    out and not the other would leave the console told the wrong place.
+    """
+    if not 0 < length <= KEYVAULT_AT - HEADER:
+        raise ValueError(
+            "an SMC of %#x bytes does not fit between the header's page and the "
+            "keyvault" % length
+        )
+    return KEYVAULT_AT - length
+
+
 def slots_at(chain_end: int, xell: bool, round_to: int) -> int:
     """Where the CF goes."""
     at = XELL_AT + XELL_SPAN if xell else chain_end
@@ -113,6 +136,9 @@ def tail_at(slots: int, base: int) -> int:
 def for_type(image_type, flash, chain_end: int, bigffs: bool = False) -> dict:
     """Every boundary of an image of this type on this flash, by name.
 
+    The SMC is not among them: where it goes follows its own length rather than the type
+    or the part, and `smc_at` is that question.
+
     Refuses the seven types no image of which could be built to hold it against; the
     message says which and why. A number nobody measured is worse here than none.
     """
@@ -125,7 +151,6 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False) -> dict:
     base = flash.base_of(bigffs) * BLOCK
     out = {
         "header": (0, HEADER),
-        "smc": (SMC_AT, KEYVAULT_AT - SMC_AT),
         "keyvault": (KEYVAULT_AT, KEYVAULT_AT),
         "chain": (CHAIN_AT, chain_end - CHAIN_AT),
         "slot": (slots, SLOT_SPAN),

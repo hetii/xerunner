@@ -8,5 +8,6 @@ flash's own numbers rather than a decision anything here makes.
 """
 
 from . import layout
+from .build import Build
 from .filesystem import Filesystem
 from .material import Material
