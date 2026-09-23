@@ -31,9 +31,9 @@ rather than out of the flash directly, and the chain is its own thing; the origi
 as much in the same breath -- "CB decrypt failed! Unable to get pairing data!" and
 "could not find a non-zero CF LDV to use".
 
-Decrypting the SMC is not here either. What a build carries over is the sealed SMC
-exactly as the console holds it, and the cipher that opens it is a separate scheme from
-the four `crypto` carries.
+Decrypting the SMC is not here either, though `crypto.smc` can: what a build carries
+over is the sealed SMC exactly as the console holds it, and reading it is a separate job
+from taking it.
 """
 
 from __future__ import annotations

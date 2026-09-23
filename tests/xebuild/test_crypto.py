@@ -13,9 +13,10 @@ passes, because the mistake would be consistent in both directions.
 
 import hashlib
 import hmac
+import os
 import unittest
 
-from xebuild.crypto import aes, keys, rc4
+from xebuild.crypto import aes, keys, rc4, smc
 
 
 def hexed(text: str) -> bytes:
@@ -168,3 +169,155 @@ class TheOneDerivation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSmcSCipher(unittest.TestCase):
+    """The one cipher here with no key from outside, so the vector is the whole proof.
+
+    Measured off an image the original built, from a plaintext of this side's choosing:
+    all zeros, which makes the sealed bytes the bare stream. `smcnocheck` is what lets a
+    plaintext like that past the three checks that would otherwise stop the build.
+    """
+
+    # Plaintext of zeros, seed cc7ac1e7, and what the original wrote.
+    MEASURED = hexed(
+        "cc7ac1e77cef828b442315440451830470243cfbc34b84b0d4d3347aa4166691"
+    )
+
+    def test_it_reproduces_what_the_original_wrote(self):
+        made = smc.sealed(b"\x00" * len(self.MEASURED), self.MEASURED[:4])
+        self.assertEqual(made, self.MEASURED)
+
+    def test_the_same_bytes_open_back_to_the_plaintext(self):
+        """From byte four. The first four are the seed and mean nothing opened."""
+        rest = len(self.MEASURED) - 4
+        self.assertEqual(smc.opened(self.MEASURED)[4:], b"\x00" * rest)
+
+    def test_the_seed_is_carried_in_the_clear(self):
+        made = smc.sealed(bytes(0x40), hexed("deadbeef"))
+        self.assertEqual(made[:4], hexed("deadbeef"))
+
+    def test_the_plaintext_s_first_four_bytes_go_nowhere(self):
+        """Measured: a build with a 1 at offset 0 gave the same image as one without."""
+        seed = hexed("cc7ac1e7")
+        body = bytes(range(0x40))
+        one = smc.sealed(b"\x00" * 4 + body, seed)
+        other = smc.sealed(b"\x01\x02\x03\x04" + body, seed)
+        self.assertEqual(one, other)
+
+    def test_a_byte_changes_every_byte_after_it_and_none_before(self):
+        """Measured: a 1 at offset 4 moved the byte at 4 by one and everything after."""
+        seed = hexed("cc7ac1e7")
+        plain = bytearray(0x40)
+        was = smc.sealed(bytes(plain), seed)
+        plain[4] = 0x01
+        now = smc.sealed(bytes(plain), seed)
+        self.assertEqual(now[:4], was[:4])
+        self.assertEqual(now[4], was[4] ^ 0x01)
+        self.assertNotEqual(now[5:9], was[5:9])
+
+    def test_two_seeds_give_unrelated_streams(self):
+        """Which is why an image resealed under a new seed shares no bytes to speak of.
+
+        Not *no* bytes: two unrelated byte streams agree about one time in 256 by
+        chance. What is asserted is that they agree at chance and not at all.
+        """
+        plain = bytes(0x200)
+        one = smc.sealed(plain, hexed("cc7ac1e7"))[4:]
+        other = smc.sealed(plain, hexed("fbd75a10"))[4:]
+        same = sum(a == b for a, b in zip(one, other, strict=True))
+        self.assertNotEqual(one, other)
+        self.assertLess(same, len(one) // 20)
+
+    def test_a_seed_that_is_not_four_bytes_is_refused(self):
+        for seed in (b"", b"\x01\x02\x03", b"\x01\x02\x03\x04\x05"):
+            with self.subTest(seed=seed), self.assertRaises(ValueError):
+                smc.sealed(bytes(0x40), seed)
+
+    def test_something_shorter_than_its_own_seed_is_refused(self):
+        with self.assertRaises(ValueError):
+            smc.sealed(b"\x00\x00", hexed("cc7ac1e7"))
+
+
+class TheSmcSFingerprint(unittest.TestCase):
+    """The digest the bootloaders take of a sealed SMC to say which one they are for.
+
+    Not proved against a console's stored field yet -- that needs the chain. These
+    vectors come from a literal transcription of J-Runner's `Nand.CalculateSMCHash`,
+    which agrees with this to the byte, and they are here so that a later tidy-up of the
+    arithmetic cannot change the answer quietly.
+    """
+
+    VECTORS = (
+        ("00000001", "0000000020000000ffffffffffffffff"),
+        ("000102030405060708090a0b0c0d0e0f", "4db3a444e3a024381978d8379dfdad5d"),
+    )
+
+    def test_the_vectors_the_other_two_implementations_give(self):
+        for given, wanted in self.VECTORS:
+            with self.subTest(given=given):
+                self.assertEqual(smc.fingerprint(hexed(given)).hex(), wanted)
+
+    def test_a_longer_one_where_both_accumulators_settle(self):
+        """`bytes(range(64))` four times over: every word repeats, so the two
+        accumulators end up nearly all one byte, which a rotation bug would disturb."""
+        self.assertEqual(smc.fingerprint(bytes(range(64)) * 4).hex(),
+                         "a4a4a4a4a4a4a4a47f7f7f7f7f7f7f80")
+
+    def test_nothing_in_gives_nothing_out(self):
+        self.assertEqual(smc.fingerprint(bytes(4)), bytes(16))
+        self.assertEqual(smc.fingerprint(b""), bytes(16))
+
+    def test_it_is_sixteen_bytes_whatever_goes_in(self):
+        for length in (0, 3, 4, 5, 0x3000, 0x3800):
+            with self.subTest(length=length):
+                self.assertEqual(len(smc.fingerprint(bytes(length))), 16)
+
+    def test_a_trailing_part_word_is_not_read(self):
+        """The loop steps four bytes at a time, so three spare bytes change nothing."""
+        body = bytes(range(16))
+        self.assertEqual(smc.fingerprint(body + b"\x01\x02\x03"),
+                         smc.fingerprint(body))
+
+    def test_one_bit_anywhere_changes_it(self):
+        body = bytearray(bytes(range(64)) * 4)
+        was = smc.fingerprint(bytes(body))
+        for at in (0, 1, 0x3F, 0xFF):
+            other = bytearray(body)
+            other[at] ^= 0x01
+            with self.subTest(at=at):
+                self.assertNotEqual(smc.fingerprint(bytes(other)), was)
+
+
+class AConsoleSOwnSmc(unittest.TestCase):
+    """Skipped unless `XEBUILD_SEALED_SMC` names one, as a dump's own sealed bytes."""
+
+    @classmethod
+    def setUpClass(cls):
+        where = os.environ.get("XEBUILD_SEALED_SMC", "")
+        if not where or not os.path.isfile(where):
+            raise unittest.SkipTest("XEBUILD_SEALED_SMC does not name one")
+        with open(where, "rb") as handle:
+            cls.sealed = handle.read()
+
+    def test_it_opens_to_something_that_looks_like_an_smc(self):
+        """Every plaintext SMC the release ships carries these twelve bytes at four."""
+        opened = smc.opened(self.sealed)
+        self.assertEqual(opened[4:16], hexed("01c641bb01c6212d01c601c6"))
+
+    def test_sealing_it_again_under_its_own_seed_gives_the_same_bytes(self):
+        opened = smc.opened(self.sealed)
+        self.assertEqual(smc.sealed(opened, self.sealed[:4]), self.sealed)
+
+    def test_its_fingerprint_is_taken_over_the_sealed_bytes_and_not_the_open_ones(self):
+        """Both give sixteen bytes, so nothing complains if the wrong one is used.
+
+        `XEBUILD_SMC_FINGERPRINT` says what to expect, so a different console can be
+        checked without touching this file. Without it, only the difference is asserted,
+        which is the part that would go unnoticed.
+        """
+        over_sealed = smc.fingerprint(self.sealed)
+        self.assertNotEqual(over_sealed, smc.fingerprint(smc.opened(self.sealed)))
+        wanted = os.environ.get("XEBUILD_SMC_FINGERPRINT", "")
+        if wanted:
+            self.assertEqual(over_sealed.hex(), wanted.strip().lower())
