@@ -87,6 +87,14 @@ up reading a family from there -- `nanddump.bin`, `smc.bin`, `kv.bin` and the re
 the directory is the builder's business and the two keys go with it, so that it is opened
 once, in one place. Decide it when `build` exists and the answer is countable.
 
+## A module that has been committed is frozen
+
+Once a module is committed it is not touched again without the user saying so for that
+change. Noticing that something in it should be different is the assistant's job; deciding
+that it may be edited is the user's, and the two are asked separately: what is wrong, then
+whether to open it. Permission to commit is not permission to edit a frozen module, and
+permission to edit one is not permission to commit the result.
+
 ## Decisions already made
 
 **A configuration checks what it was told and invents nothing.** `-f` and `-d` name
