@@ -163,14 +163,33 @@ class TheSealing(unittest.TestCase):
         self.assertEqual(len(message), 0x10 + len(cpu) + 0x10)
         self.assertEqual(message[-0x10 + 0x06 : -0x10 + 0x08], bytes(2))
 
-    def test_a_fat_chain_keys_its_cd_a_second_time(self):
-        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CB", "CD")]
+    def test_a_second_pass_is_asked_for_and_never_assumed(self):
+        """One image type on one chain shape takes it -- retail, with no CB_B -- and
+        nothing in a chain states the image type, so it is the caller's to name.
+
+        Deciding it from the board instead made every chain on a fat board unreadable
+        from CD down, so the first half of this is the regression that mattered: with
+        nothing said, no stage is keyed twice.
+        """
+        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CD", "CE")]
         cpu = bytes(range(0x10))
-        slim = sealing.keys(stages, cpu, fat=False)
-        fat = sealing.keys(stages, cpu, fat=True)
-        self.assertEqual(slim[:2], fat[:2])
-        self.assertNotEqual(slim[2], fat[2])
-        self.assertEqual(fat[2], derive(cpu, slim[2]))
+        ordinary = sealing.keys(stages, cpu)
+        asked = sealing.keys(stages, cpu, second_pass_at=1)
+        self.assertEqual(ordinary[0], asked[0])
+        self.assertEqual(asked[1], derive(cpu, ordinary[1]))
+        self.assertNotEqual(ordinary[1], asked[1])
+
+    def test_the_pass_carries_forward_to_the_stage_behind_it(self):
+        """The key that comes out is the secret the next stage derives from."""
+        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CD", "CE")]
+        cpu = bytes(range(0x10))
+        asked = sealing.keys(stages, cpu, second_pass_at=1)
+        self.assertEqual(asked[2], derive(asked[1], stages[2].nonce))
+
+    def test_a_second_pass_without_a_console_key_is_refused(self):
+        stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CD")]
+        with self.assertRaises(ValueError):
+            sealing.keys(stages, b"", second_pass_at=1)
 
     def test_code_reads_as_open_and_sealed_bytes_do_not(self):
         """Entropy, with the numbers this bench measured either side of it."""

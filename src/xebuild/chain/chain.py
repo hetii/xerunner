@@ -112,8 +112,23 @@ class Chain:
         return max(self._opened_slots(), key=lambda pair: pair[1].ldv)[0]
 
     def keys(self, cpu_key: bytes = b"") -> tuple:
-        """The key each stage in `stages` is sealed under, or None past what opens."""
-        return sealing.keys(self.stages, cpu_key, self.board.fat)
+        """The key each stage in `stages` is sealed under, or None past what opens.
+
+        One image type on one chain shape puts a second pass under the console's key in
+        front of CD -- `sealing` says which -- and nothing in an image states its type.
+        So the ordinary chain is asked for first and kept unless the stage that would
+        take that pass does not open under it, which is a question a reader can settle
+        by looking. A stage sealed the ordinary way therefore reads exactly as before.
+        """
+        plain = sealing.keys(self.stages, cpu_key)
+        at = sealing.binding_at(self.stages)
+        if at >= 0 or not cpu_key or len(self.stages) < 2:
+            return plain
+        # No CB_B, so the pass may be in front of the stage behind the single CB.
+        stage, key = self.stages[1], plain[1]
+        if key is None or sealing.looks_open(stage.tag, rc4(key, stage.body)):
+            return plain
+        return sealing.keys(self.stages, cpu_key, second_pass_at=1)
 
     def opened(self, stage: Stage, key: bytes) -> bytes:
         """One stage's body with the cipher run over it, whatever state it was in."""
