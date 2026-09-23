@@ -46,7 +46,6 @@ class UpdateConfig(ReleaseConfig, NetworkConfig):
             raise ValueError("dump_to %r is a file" % (path,))
         self["dump_to"] = path
 
-
     @property
     def no_write(self) -> bool:
         """Whether the console's flash and disk are left untouched."""

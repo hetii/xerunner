@@ -158,7 +158,6 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
             return
         self["sha_file"] = self.check_name("sha_file", where)
 
-
     @property
     def raw_patches(self) -> tuple:
         """Files written straight into the image, as (name, offset) pairs."""

@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import struct
 
-PAGE = 512
+from ..boards.flash import PAGE
+
 MAGIC = 0xFF4F
 
 

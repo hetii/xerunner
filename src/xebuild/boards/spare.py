@@ -29,6 +29,11 @@ An eMMC console has none of these: there is no spare area at all, so its flash a
 
 from __future__ import annotations
 
+# The data bytes of one page, whatever the part; the spare area follows each one. It is
+# defined here rather than in `flash.py` only because of the direction of the import:
+# `flash` reads the layouts from here, so this is the lower of the two.
+PAGE = 512
+
 # The shift register the flash controller runs over a page, and the table that makes it
 # quick. It exclusive-ors the polynomial *before* shifting rather than after, so read as
 # an ordinary reflected code the polynomial sits one place down, which is why it is
@@ -146,9 +151,9 @@ class Spare:
 
     def ecc_ok(self, page: bytes) -> bool:
         """Whether a raw page -- data and the spare behind it -- carries its code."""
-        if len(page) < 512 + self.length:
+        if len(page) < PAGE + self.length:
             return False
-        data, fields = page[:512], bytes(page[512 : 512 + self.length])
+        data, fields = page[:PAGE], bytes(page[PAGE : PAGE + self.length])
         return self.with_ecc(data, fields)[self.kind_at :] == fields[self.kind_at :]
 
     def __repr__(self) -> str:

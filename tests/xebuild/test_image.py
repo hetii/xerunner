@@ -706,7 +706,6 @@ class TheMapATableRecords(unittest.TestCase):
 class AnImageBeingWritten(unittest.TestCase):
     """The container a build fills: erased at first, a view all the way down."""
 
-
     def test_a_blank_image_is_erased_in_both_halves(self):
         """Erased flash is 0xFF, and so is a spare nothing has written to."""
         image = Image.blank(TinyFlash())

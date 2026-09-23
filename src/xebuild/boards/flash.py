@@ -35,10 +35,12 @@ share bytes.
 
 from __future__ import annotations
 
-from .spare import BigBlockChip, BigBlockController, SmallBlock
+from .spare import PAGE, BigBlockChip, BigBlockController, SmallBlock
 
+# One erase block of the filesystem's own reckoning: what a directory entry counts in,
+# what an anchor counts in, and what a settings blob gets one of. A part's own erase
+# block is `block_size`, and it is not always this.
 BLOCK = 0x4000
-PAGE = 512  # data bytes in one page, whatever the part; the spare follows each one
 
 
 class Flash:

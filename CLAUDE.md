@@ -87,6 +87,21 @@ up reading a family from there -- `nanddump.bin`, `smc.bin`, `kv.bin` and the re
 the directory is the builder's business and the two keys go with it, so that it is opened
 once, in one place. Decide it when `build` exists and the answer is countable.
 
+## The surface is checked before anything is proposed
+
+Before proposing or writing a function, a method or a constant, the existing surface of
+every package involved is listed and read -- not remembered. It goes in the proposal, as
+"what exists / what is missing", so the user is reading a check rather than a claim.
+
+This has been got wrong twice, both times by proposing something that was already there:
+a keying order that `chain.sealing.keys` already had, and a name that collided with
+`chain.Chain.stages`. Both were caught by the user, not by me. Remembering the tree is not
+a method; listing it is, and it costs one command.
+
+The same check finds the other kind: one fact defined in two places. `ast` over `src`
+answers both questions -- names that appear in more than one module, and integer literals
+that appear in the code of more than one module -- and it is run before a step, not after.
+
 ## A module that has been committed is frozen
 
 Once a module is committed it is not touched again without the user saying so for that
