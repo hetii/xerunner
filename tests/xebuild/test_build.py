@@ -13,12 +13,18 @@ import unittest
 
 from xebuild.boards import for_name
 from xebuild.build import Build, Filesystem, Material, layout
+from xebuild.chain import Fields, sealing
+from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto import smc as cipher
+from xebuild.crypto.rc4 import rc4
 from xebuild.image import Directory, Header, Image
 from xebuild.image.directory import CHAIN_END
 from xebuild.imagetypes import for_name as type_for
 from xebuild.release import Patches
+from xebuild.release.recipe import Listed
+
+from .test_chain import a_stage
 
 
 def a_directory(case, files=None):
@@ -255,30 +261,67 @@ class WhereEachRegionGoes(unittest.TestCase):
 AN_SMC = bytes(0x40) + bytes.fromhex("0501e502b405") + bytes(0x3A)
 
 
+class AChainOfMadeUpStages:
+    """What a dump answers about its chain: the stages, for their nonces."""
+
+    def __init__(self, tags=("CB", "CB", "CD", "CE")):
+        self.walked = tuple(
+            Stage(a_stage(tag, 0x40, nonce=bytes([index + 1]) * 0x10), 0)
+            for index, tag in enumerate(tags)
+        )
+
+
 class ADumpThatOnlyAnswersWhatIsAsked:
     """Stands in for a console's dump, which is seventeen megabytes of ECC to make up.
 
-    What the regions ask a dump is two things, and a test that built a whole flash to
-    hand them over would spend a second and a half on codes nobody looks at. The bytes
-    themselves are held against a real dump in `tests/xebuild/e2e/`.
+    What the regions ask a dump is a handful of things, and a test that built a whole
+    flash to hand them over would spend a second and a half on codes nobody looks at.
+    The bytes themselves are held against a real dump in `tests/xebuild/e2e/`.
     """
 
-    def __init__(self, smc=AN_SMC, seed=b"\xfb\xd7\x5a\x10"):
+    def __init__(self, smc=AN_SMC, seed=b"\xfb\xd7\x5a\x10", tags=None):
         self.smc = cipher.sealed(smc, seed)
         self.sealed_keyvault = bytes(range(0x100)) * 0x40
+        self.pairing = b"\x78\x02\x27"
+        self.chain = AChainOfMadeUpStages(tags or ("CB", "CB", "CD", "CE"))
 
 
 class AReleaseWithOnePatchFile:
-    """Stands in for a release, and records which patch file was asked for."""
+    """Stands in for a release: one patch file, and stages made up here.
 
-    def __init__(self, sets):
+    `stages` is what a file list names, as `(kind, length)` pairs with a length of None
+    for the empty slot a list spells `none`. A real release is read in
+    `tests/xebuild/e2e/`; what is checked here is which of them a build reaches for.
+    """
+
+    def __init__(self, sets, stages=(("CBA", 0x100), ("CBB", 0x200),
+                                     ("CD", 0x180), ("CE", 0x140))):
         self.raw = sets
         self.asked = []
+        self.listed = [
+            Listed("none" if length is None else "%s_1.bin" % kind.lower(), "")
+            for kind, length in stages
+        ]
+        self.bodies = {}
+        for (kind, length), one in zip(stages, self.listed, strict=True):
+            if length is None:
+                continue
+            tag = "CB" if kind in ("CBA", "CBB") else kind
+            self.bodies[one.plain] = a_stage(tag, length)
 
     def patches(self, image_type, board, ext=""):
         named = board if isinstance(board, str) else board.section
         self.asked.append((image_type.name, named))
         return Patches(self.raw)
+
+    def recipe(self, image_type, ext=""):
+        return self
+
+    def stages(self, board, ext=""):
+        return tuple(self.listed)
+
+    def bootloader(self, listed):
+        return self.bodies[listed.plain]
 
 
 def a_build(case, kind="glitch2", board="trinity", files=None, dump=True, **settings):
@@ -453,3 +496,119 @@ class WhatTheHeaderSays(unittest.TestCase):
         self.assertIn(b"2004-2007", self.a_page(board="falcon").notice)
         self.assertIn(b"2004-2008",
                       self.a_page(kind="jtag", board="jasper").notice)
+
+
+class WhichStagesTheChainIsMadeOf(unittest.TestCase):
+    """The decisions in laying a chain.
+
+    Its bytes are held against nine reference images in `tests/xebuild/e2e/`; what is
+    checked here is what a build reaches for.
+    """
+
+    def sets(self, *groups) -> bytes:
+        out = bytearray()
+        for group in groups:
+            for at, words in group:
+                out += struct.pack(">II", at, len(words))
+                out += struct.pack(">%dI" % len(words), *words)
+            out += b"\xff\xff\xff\xff"
+        return bytes(out)
+
+    def a_chain(self, kind="glitch2", board="trinity", stages=None, tags=None,
+                sets=(), **settings):
+        one = a_build(self, kind=kind, board=board, **settings)
+        one.release = AReleaseWithOnePatchFile(
+            self.sets(*sets) if sets else b"",
+            stages if stages is not None else (("CBA", 0x100), ("CBB", 0x200),
+                                              ("CD", 0x180), ("CE", 0x140)),
+        )
+        one._dump = ADumpThatOnlyAnswersWhatIsAsked(tags=tags)
+        one.config.cpu_key = bytes(range(0x10))
+        return one
+
+    def test_the_list_is_followed_until_ce_and_an_empty_slot_is_skipped(self):
+        """A fat glitch list reads `[CB, none, CD, CE, CF, CG]`, and a JTAG list runs
+        past the chain with a second CB and CD that nobody lays."""
+        one = self.a_chain(stages=(("CB", 0x100), (None, None), ("CD", 0x180),
+                                   ("CE", 0x140), ("CB", 0x100), ("CD", 0x100)))
+        self.assertEqual([listed.kind for listed in one._chain_files()],
+                         ["CB", "CD", "CE"])
+
+    def test_a_nonce_is_taken_by_kind_and_not_by_position(self):
+        """A chain with one CB takes the dump's CB, CD and CE and leaves its CB_B out.
+        By position its CD would take a CB_B's nonce, which reads as a chain and is
+        not one."""
+        one = self.a_chain(stages=(("CB", 0x100), ("CD", 0x180), ("CE", 0x140)))
+        stages = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CD", "CE")]
+        self.assertEqual([nonce[0] for nonce in one._nonces(stages)], [1, 3, 4])
+
+    def test_a_kind_the_dump_has_none_left_of_is_drawn(self):
+        one = self.a_chain(tags=("CB", "CD"))
+        stages = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CB", "CD")]
+        drawn = one._nonces(stages)
+        self.assertEqual([drawn[0][0], drawn[2][0]], [1, 2])
+        self.assertEqual(len(drawn[1]), 0x10)
+
+    def test_the_second_pass_is_for_a_retail_chain_with_no_cb_b(self):
+        single = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CD", "CE")]
+        split = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CB", "CD", "CE")]
+        self.assertEqual(self.a_chain(kind="retail")._second_pass_at(single), 1)
+        self.assertEqual(self.a_chain(kind="retail")._second_pass_at(split), -1)
+        self.assertEqual(self.a_chain(kind="glitch")._second_pass_at(single), -1)
+
+    def test_which_patch_set_each_kind_of_stage_takes(self):
+        one = self.a_chain()
+        self.assertEqual(one._patch_set_for("CBB", 4), 0)
+        self.assertEqual(one._patch_set_for("CD", 4), 1)
+        self.assertIsNone(one._patch_set_for("CBA", 4))
+        self.assertIsNone(one._patch_set_for("CE", 4))
+
+    def test_a_jtag_chain_takes_no_set_at_all(self):
+        """Measured: its CB, CD and CE are the release's files, nothing laid over."""
+        one = self.a_chain(kind="jtag", board="falcon")
+        for kind in ("CB", "CBB", "CD", "CE"):
+            self.assertIsNone(one._patch_set_for(kind, 3))
+
+    def test_a_patch_that_lengthens_a_stage_is_stated_in_its_header(self):
+        """The release's CD is 0x4F20 and comes out 0x5290; a header saying the old
+        length would have everything that walks by lengths read it short."""
+        one = self.a_chain(sets=([(0x10, (1,))], [(0x180, (2, 3))]))
+        body = one._stage_body(one._chain_files()[2], 2, 4)
+        self.assertEqual(len(body), 0x190)
+        self.assertEqual(Stage(body, 0).length, 0x190)
+
+    def test_the_region_ends_where_the_last_stage_says(self):
+        """The six bytes of padding after it are the dump's own in every image measured,
+        so the original never writes there."""
+        one = self.a_chain(stages=(("CBA", 0x100), ("CBB", 0x200), ("CD", 0x180),
+                                   ("CE", 0x14a)))
+        self.assertEqual(len(one.chain()), 0x100 + 0x200 + 0x180 + 0x14a)
+
+    def opened(self, one):
+        """The chain this build lays, read back the way anything reads a chain."""
+        out = one.chain()
+        stages, at = [], 0
+        while at < len(out):
+            stage = Stage(out, at)
+            stages.append(stage)
+            at += stage.length
+        keys = sealing.keys(stages, one.cpu_key, one._second_pass_at(stages))
+        return stages, [rc4(key, stage.body)
+                        for stage, key in zip(stages, keys, strict=True)]
+
+    def test_the_manufacturing_regime_binds_nothing(self):
+        """Its CB_A says so in a flag, and the CB_B of an image built that way carries
+        sixteen zeros where the binding digest would be."""
+        for flags, wanted in ((0, False), (0x0801, True)):
+            with self.subTest(flags=flags):
+                one = self.a_chain()
+                one.release.bodies["cba_1.bin"] = a_stage("CB", 0x100, flags=flags)
+                _stages, bodies = self.opened(one)
+                digest = bodies[1][Fields.LENGTH:Fields.LENGTH * 2]
+                self.assertEqual(digest == bytes(Fields.LENGTH), wanted)
+
+    def test_the_pairing_is_the_console_s_own_and_goes_in_cb_b(self):
+        one = self.a_chain()
+        _stages, bodies = self.opened(one)
+        self.assertEqual(Fields(bodies[1]).pairing, one.dump.pairing)
+        self.assertEqual(Fields(bodies[1]).ldv, 0)

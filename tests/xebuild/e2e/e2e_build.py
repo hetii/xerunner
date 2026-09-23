@@ -12,6 +12,7 @@ from xebuild.boards import for_name
 from xebuild.build import Build, Material, layout
 from xebuild.chain import Chain
 from xebuild.config import BuildConfig
+from xebuild.crypto import smc as cipher
 from xebuild.image import Directory, Image
 from xebuild.imagetypes import for_name as type_for
 from xebuild.release import Release
@@ -163,6 +164,10 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         self.where = tempfile.mkdtemp(prefix="xebuild-e2e-material-")
         self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
         os.symlink(dump, os.path.join(self.where, "nanddump.bin"))
+        key = os.environ.get("XEBUILD_CPUKEY", "")
+        if key:
+            with open(os.path.join(self.where, "cpukey.txt"), "w") as handle:
+                handle.write(key)
         for name in ("xell-gggggg.bin", "xell-1f.bin", "xell-2f.bin"):
             shipped = os.path.join(os.path.dirname(release), "data", name)
             if os.path.isfile(shipped):
@@ -260,3 +265,49 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 # Zeros from the page to wherever the SMC begins: 0x1000 on a NAND
                 # console and 0x800 on the eMMC one, the page being 0x200 either way.
                 self.assertEqual(set(image.flat[len(ours):head.smc_at]), {0})
+
+    def test_the_chain_is_the_chain_the_original_laid(self):
+        """Every byte of the bootloader region, on every reference image this dump fits.
+
+        The SMC comes out of the reference itself, opened and handed back as an
+        `smc.bin`: CB_B binds itself to the SMC beside it, so a build sealing a
+        different one cannot match, and taking it from the image keeps this test
+        standing on the image alone. That the seal then reproduces the reference's own
+        SMC bytes is the seed rule holding as well.
+
+        Needs `XEBUILD_CPUKEY` too: a chain that binds to a console cannot be sealed
+        without the key it binds to, and this refuses rather than inventing one.
+        """
+        if not os.environ.get("XEBUILD_CPUKEY"):
+            raise unittest.SkipTest("XEBUILD_CPUKEY is what a chain binds to")
+        for path, kind, board in self._laid():
+            if not self._fits(board):
+                continue
+            with self.subTest(os.path.basename(path)):
+                image, console = self._reference(path, board)
+                head = image.header
+                sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
+                where = tempfile.mkdtemp(prefix="xebuild-e2e-chain-")
+                self.addCleanup(shutil.rmtree, where, ignore_errors=True)
+                for name in os.listdir(self.where):
+                    os.symlink(os.path.join(self.where, name),
+                               os.path.join(where, name))
+                with open(os.path.join(where, "smc.bin"), "wb") as handle:
+                    handle.write(cipher.opened(sealed))
+                one = Build(BuildConfig(image_type=kind, console=board),
+                            Material(where), self.release)
+                self.assertEqual(one.smc(), sealed)
+                ours = one.chain()
+                at = layout.CHAIN_AT
+                self.assertEqual(ours, bytes(image.flat[at:at + len(ours)]))
+                last = Chain(image, console).walked[-1]
+                self.assertEqual(len(ours), last.at + last.length - at)
+
+    def test_the_version_the_page_states_is_the_release_s_own_ce(self):
+        for path, kind, board in self._laid():
+            if not self._fits(board):
+                continue
+            with self.subTest(os.path.basename(path)):
+                image, _ = self._reference(path, board)
+                self.assertEqual(self._build(kind, board).ce_version,
+                                 image.header.version)

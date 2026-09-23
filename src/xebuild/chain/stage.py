@@ -79,6 +79,17 @@ class Stage:
         """How long the whole stage is. The next one begins exactly this far on."""
         return self._long(0x0C)
 
+    @length.setter
+    def length(self, value: int) -> None:
+        """What a stage says about itself after a patch has made it longer.
+
+        Measured: the release's `cd_9452.bin` is 0x4f20 bytes and says so, its patch set
+        ends at 0x5290, and the CD of every image the original built says 0x5290. A
+        stage whose header disagreed with what follows it would be read short by
+        everything that walks a chain by lengths, this included.
+        """
+        struct.pack_into(">I", self.image, self.at + 0x0C, value)
+
     @property
     def shape(self) -> tuple:
         """Where this kind keeps its nonce, and where its body starts."""

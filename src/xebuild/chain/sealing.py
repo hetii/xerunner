@@ -18,9 +18,18 @@ binds on the second half, and a chain with a single CB -- a JTAG chain is `cb_57
 from its nonce alone. Asking for a CPU key there would be asking for something the chain
 does not use.
 
-**A fat retail chain keys its CD twice**, the second pass under the console's own key.
-That was found by sweeping boards, and it is worth knowing why it hid: most of what was
-"known" about a chain had only ever been measured on one slim console.
+**One chain in one image type keys its CD twice**, the second pass under the console's
+own key. The original's own test says when, at 0x41C760: the two words read just before
+the call are `[0x479EB8]`, zero when the chain has no CB_B, and `[0x479EA8]`, one when
+the image is retail. Both, or the pass does not happen -- a fat glitch image keys its CD
+from the nonce alone and a split chain binds on CB_B instead.
+
+Which stage takes it is the caller's to say, because nothing in a chain states the image
+type: `second_pass_at`. Reading an image the other way round, `Chain.keys` finds out by
+trying, since a stage that opens under the ordinary key was not sealed with the pass.
+This was got wrong once, as "a fat board keys its CD twice", and it made every chain on
+a fat board unreadable from CD down -- six chains measured, every one of them opening
+under the ordinary key.
 
 Under the manufacturing regime the binding message carries sixteen zero bytes where the
 console's key would go -- this is the "zeropair" the original's log talks about -- and
@@ -71,13 +80,18 @@ def message_for(stage, cpu_key: bytes, first) -> bytes:
     return stage.nonce + bytes(cpu_key)
 
 
-def keys(stages, cpu_key: bytes = b"", fat: bool = False) -> tuple:
+def keys(stages, cpu_key: bytes = b"", second_pass_at: int = -1) -> tuple:
     """One key per stage, in order, each following from the one before it.
 
     `stages` is the chain with any inserted payload already dropped -- keying through
     one gets everything after it wrong. A stage whose secret needs a CPU key that was
     not given comes back as `None`, and so does everything behind it, because there is
     nothing to carry forward.
+
+    `second_pass_at` is the index of the stage whose derived key is run through the
+    console's key a second time; -1, the default, is no such stage. A retail image on a
+    chain with no CB_B is the one case, and the key that comes out is also the secret
+    the stage behind it derives from.
     """
     binds = binding_at(stages)
     out, secret = [], ONE_BL_KEY
@@ -94,8 +108,12 @@ def keys(stages, cpu_key: bytes = b"", fat: bool = False) -> tuple:
         else:
             message = stage.nonce
         key = derive(secret, message)
-        # A fat retail chain runs CD's key through the console's key a second time.
-        if fat and stage.tag == "CD" and cpu_key:
+        if index == second_pass_at:
+            if not cpu_key:
+                raise ValueError(
+                    "the stage at %d takes a second pass under the console's key and "
+                    "none was given" % index
+                )
             key = derive(cpu_key, key)
         out.append(key)
         secret = key

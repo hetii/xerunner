@@ -22,7 +22,12 @@ class Board:
 
     # --- the motherboard -------------------------------------------------------
     section = ""  # the ini section its chain is read from, without the `bl` suffix
-    fat = False  # a fat chain keys its CD twice: HMAC(cpu, HMAC(prev, nonce))
+    # The four families the original calls fat, as against the slim ones. What it
+    # decides is which patch file a glitch image reads: `patches_fat.bin` rather than
+    # the file named after the console, measured on its log for every fat spelling. It
+    # decides nothing about keys -- the second pass under the console's key belongs to a
+    # chain shape and an image type, not to a board, and `chain.sealing` says which.
+    fat = False
     states_keyvault_size = True  # whether the image's header states it at 0x60
     copyright_year = 2009  # the year the image's copyright notice carries
     jtag_copyright_year = 2007  # and the year a JTAG image carries instead
