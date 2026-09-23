@@ -82,7 +82,7 @@ class Spare:
     def kind(self, spare: bytes) -> int:
         return spare[self.kind_at] & 0x3F
 
-    def written(self, block: int, sequence: int = 0, kind: int = 0) -> bytes:
+    def write(self, block: int, sequence: int = 0, kind: int = 0) -> bytes:
         """The field bytes for one page. The ECC is written over them separately.
 
         A version too large for the layout to hold is refused rather than cut down: a

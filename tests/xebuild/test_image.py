@@ -20,6 +20,7 @@ from xebuild.boards.flash import SmallNand
 from xebuild.image import Anchor, Directory, Dump, Header, Image, Keyvault, order
 from xebuild.image import anchor as anchors
 from xebuild.image import dump as dumps
+from xebuild.image.directory import Entry
 
 PAGE = 512
 
@@ -80,7 +81,7 @@ def an_image(version: int = 7) -> Image:
     for page in range(flash.length // PAGE):
         block = page // flash.spare.pages_a_block
         kind = 0x30 if block == 2 else 0
-        spares.append(flash.spare.written(block, sequence=version, kind=kind))
+        spares.append(flash.spare.write(block, sequence=version, kind=kind))
     return Image(flash.unflatten(bytes(flat), spares), flash)
 
 
@@ -109,6 +110,104 @@ class WhatAnImageSaysAboutItself(unittest.TestCase):
         header = Header(body)
         struct.pack_into(">I", body, 0x08, 0xC000)
         self.assertEqual(header.entrypoint, 0xC000)
+
+
+class WritingAHeader(unittest.TestCase):
+    """The other direction, in the same file as the reading, on purpose.
+
+    A header is a view, so a write goes into the image being assembled. That is what
+    these check: the field lands where the reader looks for it, and nothing else moves.
+    """
+
+    def test_every_field_reads_back_as_it_was_written(self):
+        header = Header.blank()
+        wanted = {"version": 1888, "entrypoint": 0x8000, "size": 0xB0000,
+                  "keyvault_size": 0x4000, "keyvault_at": 0x4000,
+                  "block_size": 0x10000, "smc_config_at": 0xF7C000,
+                  "smc_size": 0x3000, "smc_at": 0x1000, "word_at_04": 0,
+                  "word_at_06": 0, "before_flags": 1, "patch_slots": 2,
+                  "keyvault_version": 0x712}
+        for name, value in wanted.items():
+            setattr(header, name, value)
+        for name, value in wanted.items():
+            with self.subTest(field=name):
+                self.assertEqual(getattr(header, name), value)
+
+    def test_a_blank_page_is_already_an_image(self):
+        header = Header.blank()
+        self.assertTrue(header.ok)
+        self.assertEqual(len(header.image), PAGE)
+        self.assertEqual(header.entrypoint, 0)
+
+    def test_it_writes_into_the_image_rather_than_into_a_copy(self):
+        """Which is why a build can fill the page it is already assembling."""
+        image = bytearray(PAGE)
+        Header(image).entrypoint = 0x8000
+        self.assertEqual(struct.unpack_from(">I", image, 0x08)[0], 0x8000)
+
+    def test_writing_one_field_leaves_the_others_alone(self):
+        header = Header(bytearray(a_header()))
+        header.size = 0x70000
+        self.assertEqual(header.entrypoint, 0x8000)
+        self.assertEqual(header.keyvault_at, 0x4000)
+        self.assertEqual(header.smc_at, 0x1000)
+
+    def test_a_value_the_field_cannot_hold_is_refused(self):
+        """Never cut down to fit: a truncated number is one nobody asked for."""
+        with self.assertRaises(struct.error):
+            Header.blank().version = 0x10000
+
+    def test_a_header_over_bytes_that_cannot_be_written_says_so(self):
+        with self.assertRaises(ValueError) as caught:
+            Header(a_header()).entrypoint = 0x8000
+        self.assertIn("bytearray", str(caught.exception))
+
+
+class WritingTheFileTable(unittest.TestCase):
+    """Written and read in one place, which is the whole reason it is in one file."""
+
+    def an_entry(self, name, sector, size, stamp=0):
+        return Entry.for_file(name, sector, size, stamp)
+
+    def test_a_table_written_reads_back_the_same(self):
+        files = [self.an_entry("dash.xex", 0x71, 0x5B2000, 0x48EE5ED3),
+                 self.an_entry("xam.xex", 0x20E, 0x251000, 0x48EE5ED3)]
+        block = Directory.write(files, {}, 0x400)
+        table = Directory(block, 0x400)
+        self.assertEqual([one.name for one in table.entries],
+                         ["dash.xex", "xam.xex"])
+        self.assertEqual(table.entries[0].sector, 0x71)
+        self.assertEqual(table.entries[0].size, 0x5B2000)
+        self.assertEqual(table.entries[0].stamp, 0x48EE5ED3)
+
+    def test_the_map_written_reads_back_as_a_chain(self):
+        """The measurement this file was built on: 0x5b2000 bytes is 365 blocks."""
+        entry = self.an_entry("dash.xex", 0x71, 0x5B2000)
+        following = {block: block + 1 for block in range(0x71, 0x71 + 364)}
+        table = Directory(Directory.write([entry], following, 0x400), 0x400)
+        self.assertEqual(len(table.blocks_of(table.entries[0])), 365)
+
+    def test_a_block_the_map_does_not_name_ends_its_chain(self):
+        entry = self.an_entry("one.bin", 5, 0x4000)
+        table = Directory(Directory.write([entry], {}, 0x400), 0x400)
+        self.assertEqual(table.map[5], 0x1FFF)
+        self.assertEqual(table.blocks_of(table.entries[0]), (5,))
+
+    def test_the_halves_land_in_alternating_pages(self):
+        """Even pages the map, odd pages the entries, which is how a flash keeps it."""
+        block = Directory.write([self.an_entry("a.bin", 1, 0x10)], {0: 1}, 0x400)
+        self.assertEqual(len(block), 0x4000)
+        self.assertEqual(struct.unpack_from(">H", block, 0)[0], 1)
+        self.assertEqual(block[PAGE : PAGE + 5], b"a.bin")
+
+    def test_a_name_longer_than_an_entry_holds_is_refused(self):
+        with self.assertRaises(ValueError):
+            Entry.for_file("a" * 0x17, 1, 0x10)
+
+    def test_more_files_than_a_table_can_list_is_refused(self):
+        many = [self.an_entry("f%d.bin" % n, n, 0x10) for n in range(0x101)]
+        with self.assertRaises(ValueError):
+            Directory.write(many, {}, 0x400)
 
 
 class TheFileTable(unittest.TestCase):
@@ -233,7 +332,7 @@ class WhatIsInAnImage(unittest.TestCase):
             # every block claims to be somewhere else, as one dump measured does
             claimed = (block * 4) % flash.blocks
             kind = 0x30 if block == 2 else 0
-            spares.append(flash.spare.written(claimed, sequence=1, kind=kind))
+            spares.append(flash.spare.write(claimed, sequence=1, kind=kind))
         image = Image(flash.unflatten(bytes(flat), spares), flash)
         self.assertEqual(image.read("one.bin"), body)
 
@@ -394,7 +493,7 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         out = bytearray()
         for block in range(flash.blocks):
             data = bytes([block]) * PAGE
-            fields = flash.spare.written(block, sequence=1, kind=0)
+            fields = flash.spare.write(block, sequence=1, kind=0)
             out += (data + flash.spare.with_ecc(data, fields)) * per
         return bytes(out), flash, step, per
 
@@ -414,7 +513,7 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         for page in range(per):
             at = (pool * per + page) * step
             data = bytes([bad]) * PAGE
-            fields = flash.spare.written(bad, sequence=1, kind=0)
+            fields = flash.spare.write(bad, sequence=1, kind=0)
             out[at : at + PAGE] = data
             out[at + PAGE : at + step] = flash.spare.with_ecc(data, fields)
         return bytes(out)

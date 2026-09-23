@@ -183,7 +183,7 @@ class TheSpareLayouts(unittest.TestCase):
         for layout in (spare.SmallBlock(), spare.BigBlockController(),
                        spare.BigBlockChip()):
             with self.subTest(meta=layout.meta):
-                written = layout.written(0x15C, sequence=7, kind=0x31)
+                written = layout.write(0x15C, sequence=7, kind=0x31)
                 self.assertEqual(len(written), 16)
                 self.assertEqual(layout.block_number(written), 0x15C)
                 self.assertEqual(layout.sequence(written), 7)
@@ -192,7 +192,7 @@ class TheSpareLayouts(unittest.TestCase):
 
     def test_a_block_marked_bad_is_not_good(self):
         layout = spare.BigBlockChip()
-        written = bytearray(layout.written(1))
+        written = bytearray(layout.write(1))
         written[layout.mark_at] = 0x00
         self.assertFalse(layout.is_good(bytes(written)))
 
@@ -214,7 +214,7 @@ class TheSpareLayouts(unittest.TestCase):
 
     def test_what_is_written_as_a_wide_version_reads_back_whole(self):
         layout = spare.BigBlockController()
-        written = layout.written(0x1D2, sequence=626, kind=0x31)
+        written = layout.write(0x1D2, sequence=626, kind=0x31)
         self.assertEqual(layout.sequence(written), 626)
         self.assertEqual(layout.block_number(written), 0x1D2)
         self.assertEqual(layout.kind(written), 0x31)
@@ -231,9 +231,9 @@ class TheSpareLayouts(unittest.TestCase):
         """Not cut down: half a number nobody asked for reads back as an older copy."""
         for layout in (spare.SmallBlock(), spare.BigBlockChip()):
             with self.subTest(meta=layout.meta), self.assertRaises(ValueError):
-                layout.written(1, sequence=256)
+                layout.write(1, sequence=256)
         with self.assertRaises(ValueError):
-            spare.BigBlockController().written(1, sequence=0x10000)
+            spare.BigBlockController().write(1, sequence=0x10000)
 
     def test_only_a_big_block_chip_holds_two_hundred_and_fifty_six_pages(self):
         self.assertEqual(spare.SmallBlock().pages_a_block, 32)
@@ -249,14 +249,14 @@ class TheCodeOverAPage(unittest.TestCase):
                        spare.BigBlockChip()):
             with self.subTest(meta=layout.meta):
                 data = bytes(range(256)) * 2
-                fields = layout.written(0x15C, sequence=7, kind=0x31)
+                fields = layout.write(0x15C, sequence=7, kind=0x31)
                 whole = layout.with_ecc(data, fields)
                 self.assertTrue(layout.ecc_ok(data + whole))
 
     def test_one_byte_of_data_changing_makes_the_code_wrong(self):
         layout = spare.BigBlockController()
         data = bytes(range(256)) * 2
-        whole = layout.with_ecc(data, layout.written(1))
+        whole = layout.with_ecc(data, layout.write(1))
         self.assertTrue(layout.ecc_ok(data + whole))
         moved = bytearray(data)
         moved[100] ^= 0x01
@@ -265,7 +265,7 @@ class TheCodeOverAPage(unittest.TestCase):
     def test_writing_the_code_leaves_every_other_field_alone(self):
         layout = spare.BigBlockChip()
         data = b"\xa5" * 512
-        fields = layout.written(0x2E0, sequence=9, kind=0x2A)
+        fields = layout.write(0x2E0, sequence=9, kind=0x2A)
         whole = layout.with_ecc(data, fields)
         self.assertEqual(whole[:layout.kind_at], fields[:layout.kind_at])
         self.assertEqual(layout.block_number(whole), 0x2E0)
@@ -282,7 +282,7 @@ class TakingAnImageApartAndPuttingItBack(unittest.TestCase):
         layout = board.spare
         pages = 40
         flat = bytes(one % 251 for one in range(pages * 512))
-        fields = [layout.written(index // 32) for index in range(pages)]
+        fields = [layout.write(index // 32) for index in range(pages)]
         raw = board.flash.unflatten(flat, fields)
         self.assertEqual(len(raw), pages * (512 + layout.length))
         self.assertEqual(board.flash.flatten(raw), flat)

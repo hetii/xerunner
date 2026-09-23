@@ -52,6 +52,18 @@ Author is always Grzegorz Hetman. Never add a Co-Authored-By line.
 `boards`, then `config`, then `build`. Each module is reviewed and accepted before the
 next one is started.
 
+**What is approved is what was listed, and nothing beside it.** An approval covers the
+things that were named at the time and no others. Two ways of breaking that, both of
+which have happened:
+
+- Adding something that was never proposed. If it turns out while writing that one more
+  method is needed, it stops there and is put to the user before it is written. "It was
+  needed for the thing you approved" is not an approval.
+- Naming examples and delivering a set. Showing four fields and then writing setters for
+  all fifteen is not the same proposal, even when all fifteen are right. **Say the number
+  and the whole list before asking for a yes**; "all of them" is a fact the user cannot
+  guess from an example.
+
 **Nothing is committed without the user saying so, for that commit.** Not a module, not a
 fix, not a tidy-up. Permission to commit one thing is permission for that one thing and
 expires with it; "finish the step" is not permission to commit the step. The work is

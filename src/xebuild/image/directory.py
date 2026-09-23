@@ -17,6 +17,17 @@ thirteen bits; the values seen above that are 0x1FFB, 0x1FFE, 0x1FFF, 0x5FFE and
 A chain ends where the next block is one the flash does not have. Over a console whose
 filesystem is intact this gives the right length for all thirty-four of its files.
 
+`Directory.write` is the other direction, and it is here rather than with whatever
+decides a layout for one reason: the interleaving is the only awkward thing in this
+file, and a second copy of it somewhere else could disagree with this one. Two halves
+wrong the same way read each other back perfectly and leave a console that will not
+start.
+Written and read in one place, a test catches it.
+
+What it does not do is choose anything. Which file gets which blocks is a decision about
+free space and where a region ends; this takes a list and a map already decided and
+lays them out.
+
 A name whose first byte is 0x05 is one the filesystem has let go. Three entries on one
 console carry it, and they are exactly the entries whose chains no longer add up -- the
 entry survives a deletion and the blocks are handed to something else. The original
@@ -26,8 +37,11 @@ says so and the caller decides.
 
 from __future__ import annotations
 
+import struct
+
 PAGE = 512
 ENTRY = 0x20
+NAME = 0x16  # how much room an entry gives a name
 
 
 class Entry:
@@ -35,6 +49,26 @@ class Entry:
 
     def __init__(self, row: bytes):
         self.row = bytes(row)
+
+    @classmethod
+    def for_file(cls, name: str, sector: int, size: int, stamp: int = 0) -> Entry:
+        """One entry, made rather than read.
+
+        **No file goes in here.** The name says which file the entry is about, and the
+        three numbers are what the table records of it; nothing is opened and nothing is
+        read from a disk. Reading an entry is the plain constructor, which takes the
+        thirty-two bytes; this is the other direction.
+        """
+        plain = str(name).encode("latin-1")
+        if len(plain) > NAME:
+            raise ValueError(
+                "%s is %d bytes and an entry gives a name %d" % (name, len(plain), NAME)
+            )
+        row = bytearray(ENTRY)
+        row[: len(plain)] = plain
+        struct.pack_into(">H", row, NAME, sector)
+        struct.pack_into(">II", row, NAME + 2, size, stamp)
+        return cls(bytes(row))
 
     @property
     def name(self) -> str:
@@ -133,6 +167,36 @@ class Directory:
         """The blocks that hold one file, cut to the length its entry states."""
         wanted = -(-entry.size // self.block_length)
         return self.chain(entry.sector)[:wanted]
+
+    @classmethod
+    def write(cls, entries, following: dict, blocks: int,
+              block_length: int = 0x4000) -> bytes:
+        """The block a flash holds this table in, from a list and a map.
+
+        `entries` are the files, in the order they are to be listed. `following` says
+        which block comes after which; a block it does not name ends a chain, which is
+        what 0x1FFF says. Blocks past what the flash has are left alone.
+
+        The two halves are laid into alternating pages, which is how the flash keeps
+        them: even pages the map, odd pages the entries.
+        """
+        half = block_length // 2
+        words, rows = bytearray(half), bytearray(half)
+        for block in range(min(blocks, half // 2)):
+            struct.pack_into(">H", words, block * 2, following.get(block, 0x1FFF))
+        listed = list(entries)
+        if len(listed) * ENTRY > half:
+            raise ValueError(
+                "a table of %#x bytes lists %d files and this has %d"
+                % (block_length, half // ENTRY, len(listed))
+            )
+        for index, one in enumerate(listed):
+            rows[index * ENTRY : (index + 1) * ENTRY] = one.row
+        out = bytearray()
+        for page in range(block_length // PAGE // 2):
+            out += words[page * PAGE : (page + 1) * PAGE]
+            out += rows[page * PAGE : (page + 1) * PAGE]
+        return bytes(out)
 
     def __repr__(self) -> str:
         return "Directory(%d entries, %d blocks)" % (len(self.entries), self.blocks)
