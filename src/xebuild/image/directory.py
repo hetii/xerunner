@@ -14,6 +14,9 @@ blocks long exactly -- and so are `xam.xex`'s 148, `aac.xexp1`'s 5 and `pdatedat
 
 A word of the map carries flags above its value, so the block it points at is the low
 thirteen bits; the values seen above that are 0x1FFB, 0x1FFE, 0x1FFF, 0x5FFE and 0x9FFF.
+What a word says when it holds no part of a file is named below, and `map_for` lays a
+whole map out of what a build decided -- both here rather than beside the deciding,
+because these are the words `map` reads back.
 A chain ends where the next block is one the flash does not have. Over a console whose
 filesystem is intact this gives the right length for all thirty-four of its files.
 
@@ -42,6 +45,14 @@ import struct
 PAGE = 512
 ENTRY = 0x20
 NAME = 0x16  # how much room an entry gives a name
+
+# What the map says about a block holding no part of a file. Measured off three images
+# the original built -- a 16 MB glitch, a retail, a JTAG -- and the same on all three.
+RESERVED = 0x1FFB   # below the first file, and the blocks the top regions sit in
+TABLE = 0x1FFD      # the one block the table itself is in
+FREE = 0x1FFE       # past the files, up to the last block a build may use
+CHAIN_END = 0x1FFF  # a file's last block
+POOL = 0x0000       # the blocks past that, which a console replaces bad ones from
 
 
 class Entry:
@@ -178,8 +189,9 @@ class Directory:
         """The block a flash holds this table in, from a list and a map.
 
         `entries` are the files, in the order they are to be listed. `following` says
-        which block comes after which; a block it does not name ends a chain, which is
-        what 0x1FFF says. Blocks past what the flash has are left alone.
+        which block comes after which -- `map_for` is what builds one -- and a block it
+        does not name ends a chain, which is what `CHAIN_END` says. Blocks past what the
+        flash has are left alone.
 
         The two halves are laid into alternating pages, which is how the flash keeps
         them: even pages the map, odd pages the entries.
@@ -187,7 +199,7 @@ class Directory:
         half = block_length // 2
         words, rows = bytearray(half), bytearray(half)
         for block in range(min(blocks, half // 2)):
-            struct.pack_into(">H", words, block * 2, following.get(block, 0x1FFF))
+            struct.pack_into(">H", words, block * 2, following.get(block, CHAIN_END))
         listed = list(entries)
         if len(listed) * ENTRY > half:
             raise ValueError(
@@ -201,6 +213,46 @@ class Directory:
             out += words[page * PAGE : (page + 1) * PAGE]
             out += rows[page * PAGE : (page + 1) * PAGE]
         return bytes(out)
+
+    @staticmethod
+    def map_for(chains, blocks: int, first: int, table_at: int, top: int,
+                pool: int) -> dict:
+        """Every block of a flash named, from what a build decided to put where.
+
+        `chains` are the files as `(first block, how many)`, `first` is the block the
+        first of them starts at, `table_at` is the block this table goes in, `top` is
+        the last block a build may use, and `pool` is how many blocks at the very end
+        the console keeps to replace a bad one from.
+
+        Measured on three images the original built, identical on all three: blocks
+        below the first file are reserved, a file's own run points along itself and its
+        last block says the chain ends, the table's block says so about itself, what
+        lies between the files and the last usable block is free, that block and the
+        three above it are reserved -- the settings, statistics and manufacturing
+        blocks sit there -- and the blocks past those say nothing at all.
+
+        Which block the table goes in is the caller's to say, because it follows the
+        settings blobs rather than the files: on all three, four `Mobile*.dat` sit
+        between the last file and the table.
+        """
+        out = {}
+        for block in range(blocks):
+            if block < first:
+                out[block] = RESERVED
+            elif block <= top - 1:
+                out[block] = FREE
+            elif block <= top + 3:
+                out[block] = RESERVED
+            else:
+                out[block] = POOL
+        for block in range(blocks - pool, blocks):
+            out[block] = POOL
+        if table_at:
+            out[table_at] = TABLE
+        for at, held in chains:
+            for step in range(held):
+                out[at + step] = at + step + 1 if step < held - 1 else CHAIN_END
+        return out
 
     def __repr__(self) -> str:
         return "Directory(%d entries, %d blocks)" % (len(self.entries), self.blocks)

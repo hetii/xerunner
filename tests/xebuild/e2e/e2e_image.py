@@ -177,8 +177,18 @@ class AnEmmcImageTheOriginalBuilt(unittest.TestCase):
         self.assertEqual(first.blobs, second.blobs)
 
     def test_laying_what_it_says_back_gives_the_same_bytes(self):
+        """Into an image of our own, since one read from a file refuses to be written.
+
+        Which makes this the stronger statement of the two: a 48 MB image assembled here
+        from nothing but this file's own content comes out byte for byte as the original
+        built it, anchors and all.
+        """
+        flash = for_name("corona4g")[0].flash
         one = Anchor.chosen(self.raw)
-        self.assertEqual(anchors.lay(self.raw, one.table, one.blobs), self.raw)
+        image = Image.blank(flash)
+        image.put(0, Image(self.raw, flash).flat)
+        anchors.lay(image, one.table, one.blobs)
+        self.assertEqual(image.raw, self.raw)
 
     def test_its_filesystem_reads(self):
         image = Image(self.raw, for_name("corona4g")[0].flash)
