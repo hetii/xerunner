@@ -98,13 +98,18 @@ class Filesystem:
         return Directory.write(self.entries, self.following, self.flash.blocks)
 
     def over(self, image) -> None:
-        """Every file written into `image` where this says it goes.
+        """Every file written into `image` where this says it goes, padded to its block.
 
         The blocks are the filesystem's own, so turning them into places is the flash's
         business rather than this one's, and refusing what does not fit is the image's.
+
+        A file's last block is filled out with zeros: every reference image carries them
+        between the end of a file and the end of its block, where erased flash would be
+        0xFF, and the pages they sit in are written like any other.
         """
-        for entry, _blocks, body in self.placed:
-            image.put(self.flash.offset_of(entry.sector, self.bigffs), body)
+        for entry, blocks, body in self.placed:
+            at = self.flash.offset_of(entry.sector, self.bigffs)
+            image.put(at, bytes(body) + bytes(blocks * BLOCK - len(body)))
 
     def __repr__(self) -> str:
         blocks = sum(one[1] for one in self.placed)

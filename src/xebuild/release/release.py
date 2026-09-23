@@ -103,6 +103,31 @@ class Release:
             return None
         return Patches(self._read(self.where, "bin", name))
 
+    def firmware(self, listed) -> bytes | None:
+        """One file the recipe's `[flashfs]` names, or None when the release has none.
+
+        The update container first and then the directories a bootloader is looked for
+        in. Measured on 17559: twenty-five of its files are only in the container, and
+        three -- `xenonclatin.xtt`, `xenonjklatin.xtt`, `ximedic.xex` -- only in
+        `common/`, where every release since 1888 keeps them. No file is in both, so
+        which place wins when one is has not been measured; the container is asked
+        first because it is the release's own.
+
+        A name the list gives as `..\\launch.xex` is outside the release altogether, and
+        when nothing is there the original leaves it out of the image without a word --
+        its file list states a checksum of zero for such a file, which is how it says
+        the file is optional.
+        """
+        name = listed.plain
+        held = "$flash_" + name
+        if held in self.container.held:
+            return self.container.firmware(name)
+        for where in (self.common, self.where):
+            path = self._beside(where, name)
+            if path:
+                return self._read(path)
+        return None
+
     def option(self, name: str) -> Patches:
         """The patch set one option carries, as `bin/<name>.bin`."""
         return Patches(self._read(self.where, "bin", "%s.bin" % name))

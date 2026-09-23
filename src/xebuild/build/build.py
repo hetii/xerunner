@@ -14,16 +14,21 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
+from .. import boards
+from ..boards.flash import PAGE
 from ..chain import Fields, sealing
 from ..chain.stage import LENGTH as STAGE_HEADER
 from ..chain.stage import Stage
 from ..crypto import smc as cipher
 from ..crypto.keys import derive
 from ..crypto.rc4 import rc4
-from ..image import Dump, Header
+from ..image import Dump, Header, Image
+from ..image import anchor as anchors
 from ..smc import Smc
-from . import layout
+from . import layout, security
+from .filesystem import Filesystem
 
 # The copyright line every image carries, with the year a build replaces. Read off the
 # sixteen reference images, which carry two different years and nothing else different.
@@ -68,29 +73,17 @@ class Build:
     def dump(self) -> Dump | None:
         """The console's own flash, or None when the material holds no dump.
 
-        Read once: it is seventeen megabytes and nearly every region asks it
-        something.
-
-        **It is read with the flash `-c` names, and refused when the file is not that
-        long.** The original does better than this and says so -- "Detecting NAND
-        controller type from dump data... NAND dump is from a small block machine / NAND
-        dump uses big block controller" -- so it will build for one shape from a dump of
-        another. Which field that detection reads has not been measured here, and a dump
-        read with the wrong geometry is not an error anything notices: the spare bytes
-        are taken out at the wrong stride and every offset into it is then wrong, which
-        reads back as a keyvault that will not open rather than as a refusal. So this
-        refuses instead, and says what is missing.
+        Read once: it is seventeen megabytes and nearly every region asks it something.
+        **Read with its own geometry**, which `boards.for_dump` works out from the dump,
+        and not with the geometry of the console being built for: a trinity dump builds
+        a falcon image, and read as a falcon's its settings blobs are scanned at the
+        wrong offsets.
         """
         if self._dump is None and self.material.dump is not None:
-            wanted = self.console.flash.raw_length
-            if len(self.material.dump) != wanted:
-                raise ValueError(
-                    "this dump is %#x bytes and a %s holds %#x; reading a dump of one "
-                    "shape for a console of another needs the controller detection the "
-                    "original does and this does not"
-                    % (len(self.material.dump), self.console.name, wanted)
-                )
-            self._dump = Dump(self.material.dump, self.console, self.config.bigffs)
+            raw = self.material.dump
+            own = boards.for_dump(raw, self.console)
+            bigffs = self.config.bigffs if own is self.console else False
+            self._dump = Dump(raw, own, bigffs)
         return self._dump
 
     @property
@@ -311,12 +304,15 @@ class Build:
                     "%s at %#x has no key: the CPU key this chain binds to was not "
                     "given" % (stage.tag, stage.at)
                 )
-            out[stage.at:stage.at + stage.length] = stage.head + rc4(key, stage.body)
-        # The region ends where the last stage says it does, not where its padding does.
-        # Measured: the CE of every reference image ends at the length its own header
-        # states, and the six bytes after it are the dump's own, untouched -- the
-        # original lays its regions over the dump it read and never writes there.
-        return bytes(out[:stages[-1].at + stages[-1].length])
+            # Sealed over the padding as well as the body: the stream simply carries
+            # on. Measured on the last stage, whose header states less than it fills --
+            # the six bytes after CE are that continuation, and x360mcp saw it on a
+            # manufacturing image, where CE had moved by 0x20 and the dump's bytes at
+            # the same place were something else entirely.
+            padded = stage.length + -stage.length % SEAL_ALIGN
+            body = bytes(out[stage.at + len(stage.head):stage.at + padded])
+            out[stage.at:stage.at + padded] = stage.head + rc4(key, body)
+        return bytes(out)
 
     def _chain_files(self) -> list:
         """The stages of the chain, out of the file list, in the order it names them.
@@ -475,8 +471,12 @@ class Build:
         cf[0x220:0x230] = derive(self.cpu_key, bytes(message))
 
         sealed_cf = sealing.under(Stage(bytes(cf), 0), sealing.ONE_BL_KEY)
-        sealed_cg = sealing.under(Stage(bytes(cg), 0), bytes(cf[0x330:0x340]))
-        return sealed_cf + sealed_cg
+        # CG is sealed over its padding too, as every stage is: its tail file is ten
+        # bytes longer than CG says it is, and those ten are the stream carrying on.
+        cg += bytes(-len(cg) % SEAL_ALIGN)
+        head = len(Stage(cg, 0).head)
+        key = derive(bytes(cf[0x330:0x340]), own_cg.nonce)
+        return sealed_cf + bytes(cg[:head]) + rc4(key, bytes(cg[head:]))
 
     def _update_files(self) -> tuple:
         """The CF and the CG the file list names, the first of each."""
@@ -488,6 +488,200 @@ class Build:
             raise ValueError("this release names no CF and CG for a %s %s image"
                              % (self.console.name, self.image_type.name))
         return found["CF"], found["CG"]
+
+    def files(self, when: int) -> list:
+        """The files the filesystem holds after the CG's tail, as `(name, bytes)`.
+
+        The release's `[flashfs]` list and then its `[security]` list, each in the
+        order it names them -- which is the order of every reference image's table.
+
+        A patch file is written under its name with a `1` after it: `aac.xexp` goes in
+        as `aac.xexp1` and `xenonclatin.xttp` as `xenonclatin.xttp1`, all seven of them
+        on every image measured. A file the list names outside the release that is not
+        there -- `..\\launch.xex` and its two neighbours -- is left out, as the original
+        leaves it; its list states a checksum of zero, which is how it says the file is
+        optional.
+        """
+        recipe = self.release.recipe(self.image_type)
+        out = []
+        for listed in recipe.firmware:
+            body = self.release.firmware(listed)
+            if body is None:
+                if listed.outside:
+                    logger.info("%s is not there and is optional", listed.plain)
+                    continue
+                raise ValueError("%s is named by the file list and the release does "
+                                 "not have it" % listed.plain)
+            name = listed.plain
+            if name.lower().endswith(("xexp", "xttp")):
+                name += "1"
+            out.append((name, body))
+        for listed in recipe.security:
+            out.append((listed.plain, self.security_file(listed.plain, when)))
+        return out
+
+    def security_file(self, name: str, when: int) -> bytes:
+        """One of the five security files, sealed for this console. See `security`."""
+        if self.config.nosecurity or self.config.nosusecurity:
+            raise ValueError("nosecurity and nosusecurity change where the security "
+                             "files come from, and neither is reproduced here yet")
+        if self.dump is None or not self.cpu_key:
+            raise ValueError("the security files are sealed for a console, and this "
+                             "build has no dump or no CPU key to seal them for")
+        own = self.dump.image.read(name)
+        ldv = self.ldv
+        if name in ("crl.bin", "dae.bin"):
+            content = own
+            if name in self.release.container.held:
+                content = self.release.container.read(name)
+            sealed = security.crl if name == "crl.bin" else security.dae
+            return sealed(content, own, self.cpu_key, when, ldv)
+        if name == "extended.bin":
+            vault = self.dump.keyvault(self.cpu_key).plain
+            return security.extended(own, vault[0x10:0x18], self.cpu_key)
+        if name == "secdata.bin":
+            return security.secdata(own, self.cpu_key, when, ldv)
+        if name == "fcrt.bin":
+            given = self.material.fcrt
+            return security.fcrt(given if given is not None else own, self.cpu_key)
+        raise ValueError("%s is not one of the five security files" % name)
+
+    @property
+    def ldv(self) -> int:
+        """The lockdown value written into the chain's CF and three security files.
+
+        `cfldv` when it is given, the console's own -- read off its CF -- otherwise.
+        """
+        if self.config.cfldv is not None:
+            return self.config.cfldv
+        return self.dump.ldv
+
+    def image(self, when: int | None = None) -> Image:
+        """The whole image, every region in its place and every page's spare written.
+
+        `when` is the build's time, which the directory's stamps and three security
+        files carry: the clock when nothing says, and a reference build's own when one
+        is being reproduced.
+
+        Which pages carry spare follows the rule x360mcp measured over every page of a
+        reference build: a page gets it exactly when the build wrote something there.
+        Content decides for the regions below the filesystem, since what nothing wrote
+        is erased; the files, the settings blobs, the table and the console's settings
+        are marked by their spans, because their pages may hold 0xFF all the same.
+        """
+        when = int(time.time()) if when is None else when
+        flash, bigffs = self.console.flash, self.config.bigffs
+        out = Image.blank(flash, bigffs)
+        base = flash.base_of(bigffs) * layout.BLOCK
+
+        chain = self.chain()
+        chain_end = layout.CHAIN_AT + len(chain)
+        where = layout.for_type(self.image_type, flash, chain_end, bigffs)
+        slots, tail_at = where["slot"][0], where["tail"][0]
+        smc = self.smc()
+        smc_at = layout.smc_at(len(smc))
+        page = self.header(slots, self.ce_version, len(smc))
+        # Zeros from the page to the SMC, on every reference image.
+        out.put(0, page + bytes(smc_at - len(page)))
+        out.put(smc_at, smc)
+        out.put(layout.KEYVAULT_AT, self.keyvault())
+        # The chain's last block is filled out with zeros, as a file's is.
+        out.put(layout.CHAIN_AT, chain + bytes(-chain_end % layout.BLOCK))
+        xell = self.xell()
+        if xell is not None:
+            out.put(layout.XELL_AT, xell)
+        run = self.slot(tail_at)
+        out.put(slots, run[:layout.SLOT_SPAN])
+        spill = run[layout.SLOT_SPAN:]
+        out.put(tail_at, spill + bytes(-len(spill) % layout.BLOCK))
+        out.put(where["patches"][0], self.patch_slot())
+        out.mark_written(0, tail_at)
+
+        first = (tail_at - base) // layout.BLOCK
+        fs = Filesystem(flash, first, bigffs)
+        stamp = self._fat(when)
+        if layout.tail_is_a_file(tail_at, base):
+            fs.add("sysupdate.xexp1", spill, stamp=stamp)
+        else:
+            fs.first = first + -(-len(spill) // layout.BLOCK)
+        for name, body in self.files(when):
+            fs.add(name, body, stamp=stamp)
+        fs.over(out)
+        start = flash.offset_of(fs.after, bigffs)
+        out.mark(tail_at, start - tail_at)
+
+        per = flash.spare.pages_a_block if flash.spare is not None else 1
+        blobs = {} if self.config.nomobile else self._mobiles()
+        for index, name in enumerate(sorted(blobs)):
+            at = start + index * flash.mobile_stride
+            body = blobs[name]
+            pages = max(1, len(body) // PAGE)
+            free = per - (at // PAGE) % per - pages
+            out.put(at, body)
+            out.mark(at, pages * PAGE, 1, 0x31 + "BCDE".index(name[6]),
+                     bytes([len(body) // 0x100, free, 0, 0]))
+        table_at = start + flash.mobile_region
+        fs.table_at = (table_at - base) // layout.BLOCK
+        table = fs.table()
+        out.put(table_at, table)
+        out.mark(table_at, len(table), 1, 0x30)
+
+        for at, body, span in self._settings():
+            out.put(at, body)
+            out.mark(at, span)
+        if flash.anchors:
+            anchors.lay(out, fs.table_at, {})
+        return out
+
+    @staticmethod
+    def _fat(when: int) -> int:
+        """The build's time as a directory entry keeps it: a FAT date and time.
+
+        In UTC and two seconds on, the same two seconds the security files' stamp
+        carries -- the reference images' entries say 15:17:50 where the build began at
+        15:17:48 UTC. FAT counts seconds in twos.
+        """
+        at = time.gmtime(when + 2)
+        date = ((at.tm_year - 1980) << 9) | (at.tm_mon << 5) | at.tm_mday
+        clock = (at.tm_hour << 11) | (at.tm_min << 5) | (at.tm_sec // 2)
+        return (date << 16) | clock
+
+    def _mobiles(self) -> dict:
+        """The settings blobs this console carries, by name: the material's first."""
+        out = dict(self.material.mobiles)
+        if self.dump is not None:
+            for name in self.dump.image.blobs:
+                if name.startswith("Mobile") and name not in out:
+                    out[name] = self.dump.image.blob(name)
+        return out
+
+    def _settings(self) -> list:
+        """The console's statistics, manufacturing data and settings block, placed.
+
+        As `(where, bytes, how much is marked written)`. Each is given eight pages of
+        spare whatever its bytes hold -- measured by x360mcp: the statistics' block at
+        0xF78000 carries spare on all eight pages although most of it is 0xFF. With
+        `nomobile` the statistics are not written at all, spare included, and
+        manufacturing data only when the console has any.
+        """
+        if self.dump is None:
+            return []
+        flash = self.console.flash
+        span = 0x1000
+        stats_at = flash.smc_config - flash.round_to
+        out = []
+        if self.dump.manufacturing_written:
+            out.append((stats_at - flash.round_to, self.dump.manufacturing, span))
+        if not self.config.nomobile:
+            out.append((stats_at, self.dump.statistics, span))
+        config = self.material.smc_config
+        if config is None:
+            # Where the dump keeps it is the dump's own flash's business, not the one
+            # being built for: a 16 MB dump builds a 64 MB image.
+            own = self.dump.flash.smc_config
+            config = bytes(self.dump.image.flat[own:own + span])
+        out.append((flash.smc_config, config, span))
+        return out
 
     @property
     def ce_version(self) -> int:

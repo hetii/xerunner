@@ -98,6 +98,44 @@ class Image:
             return self.file
         return self.flash.unflatten(bytes(self.flat), self.spares)
 
+    def mark(self, at: int, length: int, sequence: int = 0, kind: int = 0,
+             extra: bytes = b"") -> None:
+        """Say in the spare of every page from `at` for `length` that a build wrote it.
+
+        The block number is the page's own place in the flash, the version and the kind
+        are a settings blob's, and zero for anything else. A page no build writes keeps
+        the spare of erased flash, 0xFF throughout, which is what the original leaves
+        there too -- and the code over an erased page with erased fields is itself 0xFF,
+        so leaving it alone is exact rather than approximate.
+
+        Whether a page is written is the region's to say and not the bytes': a block of
+        statistics that happens to hold 0xFF is still marked, in every image measured.
+        A part with no spare area has nothing to say it in.
+        """
+        if not self.writable:
+            raise ValueError("this image was read in from a file and is material; "
+                             "start from Image.blank() to build one")
+        if self.flash.spare is None or length <= 0:
+            return
+        per = self.flash.spare.pages_a_block
+        for page in range(at // PAGE, -(-(at + length) // PAGE)):
+            self.spares[page] = self.flash.spare.write(page // per, sequence, kind,
+                                                       extra)
+
+    def mark_written(self, start: int = 0, end: int | None = None) -> None:
+        """Mark every page in the span that holds anything but erased flash.
+
+        The rule x360mcp measured on every page of a reference build: a page gets spare
+        exactly when the build wrote something at it. Content decides for most of an
+        image, since erased flash is what nothing wrote; a region whose pages may hold
+        0xFF all the same -- a file, the statistics -- is marked by its span instead.
+        """
+        end = len(self.flat) if end is None else end
+        erased = b"\xff" * PAGE
+        for at in range(start - start % PAGE, end, PAGE):
+            if self.flat[at:at + PAGE] != erased:
+                self.mark(at, PAGE)
+
     def put(self, at: int, data: bytes) -> None:
         """`data` into the flat run at `at`, on an image that is being built.
 
