@@ -11,7 +11,7 @@ import struct
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.chain import Chain, sealing
+from xebuild.chain import Chain, Fields, sealing
 from xebuild.chain.stage import Stage
 from xebuild.crypto.keys import derive
 from xebuild.crypto.rc4 import rc4
@@ -64,6 +64,63 @@ class AStageSHeader(unittest.TestCase):
         # a length of zero would walk on the spot for ever
         self.assertFalse(Stage(a_stage("CB", 0x100)[:0x20] + bytes(0x20), 0)
                          .looks_like_a_stage)
+
+
+class WritingWhatAStageCarries(unittest.TestCase):
+    """The write sides, beside the read sides they have to agree with.
+
+    There is no separate sealing function and there should not be: RC4 is symmetric, so
+    the same pass that opens a stage closes it. Measured on a real console: all four of
+    its stages, opened and run through again under the same key, come back as the bytes
+    the flash holds.
+    """
+
+    def test_a_nonce_is_written_where_its_kind_keeps_it(self):
+        given = bytes(range(0x30, 0x40))
+        for tag, at in (("CD", 0x10), ("CF", 0x20)):
+            with self.subTest(tag=tag):
+                one = Stage(bytearray(a_stage(tag, 0x400)), 0)
+                one.nonce = given
+                self.assertEqual(one.nonce, given)
+                self.assertEqual(one.image[at : at + 0x10], given)
+
+    def test_a_nonce_that_is_not_sixteen_bytes_is_refused(self):
+        one = Stage(bytearray(a_stage("CD", 0x400)), 0)
+        for given in (b"", bytes(15), bytes(17)):
+            with self.subTest(given=len(given)), self.assertRaises(ValueError):
+                one.nonce = given
+
+    def test_a_stage_over_bytes_that_cannot_be_written_says_so(self):
+        with self.assertRaises(ValueError) as caught:
+            Stage(a_stage("CD", 0x400), 0).nonce = bytes(0x10)
+        self.assertIn("bytearray", str(caught.exception))
+
+    def test_the_fields_a_stage_carries_for_one_console(self):
+        cpu, key, x = bytes(range(0x10)), bytes(0x10), bytes(range(0x10, 0x20))
+        out = Fields.write(bytes.fromhex("780227"), cpu, key, x)
+        self.assertEqual(len(out), 0x20)
+        one = Fields(out)
+        self.assertEqual(one.pairing, bytes.fromhex("780227"))
+        self.assertEqual(one.ldv, 0)
+        self.assertTrue(one.agrees(cpu, key, x))
+
+    def test_the_lockdown_byte_is_left_at_zero_because_a_cb_b_leaves_it(self):
+        """Measured on a console's own CB_B and on two reference images: the pairing is
+        written and the byte after it is not, while the same console's CF states 14."""
+        nothing = bytes(0x10)
+        out = Fields.write(bytes.fromhex("780227"), nothing, nothing, nothing)
+        self.assertEqual(out[0x03], 0)
+        self.assertEqual(out[0x04:0x10], bytes(12))
+
+    def test_no_key_leaves_the_binding_zero_as_the_manufacturing_regime_does(self):
+        out = Fields.write(bytes.fromhex("780227"))
+        self.assertEqual(out[0x10:0x20], bytes(0x10))
+        self.assertEqual(out[0x00:0x03], bytes.fromhex("780227"))
+
+    def test_a_pairing_that_is_not_three_bytes_is_refused(self):
+        for given in (b"", bytes(2), bytes(4)):
+            with self.subTest(given=len(given)), self.assertRaises(ValueError):
+                Fields.write(given)
 
 
 class TheSealing(unittest.TestCase):

@@ -89,6 +89,26 @@ class Stage:
         at, _body = self.shape
         return self.image[self.at + at : self.at + at + 0x10]
 
+    @nonce.setter
+    def nonce(self, given: bytes) -> None:
+        """The nonce a build gives this stage, written where its kind keeps it.
+
+        A stage is a view, so this goes straight into the image being assembled. What
+        the nonce should be is not decided here: a build either draws one or carries the
+        console's own across, and which of those happens is the build's business.
+        """
+        given = bytes(given)
+        if len(given) != 0x10:
+            raise ValueError("a nonce is 16 bytes and this is %d" % len(given))
+        at, _body = self.shape
+        try:
+            self.image[self.at + at : self.at + at + 0x10] = given
+        except TypeError:
+            raise ValueError(
+                "this stage is a view on bytes that cannot be written; "
+                "give it a bytearray"
+            ) from None
+
     @property
     def body(self) -> bytes:
         """Everything past the header, still sealed."""

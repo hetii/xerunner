@@ -10,6 +10,12 @@ Both places begin the same way, which is why one class serves both:
     0x03   1  the lockdown value
     0x04  12  the rest of the console block
 
+**Only a CF fills that lockdown byte.** In a CB_B it is zero: measured on a console's
+own CB_B and on two reference images the original built, where the pairing is written
+and the byte after it is not, while the same console's CF states 14 and 13. So a CB_B
+carries the pairing and the sixteen bytes that bind it, and the lockdown value is read
+from the CF.
+
 **CF carries them at the source, at 0x21C of the opened stage.** The original reads them
 off CF and says so: "CF slot 0 decrypted ok LDV 0x0e Pairing: 0x780227", then "setting
 LDV from image to 14" and "setting pairing data from image to 0x780227". Reproduced to
@@ -78,6 +84,28 @@ class Fields:
     def agrees(self, cpu_key: bytes, stage_key: bytes, fingerprint: bytes) -> bool:
         """Whether this stage and that SMC describe each other."""
         return self.digest == self.expected(cpu_key, stage_key, fingerprint)
+
+    @classmethod
+    def write(cls, pairing: bytes, cpu_key=None, stage_key: bytes = b"",
+              fingerprint: bytes = b"", ldv: int = 0) -> bytes:
+        """The 0x20 bytes a stage carries for one console, ready to be laid in its body.
+
+        `ldv` is left at zero because that is what a CB_B carries, and a CF is the one
+        place it is filled.
+
+        **A `cpu_key` of None leaves the sixteen bytes that bind this zero**, which is
+        not a shortcut: under the manufacturing regime the original does not compute
+        them either, and an image it built that way carries zeros there. See `sealing`.
+        """
+        pairing = bytes(pairing)
+        if len(pairing) != 3:
+            raise ValueError("a pairing is 3 bytes and this is %d" % len(pairing))
+        head = bytearray(cls.LENGTH)
+        head[0x00:0x03] = pairing
+        head[0x03] = ldv
+        if cpu_key is None:
+            return bytes(head) + bytes(cls.LENGTH)
+        return bytes(head) + cls(bytes(head)).expected(cpu_key, stage_key, fingerprint)
 
     def __repr__(self) -> str:
         return "Fields(pairing %s, ldv %d)" % (self.pairing.hex(), self.ldv)
