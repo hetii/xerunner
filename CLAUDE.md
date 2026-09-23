@@ -52,6 +52,13 @@ Author is always Grzegorz Hetman. Never add a Co-Authored-By line.
 `boards`, then `config`, then `build`. Each module is reviewed and accepted before the
 next one is started.
 
+**Nothing is committed without the user saying so, for that commit.** Not a module, not a
+fix, not a tidy-up. Permission to commit one thing is permission for that one thing and
+expires with it; "finish the step" is not permission to commit the step. The work is
+finished, `ruff` and the tests are run, and then it waits with the diff on the screen
+until the user has looked at it. A frozen module additionally needs permission to be
+touched at all, which is a separate question from permission to commit.
+
 ## Decisions deliberately left open
 
 **Where `cpukey.txt` and `1blkey.txt` are read.** Not in `BuildConfig` for now. What is
