@@ -31,6 +31,23 @@ A number that merely disagrees with its position is not a remap and is not honou
 blocks of a dump swapped with their own numbers were both reported as "bad LBA ... block
 LBA ignored" and left where they lay. One console here carries twenty-four such blocks
 across its bootloader region, each claiming four times its own position.
+
+**The original says it ignores such a number and then loses the block, which is why
+that console reads differently there.** Its blocks 0x01 to 0x18 announce four times
+their position, so nothing announces 0x01 at all; the buffer it reads a keyvault and a
+chain from is assembled by the announced number, and those positions stay erased.
+Measured three ways and they agree: a print inserted into the binary shows it
+comparing 0xFFFFFFFF where a keyvault's nonce should be; assembling a buffer that way
+here leaves 0x4000 and 0x8000 erased while the filesystem, whose blocks announce
+themselves correctly, survives untouched; and the original's own behaviour follows
+from it exactly -- it cannot open that keyvault, it aborts its chain walk with "error
+getting CB/CBA Nonce", and it still reads the CF slots, which sit in block 0x1C where
+the number is right.
+
+Reading by position is what this does, and it is what the console must do as well:
+that console runs, and a machine that looked for its keyvault and its bootloaders by
+those announced numbers would find neither.
+
 """
 
 from __future__ import annotations
