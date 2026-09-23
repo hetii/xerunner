@@ -17,8 +17,10 @@ beside it -- `nofcrt.bin`, `nohdd.bin`, `nolan.bin`, `nowifi.bin`, `nohdmiwait.b
 are one option each, and they are how the options a configuration carries actually reach
 an image.
 
-Nothing here decides what to patch or which set to use. It reads a file and can lay one
-over a run of bytes, and that is all.
+Nothing here decides what to patch or which set to use. It reads a file, can lay a set
+over a run of bytes, and can hand a set back as it stands. Which set is which is the
+build's business: measured, a release's own file holds three, the first two patch
+bootloaders and the third is what goes into the image's patch slot.
 """
 
 from __future__ import annotations
@@ -52,12 +54,18 @@ class Patches:
     def __init__(self, raw: bytes):
         self.raw = bytes(raw)
         self.sets = []
+        # Where each set begins and ends in the file, sentinel included, so one can be
+        # handed back as it stands: the third goes into an image untouched.
+        self.spans = []
         records, at = [], 0
+        began = 0
         while at + 4 <= len(self.raw):
             where = struct.unpack_from(">I", self.raw, at)[0]
             if where == 0xFFFFFFFF:
                 self.sets.append(tuple(records))
+                self.spans.append((began, at + 4))
                 records, at = [], at + 4
+                began = at
                 continue
             if at + 8 > len(self.raw):
                 raise ValueError("a patch record at %#x has no length" % at)
@@ -76,21 +84,36 @@ class Patches:
         # marker, and one release ships a set with nothing after its marker.
         if records:
             self.sets.append(tuple(records))
+            self.spans.append((began, len(self.raw)))
 
     @property
     def records(self) -> tuple:
         """Every record in the file, the sets run together."""
         return tuple(one for group in self.sets for one in group)
 
-    def over(self, body: bytes, base: int = 0) -> bytes:
+    def set_raw(self, which: int) -> bytes:
+        """One set as it stands in the file, its sentinel included.
+
+        For the set that is applied to nothing: an image's patch slot holds the third
+        one verbatim, so nothing is gained by taking it apart and writing it out again.
+        """
+        began, ended = self.spans[which]
+        return self.raw[began:ended]
+
+    def over(self, body: bytes, base: int = 0, which: int | None = None) -> bytes:
         """`body` with every record written into it, counting from `base`.
+
+        `which` takes one set rather than all of them, which is what a file holding
+        more than one is for: a release's own patch file patches two different
+        bootloaders out of the one file.
 
         A record that would write past the end is refused rather than trimmed: a patch
         landing somewhere shorter than it expects means the wrong file is being patched,
         and writing the part that fits would hide it.
         """
         out = bytearray(body)
-        for one in self.records:
+        wanted = self.records if which is None else self.sets[which]
+        for one in wanted:
             at = one.at - base
             if at < 0 or at + one.length > len(out):
                 raise ValueError(

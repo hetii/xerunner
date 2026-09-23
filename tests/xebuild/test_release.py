@@ -197,6 +197,26 @@ class APatchFile(unittest.TestCase):
         out = Patches(raw).over(bytes(0x20), base=0x8000)
         self.assertEqual(out[0x10:0x14], bytes.fromhex("deadbeef"))
 
+    def test_one_set_is_laid_and_the_others_are_left_alone(self):
+        """A release's own file holds three, and they go to three different places:
+        the first patches CB_B, the second CD, the third is not laid over anything."""
+        raw = self.made([(0x00, (0x11111111,))], [(0x04, (0x22222222,))])
+        out = Patches(raw).over(bytes(0x20), which=1)
+        self.assertEqual(out[:8], bytes(4) + bytes.fromhex("22222222"))
+
+    def test_a_set_comes_back_as_it_stands_with_its_sentinel(self):
+        """An image's patch slot holds one verbatim, so it is handed over uncut."""
+        raw = self.made([(0x00, (0x11111111,))], [(0x04, (0x22222222,))])
+        patches = Patches(raw)
+        self.assertEqual(patches.set_raw(1),
+                         struct.pack(">III", 0x04, 1, 0x22222222) + b"\xff" * 4)
+
+    def test_the_sets_put_back_together_are_the_file(self):
+        """Nothing between them and nothing dropped, on a file of three."""
+        raw = self.made([(0x00, (1,))], [(0x04, (2,))], [(0x08, (3, 4))])
+        patches = Patches(raw)
+        self.assertEqual(b"".join(patches.set_raw(one) for one in range(3)), raw)
+
 
 class ASignedPackage(unittest.TestCase):
     """A small one, built here, so the block arithmetic is exercised."""
