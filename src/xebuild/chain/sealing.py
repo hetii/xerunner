@@ -34,6 +34,7 @@ import math
 import struct
 
 from ..crypto.keys import derive
+from ..crypto.rc4 import rc4
 
 ONE_BL_KEY = bytes.fromhex("DD88AD0C9ED669E7B56794FB68563EFA")
 KEY_LENGTH = 0x10
@@ -99,6 +100,15 @@ def keys(stages, cpu_key: bytes = b"", fat: bool = False) -> tuple:
         out.append(key)
         secret = key
     return tuple(out)
+
+
+def under(stage, secret: bytes) -> bytes:
+    """A stage opened under a secret, deriving the key from the stage's own nonce.
+
+    The whole of it, header included, because a stage's header is not encrypted and
+    everything that reads one counts from its start.
+    """
+    return stage.head + rc4(derive(secret, stage.nonce), stage.body)
 
 
 def entropy(data: bytes) -> float:

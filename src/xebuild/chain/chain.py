@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 
-from ..crypto.keys import derive
 from ..crypto.rc4 import rc4
 from . import sealing
 from .console import Fields
@@ -146,9 +145,7 @@ class Chain:
         so this answers without one. The slot read is the last, which is the one a
         console boots.
         """
-        slot = self.slot
-        plain = slot.head + rc4(derive(sealing.ONE_BL_KEY, slot.nonce), slot.body)
-        return Fields.in_cf(plain)
+        return Fields.in_cf(sealing.under(self.slot, sealing.ONE_BL_KEY))
 
     def survey(self, cpu_key: bytes = b"") -> None:
         """Say what this chain is, once."""
