@@ -741,6 +741,34 @@ class AConsoleSOwnMaterial(unittest.TestCase):
         self.assertEqual(len(self.dump.statistics), 0x1000)
         self.assertEqual(self.dump.statistics, self.dump.image.flat[at : at + 0x1000])
 
+    def test_the_three_blocks_at_the_top_are_a_round_to_apart(self):
+        """Measured on four shapes: the step is `round_to`, not 0x4000.
+
+        On 16 MB those are the same number, which is what made it look like a constant;
+        on both 64 MB shapes the step is 0x20000.
+        """
+        flash = self.dump.flash
+        step = flash.round_to
+        self.assertEqual(len(self.dump.smc_config), 0x400)
+        self.assertEqual(len(self.dump.statistics), 0x1000)
+        self.assertEqual(len(self.dump.manufacturing), 0x1000)
+        at = flash.smc_config - 2 * step
+        flat = self.dump.image.flat
+        self.assertEqual(self.dump.manufacturing, flat[at : at + 0x1000])
+
+    def test_a_console_need_not_keep_a_manufacturing_block(self):
+        """`XEBUILD_MANUFACTURING` says which this console is, as `yes` or `no`.
+
+        One of the two measured keeps one with its own serial in it and the other has
+        that block erased, and the original reports it for exactly the first. Without
+        the variable only the two answers being consistent is asserted.
+        """
+        written = self.dump.manufacturing_written
+        self.assertEqual(written, set(self.dump.manufacturing) != {0xFF})
+        wanted = os.environ.get("XEBUILD_MANUFACTURING", "").strip().lower()
+        if wanted in ("yes", "no"):
+            self.assertEqual(written, wanted == "yes")
+
     def test_the_security_files_are_files(self):
         """Every one the dump holds has a directory entry, and its size matches it."""
         entries = {one.name: one.size for one in self.dump.image.directory.entries}

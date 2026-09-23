@@ -15,6 +15,19 @@ same dump, which narrates each one::
     seeking smc config in dump...found at offset 0xf7c000!
     Statistics.settings found at offset 0xf78000, size 4096 (0x1000) bytes
 
+**Three blocks sit one above the other at the top of a flash, a `round_to` apart**: the
+settings block where the shape says, the statistics block one step below it, and
+`Manufacturing.data` two steps below. Measured by building from one dump on four shapes:
+0xF7C000/0xF78000/0xF74000 on 16 MB, 0x3BE0000/0x3BC0000/0x3BA0000 on both 64 MB
+shapes, and 0x2FFC000/0x2FF8000/0x2FF4000 on the eMMC. Taking the step as 0x4000 is
+what 16 MB makes it look like, and it is wrong on the two 64 MB shapes.
+
+**A console need not have a manufacturing block.** One of the two here does not: its
+block is erased, all 0xFF, and the original says nothing about it. The other carries its
+own serial number there in the clear. What decides it is whether the block was ever
+written -- planting the data alone into the erased one changes nothing, and planting the
+block with its spare bytes makes the original report it on all four shapes.
+
 **Where the settings block is, and where the statistics block is, are two different
 rules.** The settings block sits where the flash shape says, and the statistics block
 one `round_to` below it -- not one 0x4000 block below it, which is what a 16 MB flash
@@ -120,6 +133,27 @@ class Dump:
         return self.image.flat[at : at + length]
 
     @property
+    def manufacturing(self) -> bytes:
+        """`Manufacturing.data`, two steps below the settings block.
+
+        All 0xFF when this console has none, which is an erased block rather than a
+        missing one; `manufacturing_written` is that question.
+        """
+        at, length = self.flash.smc_config - 2 * self.flash.round_to, 0x1000
+        return self.image.flat[at : at + length]
+
+    @property
+    def manufacturing_written(self) -> bool:
+        """Whether this console keeps one at all.
+
+        The original decides it from the spare -- an erased block is skipped -- and a
+        flat run has no spare to look at, so this asks whether anything was written
+        there. The two agree on both consoles measured: one is 0xFF throughout and the
+        original reports nothing, the other carries its serial and is reported.
+        """
+        return set(self.manufacturing) != {0xFF}
+
+    @property
     def chain(self):
         """This console's bootloader chain."""
         from ..chain import Chain
@@ -170,6 +204,10 @@ class Dump:
                     CONFIG_LENGTH, "sound" if self.smc_config_ok else "not sound")
         logger.info("statistics at %#x of size %#x",
                     self.flash.smc_config - self.flash.round_to, len(self.statistics))
+        logger.info("manufacturing data at %#x: %s",
+                    self.flash.smc_config - 2 * self.flash.round_to,
+                    "kept" if self.manufacturing_written
+                    else "none, the block is erased")
         found = self.chain
         logger.info("chain of %d stages%s, pairing %s, lockdown %d",
                     len(found.stages),

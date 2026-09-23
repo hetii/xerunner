@@ -144,7 +144,13 @@ class AMadeUpChain(unittest.TestCase):
             self.flat = flat
             self.header = self.Head(entrypoint, size)
 
-    def an_image(self, kinds, slots=1):
+    def an_image(self, kinds, slots=1, lockdowns=()):
+        """A flash with a chain and some slots.
+
+        `lockdowns` gives each slot the lockdown value it should state, which means
+        sealing its body the way a console's is: the pairing is set to the slot's number
+        repeated, so a test can see which slot an answer came from.
+        """
         board, _ = for_name("trinity")
         flat = bytearray(0x200000)
         at = 0x8000
@@ -154,7 +160,14 @@ class AMadeUpChain(unittest.TestCase):
         slots_at = 0x100000
         for index in range(slots):
             where = slots_at + index * board.flash.block_size
-            flat[where : where + 0x400] = a_stage("CF", 0x400, build=0x4400 + index)
+            one = bytearray(a_stage("CF", 0x400, build=0x4400 + index))
+            if index < len(lockdowns):
+                plain = bytearray(one)
+                plain[0x21C:0x21F] = bytes([index + 1]) * 3
+                plain[0x21F] = lockdowns[index]
+                key = derive(sealing.ONE_BL_KEY, bytes(plain[0x20:0x30]))
+                one = bytes(plain[:0x30]) + rc4(key, bytes(plain[0x30:]))
+            flat[where : where + 0x400] = one
         return Chain(self.Sham(bytes(flat), 0x8000, slots_at), board)
 
     def test_it_walks_by_the_lengths_the_stages_state(self):
@@ -175,10 +188,20 @@ class AMadeUpChain(unittest.TestCase):
         chain = self.an_image([("CB", 0x1000, 0x23E4)], slots=2)
         self.assertEqual([one.at for one in chain.slots], [0x100000, 0x110000])
 
-    def test_the_slot_a_console_boots_is_the_last_one(self):
-        """Measured on a JTAG image: the first pair is the exploit's, not this one's."""
-        chain = self.an_image([("CB", 0x1000, 0x23E4)], slots=2)
-        self.assertEqual(chain.slot.at, 0x110000)
+    def test_the_slot_that_counts_is_the_one_stating_the_largest_lockdown(self):
+        """Measured five ways on a console with two, by resealing its own slots.
+
+        13/12 and 12/13 both give 13, which is what rules position out; 3/7 gives 7 and
+        9/0 gives 9, and the pairing comes from whichever slot won.
+        """
+        for first, second, wins in ((13, 12, 0), (12, 13, 1), (3, 7, 1), (9, 0, 0)):
+            with self.subTest(slots=(first, second)):
+                chain = self.an_image([("CB", 0x1000, 0x23E4)], slots=2,
+                                      lockdowns=(first, second))
+                where = (0x100000, 0x110000)[wins]
+                self.assertEqual(chain.slot.at, where)
+                self.assertEqual(chain.console.ldv, max(first, second))
+                self.assertEqual(chain.console.pairing, bytes([wins + 1]) * 3)
 
     def test_a_chain_that_binds_nowhere_says_so_rather_than_handing_back_a_cd(self):
         """A single-CB chain has no binding stage, and the second stage is the CD."""

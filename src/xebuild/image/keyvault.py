@@ -17,6 +17,36 @@ The fields x360mcp names and nothing here can check are here too, under its name
 with a comment saying the name is a name rather than a finding. None of them is read by
 anything that decides anything, and none is in `__repr__`.
 
+**What the original checks is exactly what is checked here, read out of its own
+code.** The routine at 0x401630 is handed the sealed bytes and their length and does
+four things: HMAC-SHA1 of the sixteen-byte head under the CPU key, RC4 of everything
+past it under that, HMAC-SHA1 of what came out with `07 12` appended, and a comparison
+of the result with the head it started from. It returns whether they match, and its
+caller at 0x413E34 prints "keyvault decrypted OK" or "keyvault decrypt failed,
+discarding" on that one answer. So the derivation below is not a reconstruction of the
+check; it is the check.
+
+**And one console's keyvault is refused by the original while every reading here says
+it is sound, which is not explained.** On the second console measured the original
+says "keyvault decrypt failed" while holding that console's key, which it reports
+valid by weight and by its own test, and then asks for an external `kv.bin`. A
+transcription of 0x401630 run on those bytes returns "valid"; the serial is the
+console's own, the date reads as a date, and the round trip is byte-exact.
+
+What was ruled out, each by building with one thing exchanged and reading the verdict:
+it is not the keyvault's content -- the first console's dump accepts the second
+console's keyvault resealed under the first's key, and the second's dump refuses the
+first's resealed under the second's; not the flash header -- the first dump with the
+second's header still accepts; not the CPU key -- the first console's dump with its
+keyvault resealed under the second console's key, built with that key, is accepted;
+and not the spare bytes of the block the keyvault sits in. So something in that one
+dump, outside all four, decides it.
+
+**Nothing here is changed on a guess.** `looks_opened` asks only what it says it asks,
+and a caller wanting the original's verdict does not have it. What the difference
+costs in practice is known and is what the original does about it: a build from that
+dump wants a `kv.bin` handed to it.
+
 Sealing it again is deterministic, which took measuring and is worth the sentence: the
 nonce is **not drawn**, it is `HMAC(cpu key, plaintext + 07 12)`, confirmed to the byte
 on both consoles. So a rebuilt image's keyvault is the console's own bytes exactly, and

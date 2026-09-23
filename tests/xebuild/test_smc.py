@@ -144,6 +144,30 @@ class AgainstEveryImageTheReleaseShips(unittest.TestCase):
             with self.subTest(image=name):
                 self.assertEqual(self.an_image(name).reset_limit, at)
 
+    def test_the_file_each_board_names_is_the_one_this_table_vouches_for(self):
+        """The one place these two packages touch, and nothing else pins it.
+
+        `boards` says which image goes with a board and this says what that image is;
+        correct one and forget the other and nothing would complain. **Xenon is the
+        exception and is named here on purpose**: its stock image is absent from the
+        original's own table, so anyone "fixing" that by adding it would be adding
+        something the original does not have.
+        """
+        from xebuild.boards import ALL
+        checked = set()
+        for board in ALL:
+            if board.section in checked or not board.smc_clean:
+                continue
+            checked.add(board.section)
+            one = self.an_image(board.smc_clean)
+            with self.subTest(board=board.section, image=board.smc_clean):
+                if board.section == "xenon":
+                    self.assertFalse(one.clean)
+                else:
+                    self.assertTrue(one.clean)
+                    self.assertIn(one.checksum, CLEAN)
+        self.assertEqual(len(checked), 7, "seven motherboards name a stock image")
+
     def test_every_glitch_image_has_no_limit_and_every_other_one_has(self):
         """The equivalence, with no exception either way over all nineteen."""
         for name in MEASURED:

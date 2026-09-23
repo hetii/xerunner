@@ -12,11 +12,21 @@ image, 0xC0000 on both 64 MB shapes, 0x70000 on a retail and on a JTAG one -- an
 each case the two bytes there read `CF`. The original says the same number itself, as
 "patch slot offset reset to: 0xb0000".
 
-**A slot is not always one.** A JTAG image has two: the old pair the exploit boots
-through, at the first slot, and the release's own behind it. So the console's CF is the
-**last** slot, not the first, and reading the first gives an LDV of zero where the
-original says one. Slots are a flash erase block apart, which is what `block_size` on a
-flash is for.
+**A slot is not always one, and which one a console's values come from is not a
+position.** It is the slot stating the largest lockdown value, and the pairing comes
+from that same slot. Measured on a console carrying two, by resealing its slots with
+values of this side's choosing and reading what the original then believed:
+
+    13 / 12  ->  13          12 / 13  ->  13          3 / 7  ->  7, pairing from slot 1
+     0 /  5  ->   5           9 /  0  ->   9, pairing from slot 0
+
+The first two are the same values either way round, which is what rules out position. It
+also explains what a JTAG image looks like: its first pair is the one the exploit boots
+through and carries no console block at all, so its lockdown reads zero and the
+release's own slot behind it wins -- "the last one" was right there for the wrong
+reason. What two equal values do is not measured, and this takes the earlier slot.
+
+Slots are a flash erase block apart, which is what `block_size` on a flash is for.
 
 **A converted chain is a state, not damage.** An RGH3 console carries a glitch
 bootloader inserted between CB_A and CB_B, and everything behind it has shifted. The
@@ -86,13 +96,20 @@ class Chain:
             at += step
         return tuple(out)
 
-    @property
-    def slot(self) -> Stage:
-        """The slot this console boots from, which is the last one there is."""
-        found = self.slots
+    def _opened_slots(self) -> tuple:
+        """Every slot with what it says, since which one counts is in the contents."""
+        found = tuple(
+            (one, Fields.in_cf(sealing.under(one, sealing.ONE_BL_KEY)))
+            for one in self.slots
+        )
         if not found:
             raise ValueError("this image keeps no CF slot behind its chain")
-        return found[-1]
+        return found
+
+    @property
+    def slot(self) -> Stage:
+        """The slot this console's values come from: the one stating the largest LDV."""
+        return max(self._opened_slots(), key=lambda pair: pair[1].ldv)[0]
 
     def keys(self, cpu_key: bytes = b"") -> tuple:
         """The key each stage in `stages` is sealed under, or None past what opens."""
@@ -142,10 +159,10 @@ class Chain:
         """The pairing and lockdown value this console boots with, out of its CF.
 
         A CF needs no console secret: it is sealed under the key every console carries,
-        so this answers without one. The slot read is the last, which is the one a
-        console boots.
+        so this answers without one. Which slot it comes from is settled by the lockdown
+        value rather than by position -- see the note above.
         """
-        return Fields.in_cf(sealing.under(self.slot, sealing.ONE_BL_KEY))
+        return max(self._opened_slots(), key=lambda pair: pair[1].ldv)[1]
 
     def survey(self, cpu_key: bytes = b"") -> None:
         """Say what this chain is, once."""
