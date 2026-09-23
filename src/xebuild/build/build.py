@@ -212,9 +212,10 @@ class Build:
     def patch_slot(self) -> bytes:
         """What goes in the patch slot: one block, and a retail image leaves it erased.
 
-        Sixteen bytes of 0xFF, then the **last** set of the release's patch file as it
-        stands, sentinel included, then zeros to the end of the block. Byte-exact on six
-        images the original built.
+        A lead -- sixteen bytes of 0xFF, or a manufacturing chain's fuses, see
+        `_slot_lead` -- then the **last** set of the release's patch file as it stands,
+        sentinel included, then zeros to the end of the block. Byte-exact on every
+        reference image that has one.
 
         Two things about which file that set comes from. A `glitch` image on a fat
         console takes it from `patches_fat.bin` while its bootloaders are patched from
@@ -224,25 +225,63 @@ class Build:
         image reads the file named after the **family**, so all six jasper spellings
         read `patches_g2jasper.bin`, which is what `Board.section` is.
 
-        And a `glitch2m` image puts a 0x60 prologue in front of the set: twelve fuse
-        lines, the console's CPU key with
-        each half written twice -- which is measured but not yet understood well enough
-        to be produced here, so this refuses that type rather than writing a guess.
         """
         block = layout.BLOCK
         if self.image_type.patches is False:
             return b"\xff" * block
-        if self.image_type.name == "glitch2m":
-            raise ValueError(
-                "a glitch2m patch slot begins with twelve fuse lines, and what fills "
-                "two of them is not yet measured for every board"
-            )
         patches = self.patches
         if patches is None:
             raise ValueError("this release ships no patch file for a %s %s image"
                              % (self.console.name, self.image_type.name))
         last = patches.set_raw(len(patches.sets) - 1)
-        return (b"\xff" * 0x10 + last).ljust(block, b"\x00")
+        return (self._slot_lead() + last).ljust(block, b"\x00")
+
+    def _slot_lead(self) -> bytes:
+        """What sits in front of the patch set: sixteen bytes of 0xFF, or the fuses.
+
+        A chain under the manufacturing regime -- a bit in its CB_A says so, not the
+        image type -- belongs to a console whose fuses are not burnt, and its loader is
+        handed them here instead: twelve lines of eight bytes, the set moving to 0x60.
+        Every line was read out of the original's own code by x360mcp -- the template at
+        0x44A700 and the routines that fill it -- and all four such reference images
+        agree to the byte:
+
+            line 0     C0FFFFFFFFFFFFFF line 1     six of 0x0F, then two bytes naming
+            the console type line 2     one nibble of 0xF for each bit set in the CB's
+            allow word, counted
+                       from the top of the line
+            lines 3-6  the CPU key, each half written twice
+            lines 7-8  the lockdown value in 0xF nibbles, sixteen to a line
+            lines 9-11 zero
+
+        The type and the allow word are the big-endian word at 0x3B0 of the CB_B file:
+        type in the top byte, allow in the low sixteen bits.
+        """
+        files = self._chain_files()
+        if not files or not Stage(self.release.bootloader(files[0]), 0).manufacturing:
+            return b"\xff" * 0x10
+        cbb = [one for one in files if one.kind == "CBB"]
+        if not cbb or not self.cpu_key:
+            raise ValueError("fuses are built from the CB_B and the CPU key, and this "
+                             "build is missing one of them")
+        word = int.from_bytes(self.release.bootloader(cbb[0])[0x3B0:0x3B4], "big")
+        kind, allow = word >> 24, word & 0xFFFF
+        types = {0: b"\x0f\x0f", 1: b"\x0f\xf0", 2: b"\xf0\x0f", 3: b"\xf0\xf0"}
+        if kind not in types:
+            raise ValueError("console type %#x is not one the original knows" % kind)
+        sequence = 0
+        for bit in range(16):
+            if allow & (1 << bit):
+                sequence |= 0xF << ((15 - bit) * 4)
+
+        def unary(count: int) -> bytes:
+            count = max(0, min(16, count))
+            return int("F" * count + "0" * (16 - count), 16).to_bytes(8, "big")
+
+        key = self.cpu_key
+        return (bytes.fromhex("C0FFFFFFFFFFFFFF") + b"\x0f" * 6 + types[kind]
+                + sequence.to_bytes(8, "big") + key[:8] * 2 + key[8:] * 2
+                + unary(self.ldv) + unary(self.ldv - 16) + bytes(24))
 
     def chain(self) -> bytes:
         """The bootloader region: the release's stages, patched, bound and sealed.
@@ -597,41 +636,87 @@ class Build:
         out.put(where["patches"][0], self.patch_slot())
         out.mark_written(0, tail_at)
 
+        big = flash.spare is not None and flash.spare.fs_at is not None
         first = (tail_at - base) // layout.BLOCK
-        fs = Filesystem(flash, first, bigffs)
-        stamp = self._fat(when)
-        if layout.tail_is_a_file(tail_at, base):
-            fs.add("sysupdate.xexp1", spill, stamp=stamp)
+        if flash.spare is None:
+            # No bad blocks to stand in for, so no pool: an eMMC's table reserves every
+            # block from the last one a build may use to the end of the part -- six on
+            # the one measured, where the anchors and the settings live.
+            held = flash.blocks - (flash.last_block - base // layout.BLOCK)
+            fs = Filesystem(flash, first, bigffs, pool=0, held=held)
         else:
-            fs.first = first + -(-len(spill) // layout.BLOCK)
+            fs = Filesystem(flash, first, bigffs, held=0 if big else 4)
+        stamp = self._fat(when)
+        # The tail is the first file on every shape of flash.
+        fs.add("sysupdate.xexp1", spill, stamp=stamp)
         for name, body in self.files(when):
             fs.add(name, body, stamp=stamp)
         fs.over(out)
         start = flash.offset_of(fs.after, bigffs)
-        out.mark(tail_at, start - tail_at)
+        table_at = start + flash.mobile_region
+        # On a big block chip the pages of the filesystem carry three bytes of its own
+        # and a kind of their own; everywhere else a file's pages carry a block number.
+        fields = self._fs_fields(slots) if big else b""
+        for entry, blocks, body in fs.placed:
+            at = flash.offset_of(entry.sector, bigffs)
+            span = blocks * layout.BLOCK
+            # A file that fits in one block leaves its padding's fields erased on a big
+            # block chip, with a real code over the zeros: measured on four such files
+            # in a jasperbb image and seen again here. A longer file's padding is
+            # written like the rest of it, and nothing of this on a 16 MB image.
+            if big and blocks == 1:
+                span = -(-len(body) // PAGE) * PAGE
+            out.mark(at, span, 0, 0x2A if big else 0, fs=fields)
 
-        per = flash.spare.pages_a_block if flash.spare is not None else 1
         blobs = {} if self.config.nomobile else self._mobiles()
+        placed = {}
         for index, name in enumerate(sorted(blobs)):
             at = start + index * flash.mobile_stride
-            body = blobs[name]
+            body, kind = blobs[name], 0x31 + "BCDE".index(name[6])
+            out.put(at, body)
+            placed[kind] = ((at - base) // layout.BLOCK, len(body))
+            if flash.spare is None:
+                continue
+            per = flash.spare.pages_a_block
             pages = max(1, len(body) // PAGE)
             free = per - (at // PAGE) % per - pages
-            out.put(at, body)
-            out.mark(at, pages * PAGE, 1, 0x31 + "BCDE".index(name[6]),
-                     bytes([len(body) // 0x100, free, 0, 0]))
-        table_at = start + flash.mobile_region
+            # A byte does not hold what is free of 256 pages, so a big block chip counts
+            # it in fours -- 0x3F, 0x3E, 0x3D, 0x3C down a block, measured.
+            free >>= 2 if big else 0
+            out.mark(at, pages * PAGE, 1, kind,
+                     bytes([len(body) // 0x100, free, 0, 0]),
+                     b"\x00" if big else b"")
         fs.table_at = (table_at - base) // layout.BLOCK
         table = fs.table()
         out.put(table_at, table)
-        out.mark(table_at, len(table), 1, 0x30)
+        # The table's kind moves with the filesystem's: 0x30 on a 16 MB image, 0x2C on
+        # a big block chip, where it keeps the filesystem's three bytes.
+        out.mark(table_at, len(table), 1, 0x2C if big else 0x30, fs=fields)
 
         for at, body, span in self._settings():
             out.put(at, body)
             out.mark(at, span)
         if flash.anchors:
-            anchors.lay(out, fs.table_at, {})
+            anchors.lay(out, fs.table_at, placed)
         return out
+
+    def _fs_fields(self, slots: int) -> bytes:
+        """The three bytes a big block chip's filesystem pages carry at 7.
+
+        free60's FsSize1, FsSize0 and FsPageCount. The first says how much of the flash
+        the system area takes, in blocks of 0x20000: all of the first 2 MB on an image
+        that carries XeLL -- 0x10, on all three glitch types measured -- and on a retail
+        one where its bootloader region ends, the slot and the patch slot included,
+        which is 5 on the trinitybb measured. The second is the filesystem's size in
+        blocks over 32, and the third is 4 on every image measured.
+        """
+        flash = self.console.flash
+        if self.xell() is not None:
+            system = 0x10
+        else:
+            system = (slots + 2 * layout.SLOT_SPAN) // 0x20000
+        size = flash.last_block - flash.base_of(self.config.bigffs)
+        return bytes([system, size >> 5, 4])
 
     @staticmethod
     def _fat(when: int) -> int:

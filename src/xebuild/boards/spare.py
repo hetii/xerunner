@@ -61,6 +61,7 @@ class Spare:
     pages_a_block = 32
 
     extra_at = 8  # four bytes only a settings blob uses
+    fs_at = None  # three bytes each filesystem page carries, on one layout only
     kind_at = 12  # the blob's kind in the low six bits, the ECC's top two above it
     length = 16
 
@@ -88,7 +89,7 @@ class Spare:
         return spare[self.kind_at] & 0x3F
 
     def write(self, block: int, sequence: int = 0, kind: int = 0,
-              extra: bytes = b"") -> bytes:
+              extra: bytes = b"", fs: bytes = b"") -> bytes:
         """The field bytes for one page. The ECC is written over them separately.
 
         `extra` is the four bytes only a settings blob fills, at `extra_at`: its length
@@ -114,6 +115,8 @@ class Spare:
         if self.sequence_high_at is not None:
             out[self.sequence_high_at] = sequence >> 8
         out[self.kind_at] = kind & 0x3F
+        if fs and self.fs_at is not None:
+            out[self.fs_at:self.fs_at + len(fs)] = fs
         if extra:
             out[self.extra_at:self.extra_at + len(extra)] = extra
         return bytes(out)
@@ -205,3 +208,7 @@ class BigBlockChip(Spare):
     mark_at = 0
     sequence_at = 5
     pages_a_block = 256
+    # free60's FsSize1, FsSize0 and FsPageCount, on every page of the filesystem from
+    # its base to the end of its table -- measured on all four 64 MB reference images,
+    # where a 16 MB image leaves them zero.
+    fs_at = 7

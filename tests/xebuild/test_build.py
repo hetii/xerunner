@@ -222,11 +222,6 @@ class WhereEachRegionGoes(unittest.TestCase):
         """Which is what a 64 MB image does: its base is 0x2B80000."""
         self.assertEqual(layout.tail_at(0xC0000, base=0x2B80000), 0x2B80000)
 
-    def test_the_tail_is_a_file_only_where_it_falls_inside_the_filesystem(self):
-        """Thirty one files against thirty, on two images of the same build."""
-        self.assertTrue(layout.tail_is_a_file(0xD0000, base=0))
-        self.assertFalse(layout.tail_is_a_file(0x2B80000, base=0x2B80000))
-
     def test_every_boundary_of_a_glitch_image_on_a_16_mb_flash(self):
         board, _ = for_name("trinity")
         where = layout.for_type(type_for("glitch2"), board.flash, 0x6C5C0)
@@ -428,12 +423,25 @@ class WhatTheSlotForPatchesHolds(unittest.TestCase):
         one.patch_slot()
         self.assertEqual(one.release.asked, [("glitch2", "falcon")])
 
-    def test_a_manufacturing_image_is_refused_rather_than_guessed_at(self):
-        """Its slot begins with twelve fuse lines and two of them are not measured."""
-        one = a_build(self, kind="glitch2m")
-        with self.assertRaises(ValueError):
-            one.patch_slot()
-
+    def test_a_manufacturing_chain_puts_the_console_s_fuses_in_front(self):
+        """Twelve lines of eight bytes, the set moving to 0x60. Read out of the
+        original's code by x360mcp, and all four such reference images agree."""
+        raw = self.sets([(0x10, (1,))], [(0x20, (2,))])
+        one = WhichStagesTheChainIsMadeOf.a_chain(self, kind="glitch2m")
+        one.release.raw = raw
+        one.release.bodies["cba_1.bin"] = a_stage("CB", 0x100, flags=0x0801)
+        cbb = bytearray(a_stage("CB", 0x400, nonce=bytes(0x10)))
+        cbb[0x3B0:0x3B4] = (0x03010001).to_bytes(4, "big")
+        one.release.bodies["cbb_1.bin"] = bytes(cbb)
+        slot = one.patch_slot()
+        key = one.cpu_key
+        self.assertEqual(slot[0x00:0x08], bytes.fromhex("C0FFFFFFFFFFFFFF"))
+        self.assertEqual(slot[0x08:0x10], bytes.fromhex("0F0F0F0F0F0FF0F0"))
+        self.assertEqual(slot[0x10:0x18], bytes.fromhex("F000000000000000"))
+        self.assertEqual(slot[0x18:0x38], key[:8] * 2 + key[8:] * 2)
+        self.assertEqual(slot[0x38:0x40], bytes.fromhex("FFFFFFFFFFFFFF00"))
+        self.assertEqual(slot[0x40:0x60], bytes(0x20))
+        self.assertEqual(slot[0x60:0x60 + 0x10], Patches(raw).set_raw(1))
 
 class WhichLoaderGoesIn(unittest.TestCase):
 
