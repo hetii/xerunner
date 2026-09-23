@@ -89,8 +89,16 @@ class Release:
 
         None where the type has none -- a retail image is patched with nothing -- which
         is a real answer and not a missing file.
+
+        `board` is a console, or the name of one as a string. The string is for the one
+        case where the file is not named after the console being built for: a `glitch`
+        image on a fat console takes its patch slot from `patches_fat.bin` while its
+        bootloaders come from `patches_<board>.bin`, which the original's own log shows
+        for zephyr, falcon, jaspersb and jasper.
         """
-        name = image_type.patch_file(board.section, ext)
+        name = image_type.patch_file(
+            board if isinstance(board, str) else board.section, ext
+        )
         if name is None:
             return None
         return Patches(self._read(self.where, "bin", name))
