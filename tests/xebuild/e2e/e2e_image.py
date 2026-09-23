@@ -186,3 +186,45 @@ class AnEmmcImageTheOriginalBuilt(unittest.TestCase):
         self.assertTrue(entries)
         for entry in entries:
             self.assertEqual(len(image.read(entry.name)), entry.size)
+
+
+class ThePackingAgainstAnImageTheOriginalBuilt(unittest.TestCase):
+    """The whole of laying a filesystem, checked by rebuilding one image's table.
+
+    Needs `XEBUILD_REFERENCE_IMAGE`, and `XEBUILD_REFERENCE_BOARD` when the console is
+    not a trinity. Nothing about the packing is asserted here: the files come out of the
+    reference, go back through `Filesystem` in the order it lists them, and the table
+    that comes out either is the one the original wrote or it is not.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        where = os.environ.get("XEBUILD_REFERENCE_IMAGE", "")
+        if not where or not os.path.isfile(where):
+            raise unittest.SkipTest("XEBUILD_REFERENCE_IMAGE does not name an image")
+        board, bigffs = for_name(os.environ.get("XEBUILD_REFERENCE_BOARD", "trinity"))
+        cls.board, cls.bigffs = board, bigffs
+        with open(where, "rb") as handle:
+            cls.image = Image(handle.read(), board.flash, bigffs)
+
+    def test_the_table_it_wrote_is_the_table_this_writes(self):
+        from xebuild.build import Filesystem
+        image, board = self.image, self.board
+        theirs = image.directory
+        base = board.flash.base_of(self.bigffs)
+        at = image.blobs["fsroot"]["offset"] // 0x4000 - base
+        ours = Filesystem(board.flash, first=theirs.entries[0].sector,
+                          bigffs=self.bigffs, table_at=at)
+        for entry in theirs.entries:
+            ours.add(entry.name, image.read(entry.name), entry.stamp)
+        self.assertEqual(ours.table(), image.blob("fsroot"))
+
+    def test_the_table_sits_past_the_files_and_the_settings_blobs(self):
+        """Four of them between the last file and the table on every image measured."""
+        image, board = self.image, self.board
+        table = image.directory
+        last = max(max(table.blocks_of(one)) for one in table.entries)
+        base = board.flash.base_of(self.bigffs)
+        at = image.blobs["fsroot"]["offset"] // 0x4000 - base
+        blobs = [k for k in image.blobs if k != "fsroot"]
+        self.assertEqual(at, last + 1 + len(blobs))

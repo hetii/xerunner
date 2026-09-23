@@ -156,11 +156,15 @@ class Directory:
         Stops at any word that is not a block this flash has, which covers all four
         markers. Stops rather than looping if a map points back at a block already seen.
         """
+        # The map is read once. It was inside the loop, which rebuilt the whole of it
+        # for every block of every chain: `dash.xex` is 365 blocks and took 0.72 seconds
+        # to follow, and reading a whole filesystem took two seconds rather than none.
+        words = self.map
         following, at, seen = [], sector, set()
         while at < self.blocks and at not in seen:
             following.append(at)
             seen.add(at)
-            at = self.map[at] if at < len(self.map) else self.blocks
+            at = words[at] if at < len(words) else self.blocks
         return tuple(following)
 
     def blocks_of(self, entry: Entry) -> tuple:
