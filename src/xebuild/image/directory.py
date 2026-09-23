@@ -42,7 +42,8 @@ from __future__ import annotations
 
 import struct
 
-PAGE = 512
+from ..boards.flash import BLOCK, PAGE
+
 ENTRY = 0x20
 NAME = 0x16  # how much room an entry gives a name
 
@@ -119,7 +120,7 @@ class Entry:
 class Directory:
     """One flash's file table, out of the block that holds it."""
 
-    def __init__(self, block: bytes, blocks: int, block_length: int = 0x4000):
+    def __init__(self, block: bytes, blocks: int, block_length: int = BLOCK):
         self.block = bytes(block)
         self.blocks = blocks  # how many the flash has; a chain ends past them
         self.block_length = block_length
@@ -185,7 +186,7 @@ class Directory:
 
     @classmethod
     def write(cls, entries, following: dict, blocks: int,
-              block_length: int = 0x4000) -> bytes:
+              block_length: int = BLOCK) -> bytes:
         """The block a flash holds this table in, from a list and a map.
 
         `entries` are the files, in the order they are to be listed. `following` says

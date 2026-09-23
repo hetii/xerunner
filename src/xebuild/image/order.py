@@ -54,9 +54,9 @@ from __future__ import annotations
 
 import logging
 
-logger = logging.getLogger(__name__)
+from ..boards.flash import PAGE
 
-PAGE = 512
+logger = logging.getLogger(__name__)
 
 
 def _spares(raw: bytes, flash) -> list:

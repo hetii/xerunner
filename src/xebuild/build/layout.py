@@ -66,12 +66,12 @@ reason.
 
 from __future__ import annotations
 
-BLOCK = 0x4000
+from ..boards.flash import BLOCK, PAGE
 
-# The header is one page and the rest of the room before the SMC is zeros: measured on
-# every image the original built, and the eMMC one puts its SMC at 0x800, inside what a
-# NAND image leaves empty -- so the page is the floor here, not a block.
-HEADER = 0x200
+# The header is one page, and the rest of the room before the SMC is zeros: measured on
+# every image the original built. The eMMC one puts its SMC at 0x800, inside what a NAND
+# image leaves empty, so a page is the floor here and not a block. The page's length is
+# `boards.flash.PAGE`; there is no second name for it here.
 KEYVAULT_AT = 0x4000
 CHAIN_AT = 0x8000
 
@@ -109,7 +109,7 @@ def smc_at(length: int) -> int:
     So a longer SMC starts lower, and the page states the pair; a build that worked one
     out and not the other would leave the console told the wrong place.
     """
-    if not 0 < length <= KEYVAULT_AT - HEADER:
+    if not 0 < length <= KEYVAULT_AT - PAGE:
         raise ValueError(
             "an SMC of %#x bytes does not fit between the header's page and the "
             "keyvault" % length
@@ -150,7 +150,7 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False) -> dict:
     slots = slots_at(chain_end, xell, flash.round_to)
     base = flash.base_of(bigffs) * BLOCK
     out = {
-        "header": (0, HEADER),
+        "header": (0, PAGE),
         "keyvault": (KEYVAULT_AT, KEYVAULT_AT),
         "chain": (CHAIN_AT, chain_end - CHAIN_AT),
         "slot": (slots, SLOT_SPAN),

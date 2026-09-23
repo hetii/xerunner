@@ -45,12 +45,10 @@ current one.
 
 from __future__ import annotations
 
+from ..boards.flash import BLOCK, PAGE
 from .anchor import Anchor
 from .directory import Directory
 from .header import Header
-
-PAGE = 512
-BLOCK = 0x4000  # what an anchor counts in, and what a directory entry counts in
 
 
 class Image:

@@ -31,11 +31,10 @@ from __future__ import annotations
 
 import logging
 
+from ..boards.flash import BLOCK
 from ..image.directory import Directory, Entry
 
 logger = logging.getLogger(__name__)
-
-BLOCK = 0x4000
 
 
 class Filesystem:
