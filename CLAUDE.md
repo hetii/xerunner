@@ -122,6 +122,21 @@ takes its default -- an image does not record which options built it.
 left out is explained there. `ruff format` is not run: its output is a different house
 style from what is written here, and reformatting is not checking.
 
+**Two suites, and both are run.** The fast one needs nothing and must show **no skips** --
+a skip there is a fault, not a missing file:
+
+    python -m unittest discover -s tests -t .
+
+The other needs real material -- dumps, a release, images the original built -- and each
+of its tests says through an environment variable what it wants:
+
+    python -m unittest discover -s tests/xebuild/e2e -t . -p 'e2e_*.py'
+
+A test belongs in `e2e/` when it reads something off the disk that this repository does
+not contain. Reference images are made with the original and kept outside the repository;
+where a dump is one the original cannot read on its own, it is handed the keyvault this
+code extracts and then builds a reference for it like any other.
+
 **What `cfldv` becomes when nothing supplies it belongs to `build`.** Zero is not a
 value there, it is the absence of one, so a configuration holds `None`. The original's
 own messages give the order: "LDV was already set to %d" when the ini or `-o` named one,

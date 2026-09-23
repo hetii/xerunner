@@ -21,8 +21,6 @@ from xebuild.config.network import NetworkConfig
 from xebuild.config.options import OptionsConfig
 from xebuild.config.release import ReleaseConfig
 
-SCRATCH = os.environ.get("XEBUILD_SCRATCH", "/dev/shm")
-
 OPTIONS = sorted(set(OptionsConfig()) - set(BaseConfig()))
 SWITCHES = ("nodvd", "olddvd", "cygnos", "demon", "nomobile", "smcnocheck", "noremap",
             "noecdremap", "nandmu", "nosecurity", "nosusecurity", "patchsmc",
@@ -35,8 +33,11 @@ BYTES = ("macid", "dvdkey")
 
 
 def a_directory(case):
-    """A directory that is there, removed when the class is done with it."""
-    where = tempfile.mkdtemp(prefix="xebuild-config-", dir=SCRATCH)
+    """A directory that is there, removed when the class is done with it.
+
+    Where it lands is `tests/__init__.py`'s business, not this file's.
+    """
+    where = tempfile.mkdtemp(prefix="xebuild-config-")
     case.addClassCleanup(shutil.rmtree, where, ignore_errors=True)
     return where
 
@@ -97,6 +98,7 @@ class WhatEachModeCarries(unittest.TestCase):
 
 
 class TheUniversalTwo(unittest.TestCase):
+
     def test_verbosity_has_three_levels(self):
         for level in (0, 1, 2):
             self.assertEqual(BuildConfig(verbose=level).verbose, level)
@@ -113,6 +115,7 @@ class TheUniversalTwo(unittest.TestCase):
 
 
 class WhatBuildModeTakes(unittest.TestCase):
+
     @classmethod
     def setUpClass(cls):
         cls.where = a_directory(cls)
@@ -202,6 +205,7 @@ class WhatBuildModeTakes(unittest.TestCase):
 
 
 class TheOptions(unittest.TestCase):
+
     def test_there_are_thirty_one(self):
         self.assertEqual(len(OPTIONS), 31)
         self.assertEqual(
@@ -380,6 +384,7 @@ class TheIni(unittest.TestCase):
 
 
 class WhatUpdateModeTakes(unittest.TestCase):
+
     @classmethod
     def setUpClass(cls):
         cls.where = a_directory(cls)
@@ -414,6 +419,7 @@ class WhatUpdateModeTakes(unittest.TestCase):
 
 
 class WhatClientModeTakes(unittest.TestCase):
+
     def test_the_eleven_actions(self):
         eleven = ("info", "read", "write", "avatar", "compatibility", "patches",
                   "read-blocks", "write-blocks", "erase-block", "binary-patch", "keys")
@@ -452,6 +458,7 @@ class WhatClientModeTakes(unittest.TestCase):
 
 
 class WhatExtractModeTakes(unittest.TestCase):
+
     def test_an_image_and_the_two_universal_settings(self):
         made = ExtractConfig(image="nanddump.bin", verbose=2, no_enter=True)
         self.assertEqual(made.image, "nanddump.bin")
@@ -462,6 +469,7 @@ class WhatExtractModeTakes(unittest.TestCase):
 
 
 class TheDoorIsTheOnlyWayIn(unittest.TestCase):
+
     def test_a_setter_checks_whenever_it_is_used(self):
         """Not only at construction: the property is the door either way."""
         made = BuildConfig()

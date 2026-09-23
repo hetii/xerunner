@@ -14,6 +14,7 @@ from xebuild.boards.flash import FlatBigNand
 
 
 class TheEleven(unittest.TestCase):
+
     def test_eleven_names_over_nine_numbers(self):
         self.assertEqual(len(imagetypes.ALL), 11)
         self.assertEqual(len({kind.number for kind in imagetypes.ALL}), 9)
@@ -41,6 +42,7 @@ class TheEleven(unittest.TestCase):
 
 
 class WhichFileListEachReads(unittest.TestCase):
+
     def test_ten_of_them_are_named_after_themselves(self):
         for name in imagetypes.names():
             if name == "devgl16":
@@ -60,6 +62,7 @@ class WhichFileListEachReads(unittest.TestCase):
 
 
 class WhichPatchFileEachReads(unittest.TestCase):
+
     def test_what_the_original_was_seen_reading(self):
         for name, wanted in (("jtag", "patches_trinity.bin"),
                              ("glitch", "patches_trinity.bin"),
@@ -90,6 +93,7 @@ class WhichPatchFileEachReads(unittest.TestCase):
 
 
 class WhatEachOneIs(unittest.TestCase):
+
     def test_eight_short_names_serve_eleven_types(self):
         """The 16 variants share theirs with the type they are a variant of."""
         shorts = {kind.name: kind.short for kind in imagetypes.ALL}
