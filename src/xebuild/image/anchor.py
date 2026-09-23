@@ -117,19 +117,13 @@ class Anchor:
         )
 
 
-def lay(image: bytes, table: int, blobs: dict) -> bytes:
-    """`image` with both anchors written where an eMMC console looks for them.
+def lay(image, table: int, blobs: dict) -> None:
+    """Both anchors written into `image` where an eMMC console looks for them.
 
     Each is given 0x1000 bytes and the rest of its 0x4000 block is left as it was: in an
     image the original built, the structure is followed by zeros to 0x1000 and by erased
     flash from there to the end of the block.
     """
     span = 0x1000
-    out = bytearray(image)
     for number, at in enumerate(AT, start=1):
-        if at + span > len(out):
-            raise ValueError(
-                "an anchor at %#x does not fit in an image of %#x" % (at, len(out))
-            )
-        out[at : at + span] = Anchor(number, table, blobs).encoded.ljust(span, b"\x00")
-    return bytes(out)
+        image.put(at, Anchor(number, table, blobs).encoded.ljust(span, b"\x00"))

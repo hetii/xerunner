@@ -1,8 +1,10 @@
 """Which block each file gets, and the table that records it.
 
 Two things, worth keeping apart because only one of them is a decision. Recording a
-table is `image.Directory.write`, which sits beside the code that reads one. Deciding
-what goes in it is here.
+table is `image.Directory.write`, and naming every block of the map is
+`image.Directory.map_for`; both sit beside the code that reads one back, because a
+marker written here and read there is one number in two places. Deciding **what** goes
+in it -- which file gets which blocks, in which order -- is here.
 
 **The packing rule is as simple as it looks, and that is measured.** Files are laid one
 after another with no gap at all, in the order they are handed over, and every one is a
@@ -34,14 +36,6 @@ from ..image.directory import Directory, Entry
 logger = logging.getLogger(__name__)
 
 BLOCK = 0x4000
-
-# What the map says about a block holding no part of a file. Measured off three images
-# the original built -- a 16 MB glitch, a retail, a JTAG -- and the same on all three.
-RESERVED = 0x1FFB   # below the first file, and the blocks the top regions sit in
-TABLE = 0x1FFD      # the one block the table itself is in
-FREE = 0x1FFE       # past the files, up to the last block a build may use
-CHAIN_END = 0x1FFF  # a file's last block
-POOL = 0x0000       # the blocks past that, which a console replaces bad ones from
 
 
 class Filesystem:
@@ -88,62 +82,30 @@ class Filesystem:
 
     @property
     def following(self) -> dict:
-        """The whole map, every block named: four things mean "no file here".
+        """The whole map, every block named.
 
-        Measured on three images the original built, identical on all three: blocks
-        below the first file are reserved, a file's own run points along itself and
-        its last block says the chain ends, the table's block says so about itself,
-        what lies between the files and the last block a build may use is free, that
-        block and the three above it are reserved -- the settings, statistics and
-        manufacturing blocks sit there -- and the blocks past those are the pool a
-        console replaces a bad one from, which say nothing at all.
-
-        Where the table goes is the caller's to say, because it follows the settings
-        blobs rather than the files: on all three, four `Mobile*.dat` sit between the
-        last file and the table.
+        What each kind of block says is the table's own business, so the naming is
+        `image.Directory.map_for`; what this knows is which blocks the files took and
+        which block the table goes in.
         """
-        top = self.flash.last_block - self.flash.base_of(self.bigffs)
-        out = {}
-        for block in range(self.flash.blocks):
-            if block < self.first:
-                out[block] = RESERVED
-            elif block <= top - 1:
-                out[block] = FREE
-            elif block <= top + 3:
-                out[block] = RESERVED
-            else:
-                out[block] = POOL
-        for block in range(self.flash.blocks - self.pool, self.flash.blocks):
-            out[block] = POOL
-        if self.table_at:
-            out[self.table_at] = TABLE
-        for entry, blocks, _body in self.placed:
-            for step in range(blocks):
-                out[entry.sector + step] = (
-                    entry.sector + step + 1 if step < blocks - 1 else CHAIN_END
-                )
-        return out
+        chains = tuple((entry.sector, blocks) for entry, blocks, _body in self.placed)
+        return Directory.map_for(
+            chains, self.flash.blocks, self.first, self.table_at,
+            self.flash.last_block - self.flash.base_of(self.bigffs), self.pool,
+        )
 
     def table(self) -> bytes:
         """The block a flash keeps this table in."""
         return Directory.write(self.entries, self.following, self.flash.blocks)
 
-    def over(self, image: bytes) -> bytes:
-        """`image` with every file written where this says it goes.
+    def over(self, image) -> None:
+        """Every file written into `image` where this says it goes.
 
         The blocks are the filesystem's own, so turning them into places is the flash's
-        business rather than this one's.
+        business rather than this one's, and refusing what does not fit is the image's.
         """
-        out = bytearray(image)
         for entry, _blocks, body in self.placed:
-            at = self.flash.offset_of(entry.sector, self.bigffs)
-            if at + len(body) > len(out):
-                raise ValueError(
-                    "%s at block %#x does not fit in %#x bytes"
-                    % (entry.name, entry.sector, len(out))
-                )
-            out[at : at + len(body)] = body
-        return bytes(out)
+            image.put(self.flash.offset_of(entry.sector, self.bigffs), body)
 
     def __repr__(self) -> str:
         blocks = sum(one[1] for one in self.placed)

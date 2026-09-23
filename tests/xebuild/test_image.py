@@ -19,7 +19,7 @@ from xebuild.boards.flash import SmallNand
 from xebuild.image import Anchor, Directory, Header, Image, Keyvault, order
 from xebuild.image import anchor as anchors
 from xebuild.image import dump as dumps
-from xebuild.image.directory import Entry
+from xebuild.image.directory import CHAIN_END, FREE, POOL, RESERVED, TABLE, Entry
 
 PAGE = 512
 
@@ -515,14 +515,15 @@ def an_emmc_image(blobs=None, files=None) -> bytes:
     board, _ = for_name("corona4g")
     flash = board.flash
     body = b"no spare here" * 32
-    flat = bytearray(flash.length)
-    flat[:PAGE] = a_header()
-    flat[0x4000 : 0x4000 + len(body)] = body
     table_block = 0x380
-    flat[table_block * 0x4000 : (table_block + 1) * 0x4000] = a_table(
+    image = Image.blank(flash)
+    image.put(0, a_header())
+    image.put(0x4000, body)
+    image.put(table_block * 0x4000, a_table(
         files if files is not None else [("plain.bin", 1, len(body), 0)], flash.blocks
-    )
-    return anchors.lay(bytes(flat), table_block, blobs or {})
+    ))
+    anchors.lay(image, table_block, blobs or {})
+    return image.raw
 
 
 class AnAnchorBlock(unittest.TestCase):
@@ -583,15 +584,17 @@ class AnAnchorBlock(unittest.TestCase):
 
     def test_laying_them_leaves_the_rest_of_the_block_alone(self):
         """An image the original built has zeros to 0x1000 and erased flash past it."""
-        image = bytearray(b"\xff" * 0x3000000)
-        laid = anchors.lay(bytes(image), 0x380, {})
+        flash = for_name("corona4g")[0].flash
+        image = Image.blank(flash)
+        anchors.lay(image, 0x380, {})
         for at in anchors.AT:
-            self.assertEqual(set(laid[at + anchors.LENGTH : at + 0x1000]), {0})
-            self.assertEqual(set(laid[at + 0x1000 : at + 0x4000]), {0xFF})
+            self.assertEqual(set(image.flat[at + anchors.LENGTH : at + 0x1000]), {0})
+            self.assertEqual(set(image.flat[at + 0x1000 : at + 0x4000]), {0xFF})
 
     def test_an_anchor_that_would_not_fit_is_refused(self):
+        """The image says so, since how long it is is the image's own business."""
         with self.assertRaises(ValueError):
-            anchors.lay(b"\x00" * 0x1000, 0x380, {})
+            anchors.lay(Image.blank(TinyFlash()), 0x380, {})
 
 
 class AnEmmcImageReadsThroughItsAnchor(unittest.TestCase):
@@ -645,3 +648,127 @@ class TheSettingsBlockSChecksum(unittest.TestCase):
             other = bytearray(block)
             other[at] ^= 0xFF
             self.assertEqual(dumps.checksum(other), was)
+
+
+class TheMapATableRecords(unittest.TestCase):
+    """What every block of a flash says about itself, which the map half records.
+
+    The five values were read off three images the original built -- a 16 MB glitch, a
+    retail and a JTAG -- and are the same on all three. `map_for` lays them out from
+    what a build decided; `Directory.map` is what reads them back.
+    """
+
+    def a_map(self, chains=((0x34, 1),), table_at=0x390):
+        flash = for_name("trinity")[0].flash
+        return Directory.map_for(chains, flash.blocks, 0x34, table_at,
+                                 flash.last_block, 32)
+
+    def test_a_chain_points_along_itself_and_then_says_it_ends(self):
+        following = self.a_map(chains=((0x34, 3),))
+        self.assertEqual(following[0x34], 0x35)
+        self.assertEqual(following[0x35], 0x36)
+        self.assertEqual(following[0x36], CHAIN_END)
+
+    def test_the_four_things_a_block_says_when_it_holds_no_file(self):
+        top = for_name("trinity")[0].flash.last_block
+        following = self.a_map()
+        self.assertEqual(following[0x00], RESERVED)
+        self.assertEqual(following[0x33], RESERVED)
+        self.assertEqual(following[0x100], FREE)
+        self.assertEqual(following[0x390], TABLE)
+        self.assertEqual(following[top], RESERVED)
+        self.assertEqual(following[top + 3], RESERVED)
+
+    def test_the_pool_is_the_blocks_past_the_reserved_ones(self):
+        """Thirty two of them on the images measured, and they say nothing at all."""
+        blocks = for_name("trinity")[0].flash.blocks
+        pool = [one for one, word in self.a_map().items() if word == POOL]
+        self.assertEqual(len(pool), 32)
+        self.assertEqual(min(pool), blocks - 32)
+
+    def test_a_table_in_no_block_marks_none(self):
+        """A donor build writes its table where a file could have gone, so this asks."""
+        following = self.a_map(table_at=0)
+        self.assertNotIn(TABLE, following.values())
+
+    def test_what_it_lays_is_what_the_reading_half_gives_back(self):
+        """The two halves of one number, held against each other."""
+        flash = for_name("trinity")[0].flash
+        entries = [Entry.for_file("one.bin", 0x34, 0x9000)]
+        following = self.a_map(chains=((0x34, 3),))
+        table = Directory(Directory.write(entries, following, flash.blocks),
+                          flash.blocks)
+        self.assertEqual(table.blocks_of(table.entries[0]), (0x34, 0x35, 0x36))
+        self.assertEqual(table.map[0x00], RESERVED)
+        self.assertEqual(table.map[0x390], TABLE)
+
+
+class AnImageBeingWritten(unittest.TestCase):
+    """The container a build fills: erased at first, a view all the way down."""
+
+
+    def test_a_blank_image_is_erased_in_both_halves(self):
+        """Erased flash is 0xFF, and so is a spare nothing has written to."""
+        image = Image.blank(TinyFlash())
+        self.assertEqual(set(image.flat), {0xFF})
+        self.assertEqual(set(b"".join(image.spares)), {0xFF})
+
+    def test_a_blank_image_is_as_long_as_the_part(self):
+        flash = TinyFlash()
+        image = Image.blank(flash)
+        self.assertEqual(len(image.flat), flash.length)
+        self.assertEqual(len(image.raw), flash.raw_length)
+
+    def test_a_blank_emmc_image_has_no_spare_at_all(self):
+        flash = for_name("corona4g")[0].flash
+        image = Image.blank(flash)
+        self.assertEqual(image.spares, [])
+        self.assertEqual(len(image.raw), flash.length)
+
+    def test_what_is_put_in_comes_out_of_the_file_with_the_spare_between(self):
+        """Which is the whole point of keeping the two apart inside."""
+        flash = TinyFlash()
+        image = Image.blank(flash)
+        image.put(PAGE, b"abcd")
+        step = PAGE + flash.spare.length
+        self.assertEqual(image.raw[step : step + 4], b"abcd")
+
+    def test_a_region_past_the_end_is_refused_and_nothing_is_written(self):
+        image = Image.blank(TinyFlash())
+        with self.assertRaises(ValueError):
+            image.put(len(image.flat) - 2, b"abcd")
+        self.assertEqual(set(image.flat), {0xFF})
+
+    def test_a_structure_is_a_view_so_setting_a_field_writes_the_image(self):
+        image = Image.blank(TinyFlash())
+        image.header.magic = 0xFF4F
+        image.header.entrypoint = 0x8000
+        self.assertEqual(image.flat[:2], b"\xff\x4f")
+        self.assertEqual(Header(bytes(image.flat)).entrypoint, 0x8000)
+
+    def test_an_image_read_in_is_material_and_refuses_to_be_written_to(self):
+        """A dump is what a build is made from, so nothing may write into it."""
+        image = an_image()
+        self.assertFalse(image.writable)
+        with self.assertRaises(ValueError):
+            image.put(0x8000, b"abcd")
+        with self.assertRaises(ValueError):
+            image.header.version = 1
+
+    def test_one_being_built_says_it_may_be_written_to(self):
+        self.assertTrue(Image.blank(TinyFlash()).writable)
+
+    def test_a_read_hands_its_own_bytes_back_rather_than_assembling_them(self):
+        """Bytes measured by something else are not recomputed here, and it costs no
+        time either: a whole image is a return, not thirty-three thousand codes."""
+        raw = an_image().raw
+        self.assertIs(Image(raw, TinyFlash()).raw, raw)
+
+    def test_an_image_read_in_hands_the_same_file_back(self):
+        """The round trip the class stands on: it keeps the flat run and the spare.
+
+        Held against a whole file here, and against this console's own seventeen
+        megabyte dump in `e2e_boards.py`.
+        """
+        raw = an_image().raw
+        self.assertEqual(Image(raw, TinyFlash()).raw, raw)

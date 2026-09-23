@@ -17,6 +17,22 @@ ignores all of them.
 Putting blocks back where their numbers say is its own job and not this one. Whoever has
 a dump that needs it orders the bytes first and hands the ordered bytes here.
 
+**An image is in one of two states and they never mix.** One read in from a file is what
+every mode but a build wants: it keeps the file it was handed, hands exactly those bytes
+back, and **refuses to be written to at all** -- `put` says so, and its flat run is
+immutable, so a structure's setter refuses as well. A console's dump is the material a
+build reads from and is needed whole until the build has finished, so the class is what
+keeps it safe rather than the care of whoever is calling.
+
+One started with `blank` is the other state: no file, an erased flat run, and writing
+allowed. Every structure here is a **view** on that run, so setting `header.version`
+writes into the image itself. `raw` then assembles the file the part holds -- page,
+spare, page, spare -- computing each page's code over what it ends up holding, which is
+the only thing a build can do, since the content is its own.
+
+The round trip between the two forms is proved rather than assumed: on this console's
+own dump, taking it apart and putting it back gives the same 17,301,504 bytes.
+
 Finding the settings blobs took the most measuring, because a console never overwrites
 one: it appends a new copy and leaves every older copy where it was. One dump here holds
 two hundred and fifty-six pages of filesystem table and another holds a thousand and
@@ -41,10 +57,70 @@ class Image:
     """One flash image, read through the flash that holds it."""
 
     def __init__(self, raw: bytes, flash, bigffs: bool = False):
-        self.raw = bytes(raw)
         self.flash = flash
         self.bigffs = bigffs
-        self.flat = flash.flatten(self.raw)
+        # The file as it was handed over, and None on an image being built, which is
+        # what tells the two states apart. A read keeps it for two reasons: it is what
+        # `raw` gives back, so nothing is recomputed over bytes somebody else measured,
+        # and while it is here this image is not one anything may write to.
+        self.file = bytes(raw)
+        self.flat = flash.flatten(self.file)
+        self.spares = _spares(self.file, flash)
+
+    @classmethod
+    def blank(cls, flash, bigffs: bool = False) -> Image:
+        """An erased image of this flash's length, ready to be filled.
+
+        Erased flash is 0xFF and so is a spare nothing has written to, which is what a
+        part reads before anything is put on it.
+        """
+        one = cls(b"", flash, bigffs)
+        one.file = None
+        one.flat = bytearray(b"\xff" * flash.length)
+        if flash.spare is not None:
+            pages = flash.length // PAGE
+            one.spares = [b"\xff" * flash.spare.length for _ in range(pages)]
+        return one
+
+    @property
+    def writable(self) -> bool:
+        """Whether this is an image being built rather than a file read in."""
+        return self.file is None
+
+    @property
+    def raw(self) -> bytes:
+        """The file the part holds: the one that was read in, or the one being built.
+
+        A read hands back what it was given, so a dump comes out of here exactly as
+        it went in -- a page whose stored code does not match its content keeps that
+        code, and saying so is `Spare.ecc_ok`'s job rather than this one's. A build has
+        no such file and assembles one, computing each page's code over what it holds.
+        """
+        if not self.writable:
+            return self.file
+        return self.flash.unflatten(bytes(self.flat), self.spares)
+
+    def put(self, at: int, data: bytes) -> None:
+        """`data` into the flat run at `at`, on an image that is being built.
+
+        Two refusals, and both of them are silent damage if they are left out. An image
+        read in from a file is material -- a console's dump is what everything else is
+        made from -- so writing into it would take away what has not been used yet. And
+        an image is a fixed length, so bytes past its end are not bytes the part would
+        hold: they would simply be dropped, and a region written one span too high is
+        exactly the mistake that has to be loud.
+        """
+        if not self.writable:
+            raise ValueError(
+                "this image was read in from a file and is material, not a canvas; "
+                "start from Image.blank() to build one"
+            )
+        if at < 0 or at + len(data) > len(self.flat):
+            raise ValueError(
+                "%#x bytes at %#x do not fit in an image of %#x"
+                % (len(data), at, len(self.flat))
+            )
+        self.flat[at : at + len(data)] = data
 
     @property
     def header(self) -> Header:
@@ -69,7 +145,7 @@ class Image:
         the filesystem table included, and 1 is what is reported here -- measured on an
         image it built and then read back.
         """
-        one = Anchor.chosen(self.raw)
+        one = Anchor.chosen(bytes(self.flat))
         out = {}
         for kind, (block, length) in one.blobs.items():
             out[_named(kind)] = _found(block * BLOCK, length, 1)
@@ -86,11 +162,8 @@ class Image:
         """
         lengths = {0x30: 0x4000, 0x2C: 0x4000,
                    0x31: 0x800, 0x32: 0x200, 0x33: 0x800, 0x34: 0x800}
-        step = PAGE + self.flash.spare.length
         best: dict[int, tuple] = {}
-        for page in range(len(self.raw) // step):
-            at = page * step + PAGE
-            fields = self.raw[at : at + self.flash.spare.length]
+        for page, fields in enumerate(self.spares):
             kind = self.flash.spare.kind(fields)
             if kind not in lengths:
                 continue
@@ -132,9 +205,25 @@ class Image:
         raise ValueError("%s is not a file in this image" % name)
 
     def __repr__(self) -> str:
-        return "Image(%#x raw, %#x flat, %r)" % (
-            len(self.raw), len(self.flat), self.flash
+        return "Image(%#x flat, %d pages of spare, %s, %r)" % (
+            len(self.flat), len(self.spares),
+            "being built" if self.writable else "read in", self.flash,
         )
+
+
+def _spares(raw: bytes, flash) -> list:
+    """The field bytes of every page of a file; none at all where a part has no spare.
+
+    `order._spares` does this for a dump on its way in. This one answers for a file that
+    is short or not there at all as well, which is what `blank` starts from.
+    """
+    if flash.spare is None:
+        return []
+    step = PAGE + flash.spare.length
+    return [
+        bytes(raw[at + PAGE : at + step])
+        for at in range(0, len(raw) - step + 1, step)
+    ]
 
 
 def _found(offset: int, length: int, version: int) -> dict:
