@@ -140,7 +140,11 @@ class Directory:
         out = []
         for at in range(0, len(rows) - ENTRY + 1, ENTRY):
             entry = Entry(rows[at : at + ENTRY])
-            if not entry.name or not 0 < entry.sector < self.blocks:
+            # Block 0 is a block like any other: a 64 MB image lists the CG's tail
+            # there, at the filesystem's base. Reading it as "no file" hid that entry,
+            # and a rule written off what this read -- that such an image lists thirty
+            # files -- was wrong by the same one.
+            if not entry.name or not 0 <= entry.sector < self.blocks:
                 continue
             if not 0 < entry.size <= self.blocks * self.block_length:
                 continue
@@ -217,13 +221,16 @@ class Directory:
 
     @staticmethod
     def map_for(chains, blocks: int, first: int, table_at: int, top: int,
-                pool: int) -> dict:
+                pool: int, held: int = 4) -> dict:
         """Every block of a flash named, from what a build decided to put where.
 
         `chains` are the files as `(first block, how many)`, `first` is the block the
         first of them starts at, `table_at` is the block this table goes in, `top` is
         the last block a build may use, and `pool` is how many blocks at the very end
-        the console keeps to replace a bad one from.
+        the console keeps to replace a bad one from. `held` is how many blocks from the
+        last usable one are reserved for the console's settings: four on a 16 MB image,
+        and none on a big block chip, whose settings sit outside the filesystem's
+        numbering -- its table says the pool's zero there, measured on four images.
 
         Measured on three images the original built, identical on all three: blocks
         below the first file are reserved, a file's own run points along itself and its
@@ -242,7 +249,7 @@ class Directory:
                 out[block] = RESERVED
             elif block <= top - 1:
                 out[block] = FREE
-            elif block <= top + 3:
+            elif block < top + held:
                 out[block] = RESERVED
             else:
                 out[block] = POOL

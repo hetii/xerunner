@@ -31,11 +31,10 @@ not the block: what goes inside it is the patch set's business.
 `slots + 0x20000`. Where that is below the filesystem's own base -- which happens on a
 64 MB image, whose base is 0x2B80000 -- the tail goes to the base instead.
 
-**Whether the tail is a file depends on the same arithmetic.** On a 16 MB image and an
-eMMC it lands inside the filesystem's own numbering and is listed as `sysupdate.xexp1`,
-so those images name thirty one files. On a 64 MB one it lands at the base and is given
-no entry at all, so those name thirty. The bytes are the same either way: checked
-between a 16 MB image and a 64 MB one built from the same dump and release.
+**The tail is always the first file**, listed as `sysupdate.xexp1`: at block 0x34 on
+a 16 MB image and at block 0 on a 64 MB one, whose filesystem it opens. An earlier
+reading had the 64 MB one list nothing there, which was the table's reader dropping
+every entry at block 0.
 
 **Four of the eleven types are laid out here, and `for_type` refuses the rest.** Each
 refusal says why, and none of them is for want of trying:
@@ -160,13 +159,3 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False) -> dict:
     if xell:
         out["xell"] = (XELL_AT, XELL_SPAN)
     return out
-
-
-def tail_is_a_file(tail: int, base: int) -> bool:
-    """Whether the CG's tail gets a directory entry of its own.
-
-    It does when it lands inside the filesystem's own numbering, which is every image
-    but a 64 MB one. Where it lands at the base instead, the original writes it and
-    lists nothing: thirty one files against thirty, on two images of the same build.
-    """
-    return tail > base

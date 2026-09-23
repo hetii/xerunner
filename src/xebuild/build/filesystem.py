@@ -41,12 +41,13 @@ class Filesystem:
     """Where each file went, and what the table says about it."""
 
     def __init__(self, flash, first: int = 0, bigffs: bool = False,
-                 table_at: int = 0, pool: int = 32):
+                 table_at: int = 0, pool: int = 32, held: int = 4):
         self.flash = flash
         self.first = first
         self.bigffs = bigffs
         self.table_at = table_at
         self.pool = pool
+        self.held = held
         self.placed = []
 
     @property
@@ -91,6 +92,7 @@ class Filesystem:
         return Directory.map_for(
             chains, self.flash.blocks, self.first, self.table_at,
             self.flash.last_block - self.flash.base_of(self.bigffs), self.pool,
+            self.held,
         )
 
     def table(self) -> bytes:

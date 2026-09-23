@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.build import Build, Material, layout
+from xebuild.build import Build, Material, layout, security
 from xebuild.chain import Chain
 from xebuild.config import BuildConfig
 from xebuild.crypto import smc as cipher
@@ -127,22 +127,18 @@ class WhereTheOriginalPutEachRegion(unittest.TestCase):
                 self.assertNotEqual(head, b"\xff" * 0x10)
                 self.assertNotEqual(head, bytes(0x10))
 
-    def test_the_tail_is_listed_only_where_it_falls_inside_the_filesystem(self):
-        """Listed as `sysupdate.xexp1` where it is listed, and at the base where not."""
+    def test_the_tail_is_always_the_first_file(self):
+        """Listed as `sysupdate.xexp1` at the block it lands in -- 0x34 on a 16 MB image
+        and block 0 of the filesystem on a 64 MB one, where it opens it."""
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
                 image, console, where = self._where(path, kind, board)
                 base = console.flash.base_of(False) * layout.BLOCK
                 table = Directory(image.blob("fsroot"), console.flash.blocks)
-                named = {one.name: one for one in table.entries}
-                if layout.tail_is_a_file(where["tail"][0], base):
-                    self.assertIn("sysupdate.xexp1", named)
-                    sector = (where["tail"][0] - base) // layout.BLOCK
-                    self.assertEqual(named["sysupdate.xexp1"].sector, sector)
-                else:
-                    self.assertNotIn("sysupdate.xexp1", named)
-                    self.assertEqual(where["tail"][0], base)
-
+                first = table.entries[0]
+                self.assertEqual(first.name, "sysupdate.xexp1")
+                block = (where["tail"][0] - base) // layout.BLOCK
+                self.assertEqual(first.sector, block)
 
 class WhatABuildProducesForARealConsole(unittest.TestCase):
     """Region by region, against the same region of an image the original built.
@@ -217,7 +213,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 self.assertEqual(ours, bytes(image.flat[at:at + span]))
 
     def test_the_patch_slot_is_the_release_s_last_set_where_it_is_measured(self):
-        """A glitch2m image is refused here as it is in `build`, for the same reason."""
+        """A glitch2m image carries the console's fuses in front of the set."""
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
                 image, console = self._reference(path, board)
@@ -226,10 +222,6 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                                         last.at + last.length)
                 at, span = where["patches"]
                 one = self._build(kind, board)
-                if kind == "glitch2m":
-                    with self.assertRaises(ValueError):
-                        one.patch_slot()
-                    continue
                 self.assertEqual(one.patch_slot(),
                                  bytes(image.flat[at:at + layout.BLOCK]))
                 self.assertEqual(set(image.flat[at + layout.BLOCK:at + span]), {0xFF})
@@ -318,3 +310,32 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 self.assertEqual(run[:span], bytes(image.flat[slot:slot + span]))
                 spill = len(run) - span
                 self.assertEqual(run[span:], bytes(image.flat[tail:tail + spill]))
+
+    def test_the_whole_file_is_the_original_s(self):
+        """Every byte of the file a programmer writes, spare and codes included.
+
+        The build time comes out of the reference's own crl.bin, whose stamp is the
+        clock the original read, and the SMC out of its own flash, since CB_B binds to
+        it; everything else is the dump, the release and the arithmetic.
+        """
+        if not os.environ.get("XEBUILD_CPUKEY"):
+            raise unittest.SkipTest("XEBUILD_CPUKEY is what an image is sealed for")
+        cpu = bytes.fromhex(os.environ["XEBUILD_CPUKEY"])
+        for path, kind, board in self._laid():
+            with self.subTest(os.path.basename(path)):
+                with open(path, "rb") as handle:
+                    raw = handle.read()
+                image = Image(raw, for_name(board)[0].flash)
+                head = image.header
+                where = tempfile.mkdtemp(prefix="xebuild-e2e-whole-")
+                self.addCleanup(shutil.rmtree, where, ignore_errors=True)
+                for name in os.listdir(self.where):
+                    os.symlink(os.path.join(self.where, name),
+                               os.path.join(where, name))
+                sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
+                with open(os.path.join(where, "smc.bin"), "wb") as handle:
+                    handle.write(cipher.opened(sealed))
+                plain, _ = security.opened_crl(image.read("crl.bin"), cpu)
+                one = Build(BuildConfig(image_type=kind, console=board),
+                            Material(where), self.release)
+                self.assertEqual(one.image(security.when_in(plain)).raw, raw)

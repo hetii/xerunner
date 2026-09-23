@@ -99,7 +99,7 @@ class Image:
         return self.flash.unflatten(bytes(self.flat), self.spares)
 
     def mark(self, at: int, length: int, sequence: int = 0, kind: int = 0,
-             extra: bytes = b"") -> None:
+             extra: bytes = b"", fs: bytes = b"") -> None:
         """Say in the spare of every page from `at` for `length` that a build wrote it.
 
         The block number is the page's own place in the flash, the version and the kind
@@ -120,7 +120,7 @@ class Image:
         per = self.flash.spare.pages_a_block
         for page in range(at // PAGE, -(-(at + length) // PAGE)):
             self.spares[page] = self.flash.spare.write(page // per, sequence, kind,
-                                                       extra)
+                                                       extra, fs)
 
     def mark_written(self, start: int = 0, end: int | None = None) -> None:
         """Mark every page in the span that holds anything but erased flash.
