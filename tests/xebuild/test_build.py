@@ -584,12 +584,15 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         self.assertEqual(len(body), 0x190)
         self.assertEqual(Stage(body, 0).length, 0x190)
 
-    def test_the_region_ends_where_the_last_stage_says(self):
-        """The six bytes of padding after it are the dump's own in every image measured,
-        so the original never writes there."""
+    def test_the_last_stage_is_sealed_over_its_padding_too(self):
+        """The region runs past what CE states, to the next 0x10: the stream carries on
+        over the padding, which x360mcp saw on a manufacturing image whose CE had moved
+        and whose dump held something else at the same place."""
         one = self.a_chain(stages=(("CBA", 0x100), ("CBB", 0x200), ("CD", 0x180),
                                    ("CE", 0x14a)))
-        self.assertEqual(len(one.chain()), 0x100 + 0x200 + 0x180 + 0x14a)
+        out = one.chain()
+        self.assertEqual(len(out), 0x100 + 0x200 + 0x180 + 0x150)
+        self.assertNotEqual(out[-6:], bytes(6))
 
     def opened(self, one):
         """The chain this build lays, read back the way anything reads a chain."""

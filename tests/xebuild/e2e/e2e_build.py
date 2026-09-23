@@ -187,29 +187,17 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
     def _laid(self) -> tuple:
         return tuple(one for one in self.refs if one[1] not in layout.UNMEASURED)
 
-    def _fits(self, board) -> bool:
-        """Whether the dump on hand is the shape this console's flash holds.
-
-        The reference images include an eMMC console built from this NAND dump, which
-        the original manages and `Build.dump` refuses; the refusal is the test there.
-        """
-        return for_name(board)[0].flash.raw_length == os.path.getsize(
-            os.environ["XEBUILD_DUMP"]
-        )
-
-    def test_a_dump_of_another_shape_is_refused_rather_than_misread(self):
-        odd = [one for one in self._laid() if not self._fits(one[2])]
-        if not odd:
-            raise unittest.SkipTest("every reference is for a console this dump fits")
-        for path, kind, board in odd:
-            with self.subTest(os.path.basename(path)), \
-                    self.assertRaises(ValueError):
-                self._build(kind, board).keyvault()
+    def test_a_dump_is_read_with_its_own_geometry_whatever_is_being_built(self):
+        """A 16 MB trinity dump builds a 64 MB image and an eMMC one, as the original
+        does, and it is read as what it is: its keyvault comes out the console's."""
+        for path, kind, board in self._laid():
+            with self.subTest(os.path.basename(path)):
+                one = self._build(kind, board)
+                self.assertEqual(one.dump.flash.raw_length,
+                                 os.path.getsize(os.environ["XEBUILD_DUMP"]))
 
     def test_the_keyvault_is_the_console_s_own_block(self):
         for path, kind, board in self._laid():
-            if not self._fits(board):
-                continue
             with self.subTest(os.path.basename(path)):
                 image, _ = self._reference(path, board)
                 head = image.header
@@ -281,8 +269,6 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         if not os.environ.get("XEBUILD_CPUKEY"):
             raise unittest.SkipTest("XEBUILD_CPUKEY is what a chain binds to")
         for path, kind, board in self._laid():
-            if not self._fits(board):
-                continue
             with self.subTest(os.path.basename(path)):
                 image, console = self._reference(path, board)
                 head = image.header
@@ -301,12 +287,11 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 at = layout.CHAIN_AT
                 self.assertEqual(ours, bytes(image.flat[at:at + len(ours)]))
                 last = Chain(image, console).walked[-1]
-                self.assertEqual(len(ours), last.at + last.length - at)
+                ends = last.at + last.length
+                self.assertEqual(len(ours), ends + -ends % 0x10 - at)
 
     def test_the_version_the_page_states_is_the_release_s_own_ce(self):
         for path, kind, board in self._laid():
-            if not self._fits(board):
-                continue
             with self.subTest(os.path.basename(path)):
                 image, _ = self._reference(path, board)
                 self.assertEqual(self._build(kind, board).ce_version,
@@ -322,8 +307,6 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         if not os.environ.get("XEBUILD_CPUKEY"):
             raise unittest.SkipTest("XEBUILD_CPUKEY is what a CF binds to")
         for path, kind, board in self._laid():
-            if not self._fits(board):
-                continue
             with self.subTest(os.path.basename(path)):
                 image, console = self._reference(path, board)
                 last = Chain(image, console).walked[-1]

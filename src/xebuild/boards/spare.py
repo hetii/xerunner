@@ -87,8 +87,15 @@ class Spare:
     def kind(self, spare: bytes) -> int:
         return spare[self.kind_at] & 0x3F
 
-    def write(self, block: int, sequence: int = 0, kind: int = 0) -> bytes:
+    def write(self, block: int, sequence: int = 0, kind: int = 0,
+              extra: bytes = b"") -> bytes:
         """The field bytes for one page. The ECC is written over them separately.
+
+        `extra` is the four bytes only a settings blob fills, at `extra_at`: its length
+        in units of 0x100 and how many pages of its block are still free after it --
+        read out of the routine at 0x4106E8 by x360mcp, and on every reference image a
+        mobile's page carries exactly that, 08 1C for a 0x800 blob and 02 1F for a 0x200
+        one.
 
         A version too large for the layout to hold is refused rather than cut down: a
         page written with the low half of a number nobody asked for is a page that reads
@@ -107,6 +114,8 @@ class Spare:
         if self.sequence_high_at is not None:
             out[self.sequence_high_at] = sequence >> 8
         out[self.kind_at] = kind & 0x3F
+        if extra:
+            out[self.extra_at:self.extra_at + len(extra)] = extra
         return bytes(out)
 
     # --- the code the controller keeps over a page -------------------------------
