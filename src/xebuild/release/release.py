@@ -27,6 +27,7 @@ class Release:
         if not os.path.isdir(where):
             raise ValueError("%s is not a directory" % where)
         self.where = where
+        self._container = False
         self.common = common or os.path.join(os.path.dirname(where.rstrip("/\\")),
                                              "common")
 
@@ -76,7 +77,7 @@ class Release:
             path = self._beside(where, listed.plain)
             if path:
                 return self._read(path)
-        if listed.kind in ("CF", "CG"):
+        if listed.kind in ("CF", "CG") and self.container is not None:
             cf, cg = self.container.stages
             return cf if listed.kind == "CF" else cg
         raise ValueError(
@@ -119,8 +120,15 @@ class Release:
         the file is optional.
         """
         name = listed.plain
-        held = "$flash_" + name
-        if held in self.container.held:
+        if listed.outside:
+            # Relative to the release, as the list spells it -- `..\\launch.xex` is the
+            # base directory's, whatever the release keeps under the same name.
+            path = os.path.normpath(os.path.join(self.where,
+                                                 listed.name.replace("\\", "/")))
+            found = self._beside(os.path.dirname(path), os.path.basename(path))
+            return self._read(found) if found else None
+        if self.container is not None and \
+                self.container.firmware_name(name) is not None:
             return self.container.firmware(name)
         for where in (self.common, self.where):
             path = self._beside(where, name)
@@ -150,13 +158,25 @@ class Release:
         return Patches(self._read(self.where, "bin", "%s.bin" % name))
 
     @property
-    def container(self) -> Container:
-        """The signed package the firmware files and the CF/CG pair are in."""
-        for name in sorted(os.listdir(self.where)):
-            if name.lower().startswith("su") and "_" in name:
-                logger.info("reading %s", os.path.join(self.where, name))
-                return Container(self._read(self.where, name))
-        raise ValueError("%s holds no system update container" % self.where)
+    def container(self) -> Container | None:
+        """The signed package the firmware files and the CF/CG pair are in, or None.
+
+        Read once. An older release ships none and keeps everything as loose files --
+        6717 has its `cf_6717.bin`, its `xam.xex` and the rest beside its file list --
+        and the original says so and carries on: "system update container not found
+        at 6717/su20076000_00000000 ... skipping load".
+        """
+        if self._container is False:
+            self._container = None
+            for name in sorted(os.listdir(self.where)):
+                if name.lower().startswith("su") and "_" in name:
+                    logger.info("reading %s", os.path.join(self.where, name))
+                    self._container = Container(self._read(self.where, name))
+                    break
+            else:
+                logger.info("system update container not found in %s, skipping load",
+                            self.where)
+        return self._container
 
     def __repr__(self) -> str:
         return "Release(%s)" % self.where

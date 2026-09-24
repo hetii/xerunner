@@ -95,17 +95,25 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
     @console.setter
     def console(self, named):
         if named is None:
-            self["console"], self["bigffs"] = None, False
+            self["console"], self["bigffs"], self["console_name"] = None, False, None
             return
         if isinstance(named, boards.Board):
             self["console"], self["bigffs"] = named, False
+            self["console_name"] = named.name
             return
         board, bigffs = boards.for_name(named)
+        self["console_name"] = str(named).strip().lower()
         if str(named).strip().lower() != board.name:
             logger.info("console %s is a %s", named, board.name)
         if bigffs:
             logger.info("building with the larger filesystem")
         self["console"], self["bigffs"] = board, bigffs
+
+    @property
+    def console_name(self) -> str | None:
+        """The spelling `-c` was given, which the auto image name carries: a build for
+        `-c jasper256` is `17559_gg_jasper256.bin`, not the name of its console."""
+        return self["console_name"]
 
     @property
     def bigffs(self) -> bool:
@@ -190,7 +198,8 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
 
     @property
     def no_random(self) -> bool:
-        """Whether every nonce the build would draw is left at zero instead."""
+        """`-norandom`: nothing is drawn, and what would be keeps the value the
+        original was compiled with -- see `build.security.COMPILED_IN`."""
         return self["no_random"]
 
     @no_random.setter
