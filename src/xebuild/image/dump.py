@@ -98,7 +98,9 @@ class Dump:
     def sealed_keyvault(self) -> bytes:
         """The keyvault as it lies in flash, where the header says it is."""
         head = self.header
-        at, length = head.keyvault_at, head.keyvault_size
+        # A xenon or zephyr image leaves the length at zero, and the keyvault is the
+        # same 0x4000 there as everywhere else.
+        at, length = head.keyvault_at, head.keyvault_size or 0x4000
         return self.image.flat[at : at + length]
 
     def keyvault(self, cpu_key: bytes) -> Keyvault:

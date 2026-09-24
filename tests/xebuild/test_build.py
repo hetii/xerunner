@@ -12,13 +12,13 @@ import tempfile
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.build import Build, Filesystem, Material, layout
+from xebuild.build import Build, Filesystem, Material, layout, security
 from xebuild.chain import Fields, sealing
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto import smc as cipher
 from xebuild.crypto.rc4 import rc4
-from xebuild.image import Directory, Header, Image
+from xebuild.image import Directory, Header, Image, Keyvault
 from xebuild.image.directory import CHAIN_END
 from xebuild.imagetypes import for_name as type_for
 from xebuild.release import Patches
@@ -285,6 +285,9 @@ class ADumpThatOnlyAnswersWhatIsAsked:
         self.ldv = 14
         self.chain = AChainOfMadeUpStages(tags or ("CB", "CB", "CD", "CE"))
 
+    def keyvault(self, cpu_key):
+        return Keyvault.opened(self.sealed_keyvault, cpu_key)
+
 
 class AReleaseWithOnePatchFile:
     """Stands in for a release: one patch file, and stages made up here.
@@ -375,9 +378,27 @@ class WhichKeyvaultGoesIn(unittest.TestCase):
         one = a_build(self)
         self.assertEqual(one.keyvault(), one.dump.sealed_keyvault)
 
-    def test_a_file_in_the_per_build_directory_wins(self):
-        one = a_build(self, files={"kv.bin": b"a keyvault" * 100})
-        self.assertEqual(one.keyvault(), b"a keyvault" * 100)
+    def test_a_file_in_the_per_build_directory_wins_under_the_console_s_head(self):
+        """Its body is written, in the clear or sealed; its eight bytes at 0x10 are the
+        console's own keyvault's."""
+        key = bytes(range(0x10))
+        given = bytes(range(0x40, 0x80)) * 0x100
+        for handed in (given, Keyvault(given).sealed(key)):
+            with self.subTest(sealed=handed is not given):
+                one = a_build(self, files={"kv.bin": handed})
+                one.config.cpu_key = key
+                plain = Keyvault.opened(one.keyvault(), key).plain
+                self.assertEqual(plain[0x18:], given[0x18:])
+                self.assertEqual(plain[0x10:0x18],
+                                 one.dump.keyvault(key).plain[0x10:0x18])
+
+    def test_with_no_dump_the_head_is_drawn_or_compiled_in(self):
+        key = bytes(range(0x10))
+        one = a_build(self, dump=False, files={"kv.bin": bytes(0x4000)})
+        one.config.cpu_key = key
+        one.config.no_random = True
+        self.assertEqual(Keyvault.opened(one.keyvault(), key).plain[0x10:0x18],
+                         security.COMPILED_IN["kv.bin"])
 
     def test_a_build_with_neither_is_refused(self):
         with self.assertRaises(ValueError):
@@ -582,12 +603,21 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         stages = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CD", "CE")]
         self.assertEqual([nonce[0] for nonce in one._nonces(stages)], [1, 3, 4])
 
-    def test_a_kind_the_dump_has_none_left_of_is_drawn(self):
-        one = self.a_chain(tags=("CB", "CD"))
-        stages = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CB", "CD")]
-        drawn = one._nonces(stages)
-        self.assertEqual([drawn[0][0], drawn[2][0]], [1, 2])
-        self.assertEqual(len(drawn[1]), 0x10)
+    def test_a_chain_the_walk_cannot_finish_draws_every_nonce(self):
+        """An RGH3 chain: a third CB where the CD is due. The original draws all six,
+        and under `-norandom` keeps what it read and the compiled-in rest."""
+        one = self.a_chain(tags=("CB", "CB", "CB", "CD", "CE"))
+        stages = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CB", "CD", "CE")]
+        self.assertTrue(one.drawing)
+        self.assertNotIn(bytes([1]) * 0x10, one._nonces(stages))
+        one = self.a_chain(tags=("CB", "CB", "CB", "CD", "CE"), no_random=True)
+        self.assertEqual(one._nonces(stages),
+                         [bytes([1]) * 0x10, bytes([2]) * 0x10,
+                          security.COMPILED_IN["CD"], security.COMPILED_IN["CE"]])
+
+    def test_a_single_cb_finishes_the_walk(self):
+        one = self.a_chain(tags=("CB", "CD", "CE"))
+        self.assertFalse(one.drawing)
 
     def test_the_second_pass_is_for_a_retail_chain_with_no_cb_b(self):
         single = [Stage(a_stage(tag, 0x40), 0) for tag in ("CB", "CD", "CE")]
