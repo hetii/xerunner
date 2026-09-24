@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 
-from ..boards.flash import BLOCK
+from ..boards.flash import BLOCK, PAGE
 from ..image.directory import POOL, Directory, Entry
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,28 @@ class Filesystem:
         self.placed = []
         # Blocks the build stepped over between the files and the settings blobs.
         self.skipped = range(0)
+
+    @classmethod
+    def on(cls, flash, first: int, bigffs: bool = False) -> Filesystem:
+        """A filesystem from block `first` on, with the reserve its flash keeps.
+
+        No pool on a part with no bad blocks to stand in for: an eMMC's table reserves
+        every block from the last one a build may use to the end of the part -- six on
+        the one measured, where the anchors and the settings live -- and a devkit
+        image's flat 64 MB does the same from 0xF7C. Otherwise the last four usable
+        blocks are held for the settings on a 16 MB image, and none on a big block
+        chip, whose settings sit outside the filesystem's numbering.
+        """
+        base = flash.base_of(bigffs)
+        if not flash.pool:
+            return cls(flash, first, bigffs, pool=0,
+                       held=flash.blocks - (flash.last_block - base))
+        return cls(flash, first, bigffs, held=0 if cls._big(flash) else 4)
+
+    @staticmethod
+    def _big(flash) -> bool:
+        """Whether its pages carry the filesystem's own fields: a big block chip."""
+        return flash.spare is not None and flash.spare.fs_at is not None
 
     @property
     def after(self) -> int:
@@ -110,19 +132,88 @@ class Filesystem:
         """The block a flash keeps this table in."""
         return Directory.write(self.entries, self.following, self.flash.blocks)
 
-    def over(self, image) -> None:
-        """Every file written into `image` where this says it goes, padded to its block.
+    def over(self, image, fields: bytes = b"") -> None:
+        """Every file written into `image` where this says it goes, padded to its block,
+        and its pages marked written.
 
         The blocks are the filesystem's own, so turning them into places is the flash's
         business rather than this one's, and refusing what does not fit is the image's.
 
         A file's last block is filled out with zeros: every reference image carries them
         between the end of a file and the end of its block, where erased flash would be
-        0xFF, and the pages they sit in are written like any other.
+        0xFF, and the pages they sit in are written like any other. On a big block chip
+        the pages carry `fields` -- the filesystem's three bytes -- and kind 0x2A, and a
+        file that fits in one block leaves its padding's fields erased, with a real
+        code over the zeros: measured on four such files in a jasperbb image. A longer
+        file's padding is written like the rest of it, and nothing of this on a 16 MB
+        image.
         """
+        big = self._big(self.flash)
         for entry, blocks, body in self.placed:
             at = self.flash.offset_of(entry.sector, self.bigffs)
             image.put(at, bytes(body) + bytes(blocks * BLOCK - len(body)))
+            span = blocks * BLOCK
+            if big and blocks == 1:
+                span = -(-len(body) // PAGE) * PAGE
+            image.mark(at, span, 0, 0x2A if big else 0, fs=fields)
+
+    def lay_blobs(self, image, blobs: dict, fields: bytes = b"") -> dict:
+        """The console's settings blobs laid behind the files, and where the table goes.
+
+        What follows the files starts on the flash's own step: a jasperbb's files end at
+        0x38D0000 and its blobs go to 0x38E0000 -- and so does its table when there are
+        no blobs. On every other part the files already end on one. The blobs go
+        `mobile_stride` apart in the order B, C, D, E, each with its version 1, its kind
+        from 0x31 up, and four bytes more: its length in units of 0x100 and how many
+        pages of its block are still free -- counted in fours on a big block chip,
+        0x3F, 0x3E, 0x3D, 0x3C down a block. A blob that would reach the block kept for
+        the table is left out, as a file is: measured with B at 0x3DA going in and C at
+        0x3DB not.
+
+        The table follows the last blob placed, on the flash's step: 0x10000 past the
+        start of four 0x4000 blobs, 0x20000 past four packed 0x800 apart on a big block
+        part, one block past a lone MobileB. With none placed it goes where they would
+        have begun, and the blocks stepped over stay free; with some, they go unnamed.
+        All measured. Returns the blobs placed, by kind, as `(block, length)`.
+        """
+        flash, big = self.flash, self._big(self.flash)
+        base = flash.base_of(self.bigffs) * BLOCK
+        start = flash.offset_of(self.after, self.bigffs)
+        start += -start % flash.round_to
+        placed, table_at = {}, start
+        for index, name in enumerate(sorted(blobs)):
+            at = start + index * flash.mobile_stride
+            body, kind = blobs[name], 0x31 + "BCDE".index(name[6])
+            if at + len(body) > (flash.last_block - 1) * BLOCK:
+                logger.error("adding %s will exceed available flash space! Skipped!",
+                             name)
+                continue
+            image.put(at, body)
+            placed[kind] = ((at - base) // BLOCK, len(body))
+            ends = at + len(body)
+            table_at = ends + -ends % flash.round_to
+            if flash.spare is None:
+                continue
+            per = flash.spare.pages_a_block
+            pages = max(1, len(body) // PAGE)
+            free = per - (at // PAGE) % per - pages
+            free >>= 2 if big else 0
+            image.mark(at, pages * PAGE, 1, kind,
+                       bytes([len(body) // 0x100, free, 0, 0]),
+                       b"\x00" if big else b"")
+        if placed:
+            self.skipped = range(self.after, (start - base) // BLOCK)
+        self.table_at = (table_at - base) // BLOCK
+        return placed
+
+    def lay_table(self, image, fields: bytes = b"") -> None:
+        """The table into its block, marked with its own kind: 0x30 on a 16 MB image,
+        0x2C on a big block chip, where it keeps the filesystem's three bytes."""
+        at = self.flash.offset_of(self.table_at, self.bigffs)
+        table = self.table()
+        image.put(at, table)
+        image.mark(at, len(table), 1, 0x2C if self._big(self.flash) else 0x30,
+                   fs=fields)
 
     def __repr__(self) -> str:
         blocks = sum(one[1] for one in self.placed)

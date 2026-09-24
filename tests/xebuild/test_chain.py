@@ -11,7 +11,7 @@ import struct
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.chain import Chain, Fields, sealing
+from xebuild.chain import Chain, Fields, fuses, sealing, update
 from xebuild.chain.stage import Stage
 from xebuild.crypto.keys import derive
 from xebuild.crypto.rc4 import rc4
@@ -229,8 +229,9 @@ class AMadeUpChain(unittest.TestCase):
         board, _ = for_name("trinity")
         flat = bytearray(0x200000)
         at = 0x8000
-        for tag, length, build in kinds:
-            flat[at : at + length] = a_stage(tag, length, build=build)
+        for tag, length, build, *nonce in kinds:
+            flat[at : at + length] = a_stage(tag, length, build=build,
+                                             nonce=nonce[0] if nonce else b"")
             at += length
         slots_at = 0x100000
         for index in range(slots):
@@ -295,7 +296,121 @@ class AMadeUpChain(unittest.TestCase):
         with self.assertRaises(ValueError):
             chain.bound(b"")
 
+    def test_the_walk_reads_each_buffer_s_nonce_and_the_console_s_slot(self):
+        """0x417651: CB_A, CB_B, CD, CE in that order, then the slot's CF and CG."""
+        n = [bytes([k]) * 0x10 for k in range(1, 5)]
+        chain = self.an_image([("CB", 0x1000, 0x23E4, n[0]),
+                               ("CB", 0x1000, 0x23E4, n[1]),
+                               ("CD", 0x1000, 0x24EC, n[2]),
+                               ("CE", 0x1000, 0x760, n[3])], lockdowns=(5,))
+        read, finished = chain.nonce_walk()
+        self.assertTrue(finished)
+        self.assertEqual([read[k] for k in ("CB_A", "CB_B", "CD", "CE")], n)
+        self.assertEqual(read["CF"], bytes(range(0x10)))
+        self.assertIn("CG", read)
+
+    def test_a_single_cb_goes_straight_on_to_its_cd_and_finishes(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CD", 0x1000, 0x24EC),
+                               ("CE", 0x1000, 0x760)], lockdowns=(5,))
+        read, finished = chain.nonce_walk()
+        self.assertTrue(finished)
+        self.assertNotIn("CB_B", read)
+
+    def test_an_rgh3_chain_stops_the_walk_with_the_payload_read_as_cb_b(self):
+        """Its third CB stands where the CD is due: nothing past it, nothing drawn
+        from the slot, and a build then draws every nonce."""
+        payload = b"\x77" * 0x10
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CB", 0x400, 15432, payload),
+                               ("CB", 0x1000, 0x23E4), ("CD", 0x1000, 0x24EC),
+                               ("CE", 0x1000, 0x760)], lockdowns=(5,))
+        read, finished = chain.nonce_walk()
+        self.assertFalse(finished)
+        self.assertEqual(read["CB_B"], payload)
+        self.assertEqual(set(read), {"CB_A", "CB_B"})
+
+    def test_a_chain_with_no_ce_does_not_finish(self):
+        chain = self.an_image([("CB", 0x1000, 0x23E4), ("CB", 0x1000, 0x23E4),
+                               ("CD", 0x1000, 0x24EC)], lockdowns=(5,))
+        self.assertFalse(chain.nonce_walk()[1])
+
     def test_an_image_with_no_slot_refuses_rather_than_guessing(self):
         chain = self.an_image([("CB", 0x1000, 0x23E4)], slots=0)
         with self.assertRaises(ValueError):
             chain.slot  # noqa: B018
+
+
+class WritingAnUpdatePair(unittest.TestCase):
+    """`chain.update`: the CF and CG a build lays behind the chain."""
+
+    KEY = bytes(range(0x10))
+
+    def test_the_cf_counts_the_tail_s_blocks_one_up_from_the_other(self):
+        cf = bytearray(a_stage("CF", 0x400))
+        update.with_tail(cf, 0x34, 2)
+        self.assertEqual(cf[0x30:0x36], bytes.fromhex("000200340035"))
+        self.assertEqual(cf[0x36:0x68], bytes(0x32))
+        update.with_tail(cf, 0x34, 0)
+        self.assertEqual(cf[0x30:0x68], bytes(0x38))
+
+    def test_a_tail_too_long_for_the_list_is_refused(self):
+        cf = bytearray(a_stage("CF", 0x400))
+        update.with_tail(cf, 0x34, 27)
+        with self.assertRaises(ValueError):
+            update.with_tail(cf, 0x34, 28)
+
+    def test_the_console_s_block_reads_back_and_the_binding_is_the_cpu_key_s(self):
+        cf = bytearray(a_stage("CF", 0x400))
+        update.with_console(cf, 1, b"\x78\x02\x27", 14, self.KEY)
+        self.assertEqual(cf[0x21B], 1)
+        self.assertEqual(Fields.in_cf(bytes(cf)).pairing, b"\x78\x02\x27")
+        self.assertEqual(Fields.in_cf(bytes(cf)).ldv, 14)
+        message = bytearray(cf[:0x220])
+        message[0x20:0x30] = derive(sealing.ONE_BL_KEY, bytes(cf[0x20:0x30]))
+        self.assertEqual(bytes(cf[0x220:0x230]), derive(self.KEY, bytes(message)))
+        other = bytearray(a_stage("CF", 0x400))
+        update.with_console(other, 1, b"\x78\x02\x27", 14, bytes(0x10))
+        self.assertNotEqual(other[0x220:0x230], cf[0x220:0x230])
+
+    def test_the_pair_opens_under_the_1bl_key_and_the_key_the_cf_carries(self):
+        cf = bytearray(a_stage("CF", 0x400))
+        cf[0x330:0x340] = b"\x5a" * 0x10
+        cg_nonce = b"\x3c" * 0x10
+        cg = a_stage("CG", 0x206, nonce=cg_nonce)
+        run = update.sealed(cf, cg, cg_nonce, 0x10)
+        self.assertEqual(len(run), 0x400 + 0x210)
+        self.assertEqual(sealing.under(Stage(run, 0), sealing.ONE_BL_KEY)[:0x400],
+                         bytes(cf))
+        sealed_cg = Stage(run, 0x400)
+        key = derive(b"\x5a" * 0x10, cg_nonce)
+        self.assertEqual(rc4(key, run[0x420:]), cg[0x20:] + bytes(10))
+        self.assertEqual(sealed_cg.nonce, cg_nonce)
+
+
+class TheFusesALoaderHandsOver(unittest.TestCase):
+    """`chain.fuses`: twelve lines, as the template at 0x44A700 fills them."""
+
+    KEY = bytes(range(0x10))
+
+    def test_every_line_of_a_retail_slim_console_s(self):
+        out = fuses.virtual(0x03000003, self.KEY, 17)
+        lines = [out[at:at + 8] for at in range(0, 0x60, 8)]
+        self.assertEqual(len(lines), 12)
+        self.assertEqual(lines[0], bytes.fromhex("c0ffffffffffffff"))
+        self.assertEqual(lines[1], bytes.fromhex("0f0f0f0f0f0ff0f0"))
+        self.assertEqual(lines[2], bytes.fromhex("ff00000000000000"))
+        self.assertEqual(lines[3:7], [self.KEY[:8]] * 2 + [self.KEY[8:]] * 2)
+        self.assertEqual(lines[7], b"\xff" * 8)
+        self.assertEqual(lines[8], bytes.fromhex("f000000000000000"))
+        self.assertEqual(lines[9:], [bytes(8)] * 3)
+
+    def test_a_devkit_s_type_and_no_lockdown(self):
+        out = fuses.virtual(0, self.KEY, 0)
+        self.assertEqual(out[8:16], bytes.fromhex("0f0f0f0f0f0f0f0f"))
+        self.assertEqual(out[0x38:0x48], bytes(0x10))
+
+    def test_the_word_comes_off_the_cb_and_an_unknown_type_is_refused(self):
+        cb = bytearray(0x400)
+        cb[0x3B0:0x3B4] = bytes.fromhex("02001234")
+        self.assertEqual(fuses.cb_word(cb), 0x02001234)
+        with self.assertRaises(ValueError):
+            fuses.virtual(0x07000000, self.KEY, 0)

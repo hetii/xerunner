@@ -11,14 +11,24 @@ The tiny flash is a class of its own rather than a real one, because a real 16 M
 is thirty-two thousand pages and every one of them wants its code computed.
 """
 
+import calendar
 import struct
+import types
 import unittest
 
 from xebuild.boards import for_name
 from xebuild.boards.flash import SmallNand
-from xebuild.image import Anchor, Directory, Header, Image, Keyvault, order
+from xebuild.image import (
+    Anchor,
+    Directory,
+    Dump,
+    Header,
+    Image,
+    Keyvault,
+    order,
+    settings,
+)
 from xebuild.image import anchor as anchors
-from xebuild.image import dump as dumps
 from xebuild.image.directory import CHAIN_END, FREE, POOL, RESERVED, TABLE, Entry
 
 PAGE = 512
@@ -152,6 +162,16 @@ class WritingAHeader(unittest.TestCase):
         self.assertEqual(header.keyvault_at, 0x4000)
         self.assertEqual(header.smc_at, 0x1000)
 
+    def test_the_four_boot_bytes_are_the_word_at_0x4c(self):
+        """Named as the reboot core names them, OPTS_DUAL to OPTS_PWRR1."""
+        header = Header.blank()
+        header.dualboot_reason, header.boot_options = 0x11, 0x04
+        header.xell_reason2, header.xell_reason = 0x22, 0x33
+        self.assertEqual(header.boot_flags, 0x11042233)
+        header.boot_flags = 0
+        self.assertEqual((header.dualboot_reason, header.boot_options,
+                          header.xell_reason2, header.xell_reason), (0, 0, 0, 0))
+
     def test_a_value_the_field_cannot_hold_is_refused(self):
         """Never cut down to fit: a truncated number is one nobody asked for."""
         with self.assertRaises(struct.error):
@@ -208,6 +228,17 @@ class WritingTheFileTable(unittest.TestCase):
         many = [self.an_entry("f%d.bin" % n, n, 0x10) for n in range(0x101)]
         with self.assertRaises(ValueError):
             Directory.write(many, {}, 0x400)
+
+
+class AnEntrySStamp(unittest.TestCase):
+
+    def test_a_moment_is_kept_as_a_fat_date_and_time(self):
+        """15:17:50 on 2010-11-12 UTC; FAT keeps the seconds in twos."""
+        when = calendar.timegm((2010, 11, 12, 15, 17, 51, 0, 0, 0))
+        stamp = Entry.fat_time(when)
+        self.assertEqual(stamp >> 16, (30 << 9) | (11 << 5) | 12)
+        self.assertEqual(stamp & 0xFFFF, (15 << 11) | (17 << 5) | 25)
+        self.assertEqual(Entry.for_file("a", 1, 2, stamp).stamp, stamp)
 
 
 class TheFileTable(unittest.TestCase):
@@ -350,30 +381,32 @@ if __name__ == "__main__":
     unittest.main()
 
 
+def a_keyvault(serial="123456789012", made="10-21-10", dvd=b"\xab" * 16,
+               hashed=True) -> Keyvault:
+    """A keyvault in the clear with the fields this reads and nothing else."""
+    plain = bytearray(0x4000)
+    plain[0xB0:0xBC] = serial.encode("latin-1")
+    plain[0x100:0x110] = dvd
+    plain[0x9E4:0x9EC] = made.encode("latin-1")
+    if hashed:
+        plain[0x1DF8:0x1E08] = b"\x5a" * 16
+    return Keyvault(bytes(plain))
+
+
 class AConsoleSOwnSecrets(unittest.TestCase):
     """The keyvault, which opens with one console's key and no other."""
 
     KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
 
-    def a_keyvault(self, serial="123456789012", made="10-21-10",
-                   dvd=b"\xab" * 16, hashed=True):
-        plain = bytearray(0x4000)
-        plain[0xB0:0xBC] = serial.encode("latin-1")
-        plain[0x100:0x110] = dvd
-        plain[0x9E4:0x9EC] = made.encode("latin-1")
-        if hashed:
-            plain[0x1DF8:0x1E08] = b"\x5a" * 16
-        return Keyvault(bytes(plain))
-
     def test_what_it_says_about_the_console(self):
-        made = self.a_keyvault()
+        made = a_keyvault()
         self.assertEqual(made.serial, "123456789012")
         self.assertEqual(made.made_on, "10-21-10")
         self.assertEqual(made.dvd_key, b"\xab" * 16)
         self.assertTrue(made.looks_opened)
 
     def test_sealing_and_opening_come_back_to_the_same_bytes(self):
-        one = self.a_keyvault()
+        one = a_keyvault()
         sealed = one.sealed(self.KEY)
         self.assertEqual(len(sealed), 0x4000)
         self.assertNotEqual(sealed[0x100:0x110], b"\xab" * 16)
@@ -387,25 +420,61 @@ class AConsoleSOwnSecrets(unittest.TestCase):
         It matters because it means a rebuilt image carries the console's own keyvault
         bytes exactly, with nothing taken from the dump to make it so.
         """
-        one = self.a_keyvault()
+        one = a_keyvault()
         self.assertEqual(one.sealed(self.KEY), one.sealed(self.KEY))
         other = bytes(byte ^ 1 for byte in self.KEY)
         self.assertNotEqual(one.sealed(self.KEY)[:0x10], one.sealed(other)[:0x10])
 
     def test_the_wrong_key_opens_it_to_nothing_that_reads_as_a_serial(self):
-        sealed = self.a_keyvault().sealed(self.KEY)
+        sealed = a_keyvault().sealed(self.KEY)
         wrong = Keyvault.opened(sealed, bytes(byte ^ 1 for byte in self.KEY))
         self.assertFalse(wrong.looks_opened)
 
     def test_the_two_kinds_the_original_names(self):
-        self.assertTrue(self.a_keyvault(hashed=True).hashed)
-        self.assertFalse(self.a_keyvault(hashed=False).hashed)
+        self.assertTrue(a_keyvault(hashed=True).hashed)
+        self.assertFalse(a_keyvault(hashed=False).hashed)
 
     def test_all_ones_is_no_hash_either(self):
         """Its own test: type 2 the moment a word is neither zero nor all ones."""
         plain = bytearray(0x4000)
         plain[0x1DF8:0x1E08] = b"\xff" * 16
         self.assertFalse(Keyvault(bytes(plain)).hashed)
+
+
+class AKeyvaultHandedIn(unittest.TestCase):
+    """What a build asks of a keyvault it did not seal: is it this console's."""
+
+    KEY = AConsoleSOwnSecrets.KEY
+    OTHER = bytes(byte ^ 1 for byte in KEY)
+
+    def test_one_sealed_under_this_key_is_opened(self):
+        sealed = a_keyvault().sealed(self.KEY)
+        own = Keyvault.opened_if_own(sealed, self.KEY)
+        self.assertEqual(own.plain[0x10:], a_keyvault().plain[0x10:])
+
+    def test_one_sealed_under_another_is_none(self):
+        """"keyvault decrypt failed, discarding" -- one bit of the key is enough."""
+        sealed = a_keyvault().sealed(self.OTHER)
+        self.assertIsNone(Keyvault.opened_if_own(sealed, self.KEY))
+
+    def test_a_kv_bin_that_is_not_sealed_under_this_key_is_taken_as_plaintext(self):
+        plain = a_keyvault().plain
+        with self.assertLogs("xebuild.image.keyvault", "WARNING"):
+            self.assertEqual(Keyvault.handed_in(plain, self.KEY).plain, plain)
+        sealed = a_keyvault().sealed(self.KEY)
+        self.assertEqual(Keyvault.handed_in(sealed, self.KEY).serial, "123456789012")
+
+    def test_the_head_and_the_dvd_key_are_replaced_and_nothing_else(self):
+        one = a_keyvault()
+        headed = one.with_head(b"HEADHEAD")
+        self.assertEqual(headed.head, b"HEADHEAD")
+        self.assertEqual(headed.plain[:0x10] + headed.plain[0x18:],
+                         one.plain[:0x10] + one.plain[0x18:])
+        keyed = one.with_dvd_key(b"\x42" * 16)
+        self.assertEqual(keyed.dvd_key, b"\x42" * 16)
+        self.assertEqual(len(keyed.plain), len(one.plain))
+        self.assertEqual(keyed.plain[:0x100] + keyed.plain[0x110:],
+                         one.plain[:0x100] + one.plain[0x110:])
 
 
 class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
@@ -503,6 +572,61 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         board, _ = for_name("corona4g")
         flat = b"\x5a" * 0x8000
         self.assertEqual(order.logical(flat, board.flash), flat)
+
+
+class BlocksStandingInWhenAnImageIsWritten(unittest.TestCase):
+    """`order.stand_ins`, the other direction from `logical`."""
+
+    helper = PuttingBlocksBackWhereTheyBelong
+
+    def setUp(self):
+        self.made = self.helper()
+        self.raw, self.flash, self.step, self.per = self.made.a_dump()
+
+    def test_a_dump_with_nothing_written_off_moves_nothing(self):
+        self.assertEqual(order.stand_ins(self.raw, self.flash, total=8), {})
+
+    def test_a_block_with_a_stand_in_already_keeps_it(self):
+        raw = self.made.mark_bad(self.raw, self.flash, 3, self.step, self.per)
+        raw = self.made.stand_in(raw, self.flash, 3, 6, self.step, self.per)
+        self.assertEqual(order.stand_ins(raw, self.flash, total=8), {3: 6})
+
+    def test_otherwise_the_highest_free_block_counting_down(self):
+        """"block 0x100 had no remap, assigning remap block 0x3ff", then 0x3fe."""
+        raw = self.made.mark_bad(self.raw, self.flash, 2, self.step, self.per)
+        broken = bytearray(raw)
+        broken[(3 * self.per + 1) * self.step + 100] ^= 0x01
+        self.assertEqual(order.stand_ins(bytes(broken), self.flash, total=8),
+                         {2: 7, 3: 6})
+        self.assertEqual(order.stand_ins(bytes(broken), self.flash, ecd=False,
+                                         total=8), {2: 7})
+
+    def test_no_block_left_is_refused(self):
+        raw = self.made.mark_bad(self.raw, self.flash, 2, self.step, self.per)
+        with self.assertRaises(ValueError):
+            order.stand_ins(raw, self.flash, total=0)
+
+
+class AMemoryUnitInADump(unittest.TestCase):
+    """`Dump.memory_unit`, asked of the least a dump can be: its flash and spares."""
+
+    def a_dump(self, name: str, kind: int):
+        board, _ = for_name(name)
+        spare = board.flash.spare
+        spares = [spare.write(0, 1, kind if page == 5 else 0x2A) for page in range(8)]
+        return types.SimpleNamespace(flash=board.flash,
+                                     image=types.SimpleNamespace(spares=spares))
+
+    def test_a_page_of_kind_1_to_0x29_on_a_big_block_chip_is_one(self):
+        """Blocks 0x10 to 0x15B inclusive, of 0x20000 each."""
+        for kind in (1, 0x29):
+            with self.subTest(kind=kind):
+                self.assertEqual(Dump.memory_unit.fget(self.a_dump("jasperbb", kind)),
+                                 (0x200000, 0x2B80000))
+
+    def test_nothing_else_is(self):
+        self.assertIsNone(Dump.memory_unit.fget(self.a_dump("jasperbb", 0x2A)))
+        self.assertIsNone(Dump.memory_unit.fget(self.a_dump("trinity", 1)))
 
 
 def an_emmc_image(blobs=None, files=None) -> bytes:
@@ -624,30 +748,70 @@ class TheSettingsBlockSChecksum(unittest.TestCase):
     def test_a_block_is_sound_when_its_head_holds_the_complement_of_the_sum(self):
         block = bytearray(0x400)
         block[0x10:0x110] = bytes(range(0x100))
-        head = dumps.checksum(block)
+        head = settings.checksum(block)
         block[:2] = head.to_bytes(2, "little")
-        self.assertEqual(int.from_bytes(block[:2], "little"), dumps.checksum(block))
+        self.assertEqual(int.from_bytes(block[:2], "little"), settings.checksum(block))
 
     def test_the_span_ends_at_0x10c(self):
         """Measured: 0x10B changes it, 0x10C does not, both checked on the original."""
         block = bytearray(0x400)
         block[0x10:] = bytes(0x3F0)
-        was = dumps.checksum(block)
+        was = settings.checksum(block)
         inside = bytearray(block)
         inside[0x10B] ^= 0xFF
-        self.assertNotEqual(dumps.checksum(inside), was)
+        self.assertNotEqual(settings.checksum(inside), was)
         outside = bytearray(block)
         outside[0x10C] ^= 0xFF
-        self.assertEqual(dumps.checksum(outside), was)
+        self.assertEqual(settings.checksum(outside), was)
 
     def test_the_bytes_before_the_span_are_outside_it(self):
         """Which is why the zero pair and the 05 21 beside it can be overwritten."""
         block = bytearray(0x400)
-        was = dumps.checksum(block)
+        was = settings.checksum(block)
         for at in (0x02, 0x08, 0x0E, 0x0F):
             other = bytearray(block)
             other[at] ^= 0xFF
-            self.assertEqual(dumps.checksum(other), was)
+            self.assertEqual(settings.checksum(other), was)
+
+
+class TheSettingsBlockItself(unittest.TestCase):
+    """`SmcConfig`: finding a sound block and writing the options into it."""
+
+    def a_block(self) -> bytes:
+        block = bytearray(0x400)
+        block[0x10:0x110] = bytes(range(0x100))
+        block[:2] = settings.checksum(block).to_bytes(2, "little")
+        return bytes(block)
+
+    def test_the_first_sound_block_is_found_a_0x400_step_at_a_time(self):
+        """As J-Runner hands it over: 0x10000 of copies, the good one at 0xC000."""
+        region = b"\xff" * 0xC000 + self.a_block() + b"\xff" * 0x3C00
+        found = settings.SmcConfig.found_in(region)
+        self.assertEqual(found.block, self.a_block())
+        self.assertIsNone(settings.SmcConfig.found_in(b"\xff" * 0x10000))
+
+    def test_nothing_changed_goes_back_as_it_came_head_and_all(self):
+        """Even a head that does not sum: the original leaves such a block alone."""
+        stale = b"\x00\x00" + self.a_block()[2:]
+        one = settings.SmcConfig(stale)
+        one.set_fan("cpu", 0)
+        one.set_temperature("cputemp", 0)
+        one.set_regions()
+        self.assertEqual(one.sealed(), stale)
+
+    def test_the_fields_land_where_measured_and_the_head_follows(self):
+        one = settings.SmcConfig(self.a_block())
+        one.set_fan("gpu", 60)
+        one.set_temperature("overedramtemp", 90)
+        one.set_mac(bytes.fromhex("0022480a0b0c"))
+        one.set_regions(av=0x1000, game=0x02FE, dvd=3)
+        out = one.sealed()
+        self.assertEqual(out[0x12], 0x80 | 60)
+        self.assertEqual(out[0x2E], 90)
+        self.assertEqual(out[0x220:0x226], bytes.fromhex("0022480a0b0c"))
+        self.assertEqual(out[0x22A:0x22E], bytes.fromhex("100002fe"))
+        self.assertEqual(out[0x237], 3)
+        self.assertTrue(settings.SmcConfig(out).sound)
 
 
 class TheMapATableRecords(unittest.TestCase):

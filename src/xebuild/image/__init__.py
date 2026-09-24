@@ -8,7 +8,7 @@ what is in a dump needs no builder to do it.
 `Dump` is an image that came off a console, which is a narrower thing: its blocks are
 put back in the order the console reads them, and it answers for the material only that
 console has. `Anchor` is how an eMMC image says where its own bookkeeping went, having
-no spare bytes to say it in.
+no spare bytes to say it in. `settings` is the SMC's settings block both keep.
 """
 
 from .anchor import Anchor

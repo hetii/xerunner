@@ -41,6 +41,7 @@ says so and the caller decides.
 from __future__ import annotations
 
 import struct
+import time
 
 from ..boards.flash import BLOCK, PAGE
 
@@ -108,8 +109,18 @@ class Entry:
 
     @property
     def stamp(self) -> int:
-        """When it was written, in whatever the console counts in."""
+        """When it was written, as a FAT date and time -- see `fat_time`."""
         return int.from_bytes(self.row[0x1C:0x20], "big")
+
+    @staticmethod
+    def fat_time(seconds: int) -> int:
+        """A moment in UTC as an entry keeps it: FAT's date in the top sixteen bits and
+        its time, seconds counted in twos, in the bottom -- which is how every reference
+        image's entries read."""
+        at = time.gmtime(seconds)
+        date = ((at.tm_year - 1980) << 9) | (at.tm_mon << 5) | at.tm_mday
+        clock = (at.tm_hour << 11) | (at.tm_min << 5) | (at.tm_sec // 2)
+        return (date << 16) | clock
 
     def __repr__(self) -> str:
         return "Entry(%r, block %#x, %#x bytes%s)" % (

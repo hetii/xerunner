@@ -9,6 +9,7 @@ given the release's own images, this says exactly what the original said about e
 import binascii
 import unittest
 
+from xebuild.crypto import smc as cipher
 from xebuild.smc import CLEAN, MOTHERBOARDS, Smc
 
 
@@ -70,3 +71,49 @@ class WhatAnSmcSaysAboutItself(unittest.TestCase):
     def test_patching_one_that_has_no_limit_changes_nothing(self):
         one = Smc(an_smc(limit_at=-1))
         self.assertEqual(one.patched(), one.plain)
+
+
+class AnSmcHandedIn(unittest.TestCase):
+    """`handed_in`: the original's test at 0x41BABC, four zeros at the end or not."""
+
+    def test_one_in_the_clear_is_taken_as_it_stands(self):
+        plain = an_smc()
+        self.assertEqual(Smc.handed_in(plain).plain, plain)
+
+    def test_a_sealed_one_is_opened(self):
+        plain = an_smc()
+        opened = Smc.handed_in(cipher.sealed(plain, b"\x12\x34\x56\x78"))
+        self.assertEqual(opened.plain[4:], plain[4:])
+
+    def test_one_that_does_not_open_to_four_zeros_is_none(self):
+        noise = bytes((at * 37 + 11) & 0xFF for at in range(0x3000))
+        self.assertIsNone(Smc.handed_in(noise[:-4] + b"\x01\x02\x03\x04"))
+
+    def test_nothing_but_one_byte_is_blank(self):
+        self.assertTrue(Smc(bytes(0x3000)).blank)
+        self.assertTrue(Smc(b"\xff" * 0x3000).blank)
+        self.assertFalse(Smc(an_smc()).blank)
+
+
+class CleanForAnImageType(unittest.TestCase):
+    """`clean_for`, the classifier at 0x40BD80, for an SMC none of the stock ones."""
+
+    def a_marked_smc(self, limit: bool) -> Smc:
+        out = bytearray(an_smc(limit_at=0x400 if limit else -1))
+        out[0x800:0x803] = bytes.fromhex("78bab6")
+        return Smc(bytes(out))
+
+    def test_by_type_with_the_reset_limit_and_no_mark(self):
+        one = Smc(an_smc(limit_at=0x400))
+        self.assertEqual([one.clean_for(n) for n in (1, 2, 3, 4, 5, 6)],
+                         [True, True, True, False, False, True])
+
+    def test_by_type_with_neither(self):
+        one = Smc(an_smc(limit_at=-1))
+        self.assertEqual([one.clean_for(n) for n in (1, 2, 3, 4, 5, 6)],
+                         [False, True, False, False, False, False])
+
+    def test_a_hack_mark_is_what_jtag_asks_about(self):
+        self.assertFalse(self.a_marked_smc(limit=True).clean_for(2))
+        self.assertTrue(self.a_marked_smc(limit=True).clean_for(3))
+        self.assertFalse(self.a_marked_smc(limit=True).clean_for(1))

@@ -54,32 +54,13 @@ from __future__ import annotations
 
 import logging
 
+from ..boards.spare import PAGE
 from .image import Image
 from .keyvault import Keyvault
 from .order import logical
+from .settings import CONFIG_LENGTH, SmcConfig
 
 logger = logging.getLogger(__name__)
-
-# The settings block, and the region of it the head's word is computed over.
-CONFIG_LENGTH = 0x400
-SUMMED = (0x10, 0x10C)
-
-
-def checksum(block: bytes) -> int:
-    """The word a settings block's head has to carry for the original to accept it.
-
-    One's complement of the sum of its bytes from 0x10 to 0x10C, and the head holds it
-    little-endian -- the SMC is a little-endian device in a big-endian console.
-
-    Measured rather than assumed, and the span is exact. Three real blocks agree. A
-    byte changed at 0x10B makes the original say "not found!"; the same change at 0x10C,
-    at the MAC address in 0x220, or at the block's very last byte leaves it accepted.
-    Nothing else is checked: change a byte inside the span, recompute this, and the
-    block is accepted again. The bytes from 0x02 to 0x10 are outside it, which is why
-    the zero pair and the `05 21` beside it can be overwritten with no complaint.
-    """
-    return (~sum(bytes(block)[SUMMED[0] : SUMMED[1]])) & 0xFFFF
-
 
 class Dump:
     """One console's flash, with its blocks in the order the console reads them."""
@@ -123,10 +104,7 @@ class Dump:
     @property
     def smc_config_ok(self) -> bool:
         """Whether the settings block is one the original would use."""
-        block = self.smc_config
-        return len(block) == CONFIG_LENGTH and (
-            int.from_bytes(block[:2], "little") == checksum(block)
-        )
+        return SmcConfig(self.smc_config).sound
 
     @property
     def statistics(self) -> bytes:
@@ -143,6 +121,25 @@ class Dump:
         """
         at, length = self.flash.smc_config - 2 * self.flash.round_to, 0x1000
         return self.image.flat[at : at + length]
+
+    @property
+    def memory_unit(self) -> tuple | None:
+        """Where the memory unit a big block console keeps in its first 64 MB lies, as
+        `(start, end)` of the flat image, or None where this dump carries none.
+
+        The range is the author's own, in the ini xeBuild's source ships: "blocks 0x10
+        through 0x15B (inclusive) ... when NAND MU data is detected only". The blocks
+        are the chip's 0x20000, so 0x200000 up to 0x2B80000 -- the gap between the
+        bootloaders and the filesystem. Detected, as at the original's 0x415B8A read by
+        x360mcp, by a page whose kind is 1 to 0x29, which only a big block chip has.
+        """
+        spare = self.flash.spare
+        if spare is None or spare.pages_a_block != 256:
+            return None
+        if not any(0 < spare.kind(one) <= 0x29 for one in self.image.spares):
+            return None
+        step = spare.pages_a_block * PAGE
+        return 0x10 * step, 0x15C * step
 
     @property
     def manufacturing_written(self) -> bool:

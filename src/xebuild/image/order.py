@@ -105,6 +105,37 @@ def replacements(raw: bytes, flash) -> dict:
     return out
 
 
+def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
+    """Which block stands in for each one this dump's chip has written off, for an
+    image about to be written -- the other direction from `logical`.
+
+    The written-off are those marked bad and, with `ecd`, those holding a page whose
+    code no longer matches. Each goes to the block the dump already has standing in
+    for it, and otherwise to the highest one nothing else holds, counting down from
+    `total` -- "block 0x100 had no remap, assigning remap block 0x3ff". Measured on a
+    dump with one block marked bad and one failing its code: 0x3FF and 0x3FE, in that
+    order.
+    """
+    bad = set(marked_bad(raw, flash))
+    if ecd:
+        bad |= set(failing(raw, flash))
+    standing = replacements(raw, flash)
+    taken = bad | set(standing.values())
+    free, out = total - 1, {}
+    for block in sorted(bad):
+        stand_in = standing.get(block)
+        if stand_in is None:
+            while free in taken:
+                free -= 1
+            if free < 0:
+                raise ValueError("this flash has no good block left to stand in for "
+                                 "block %#x" % block)
+            stand_in = free
+            taken.add(stand_in)
+        out[block] = stand_in
+    return out
+
+
 def logical(raw: bytes, flash, remap: bool = True, ecd: bool = True) -> bytes:
     """The dump with every replaced block's contents back where they belong.
 

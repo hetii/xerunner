@@ -53,9 +53,13 @@ nothing about it has to be carried from the dump.
 
 from __future__ import annotations
 
+import logging
+
 from ..crypto import keys, rc4
 
 NONCE = 0x10
+
+logger = logging.getLogger(__name__)
 
 
 class Keyvault:
@@ -74,6 +78,47 @@ class Keyvault:
         sealed = bytes(sealed)
         body = rc4.rc4(keys.derive(cpu_key, sealed[:NONCE]), sealed[NONCE:])
         return cls(sealed[:NONCE] + body)
+
+    @classmethod
+    def opened_if_own(cls, sealed: bytes, cpu_key: bytes) -> Keyvault | None:
+        """The keyvault in these bytes if this key is the one they were sealed under.
+
+        Its nonce is what its plaintext derives under the right key and nothing else,
+        which is the original's own check -- "keyvault decrypt failed, discarding",
+        measured with a CPU key one bit wrong.
+        """
+        vault = cls.opened(sealed, cpu_key)
+        if vault.sealed(cpu_key)[:NONCE] != bytes(sealed)[:NONCE]:
+            return None
+        return vault
+
+    @classmethod
+    def handed_in(cls, given: bytes, cpu_key: bytes) -> Keyvault:
+        """A `kv.bin` handed in beside a build, sealed or in the clear.
+
+        Sealed under this key, it is opened; anything else is taken as plaintext, which
+        is what J-Runner hands over for a dead NAND and what the original says of it:
+        "kv.bin appears to be decrypted already, but the hash does not match the CPU
+        key". Either way the first sixteen bytes are a nonce, stale in a clear copy.
+        """
+        own = cls.opened_if_own(given, cpu_key)
+        if own is not None:
+            return own
+        logger.warning("kv.bin appears to be decrypted already, but the hash does not "
+                       "match the CPU key")
+        return cls(given)
+
+    @property
+    def head(self) -> bytes:
+        """The eight bytes a build puts in afresh at 0x10 -- see `with_head` -- and the
+        head `extended.bin` takes as its own."""
+        return self.plain[NONCE:NONCE + 8]
+
+    def with_head(self, head: bytes) -> Keyvault:
+        return Keyvault(self.plain[:NONCE] + bytes(head)[:8] + self.plain[NONCE + 8:])
+
+    def with_dvd_key(self, key: bytes) -> Keyvault:
+        return Keyvault(self.plain[:0x100] + bytes(key) + self.plain[0x110:])
 
     def sealed(self, cpu_key: bytes) -> bytes:
         """Back to the bytes an image carries, nonce and all.
