@@ -16,8 +16,18 @@ from __future__ import annotations
 
 from .base import BaseConfig
 
-BUTTONS = ("power", "eject", "remopower", "remox", "winbutton", "wirelessx", "kiosk",
-           "wiredx", "wiredxb1", "wiredxb2", "wiredxb3", "wiredxf1", "wiredxf2")
+# Every power-on reason the original takes, and the byte it writes for each into the
+# image's header. The byte is a device in the high nibble and a button in the low one,
+# which is why `remopower` and `remox` share 0x2_; it is written down as measured rather
+# than as a rule. x360mcp read all thirteen out of the original's comparison chain at
+# 0x425C7E, after measuring eight of them a build at a time. `wiredx` is a name of its
+# own and not a shorthand: the chain compares six characters, so it takes `wiredxb3`'s
+# value.
+BUTTONS = {
+    "power": 0x11, "eject": 0x12, "remopower": 0x20, "remox": 0x22, "winbutton": 0x24,
+    "kiosk": 0x41, "wirelessx": 0x55, "wiredxf1": 0x56, "wiredxf2": 0x57,
+    "wiredxb2": 0x58, "wiredxb1": 0x59, "wiredx": 0x5A, "wiredxb3": 0x5A,
+}
 
 
 class OptionsConfig(BaseConfig):

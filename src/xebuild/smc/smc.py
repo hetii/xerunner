@@ -73,6 +73,16 @@ CLEAN = {
 # bytes of the six are zeroed to lift it.
 LIMIT = re.compile(rb"\x05.\xe5.\xb4\x05", re.DOTALL)
 
+# What a hacked SMC carries, searched over the whole image: two runs the original builds
+# on the stack at 0x40BD8F and 0x40BD9E before its classifier looks for them.
+HACK_MARKS = (bytes.fromhex("78bab6"), bytes.fromhex("d000001b"))
+
+# The two routines `with_patch` replaces, and what goes in their place.
+PATCHES = {
+    "smcnoeject": (bytes.fromhex("a290b322"), bytes.fromhex("c3220000")),
+    "smcnoblink": (bytes.fromhex("a2cf92e0a2ce22"), bytes.fromhex("d3220000000000")),
+}
+
 
 class Smc:
     """One SMC image, in the clear."""
@@ -130,6 +140,38 @@ class Smc:
         if at < 0:
             return self.plain
         return self.plain[:at] + bytes(2) + self.plain[at + 2 :]
+
+    @property
+    def marked(self) -> bool:
+        """Whether either of the two marks a hacked SMC carries is anywhere in it."""
+        return any(mark in self.plain for mark in HACK_MARKS)
+
+    def with_patch(self, name: str) -> bytes:
+        """This image with `smcnoeject` or `smcnoblink` applied, or as it stands.
+
+        The core is an 8051, and each patch replaces a short routine found by what it
+        looks like -- the offset differs between versions and the sequence does not:
+
+            smcnoeject   A2 90 B3 22          MOV C,90h.0 / CPL C / RET
+                     ->  C3 22 00 00          CLR C / RET: the button never reads
+                     pressed
+            smcnoblink   A2 CF 92 E0 A2 CE 22 ...
+                     ->  D3 22 00 00 00 00 00 SETB C / RET: the ring blinks once
+
+        Measured by x360mcp on the nineteen images the original ships: the eject routine
+        is in every one exactly once, and the blink routine in sixteen -- not in the
+        three Corona images nor Winchester, where the original warns "could not patch
+        SMC to disable ROL center blinking" and carries on, which is what this does too.
+        A signature found twice is refused: patching one would be a guess at which.
+        """
+        wanted, replacement = PATCHES[name]
+        first = self.plain.find(wanted)
+        if first < 0:
+            return self.plain
+        if self.plain.find(wanted, first + 1) >= 0:
+            raise ValueError("the %s signature is in this SMC twice" % name)
+        return (self.plain[:first] + replacement
+                + self.plain[first + len(replacement):])
 
     def __repr__(self) -> str:
         return "Smc(%s, %08x, %s)" % (
