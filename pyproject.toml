@@ -29,3 +29,6 @@ select = ["E", "W", "F", "I", "B", "C4", "SIM", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 # A package's `__init__.py` re-exports on purpose, so every name in it reads as unused.
 "**/__init__.py" = ["F401"]
+
+[project.scripts]
+xebuild = "xebuild.cli:main"
