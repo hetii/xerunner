@@ -37,15 +37,22 @@ class ReleaseConfig(BaseConfig):
         )
 
     @property
-    def append(self) -> str | None:
-        """A file whose contents are appended to the hypervisor and kernel patches."""
+    def append(self) -> tuple:
+        """Patch files, by name, whose entries are added to the image's patch list.
+
+        `-a` may be given more than once and each one counts: x360mcp measured `-a
+        xl_usb -a hvFixKeys` against the two alone. So this is a tuple, in the order
+        given, and a single name is a tuple of one.
+        """
         return self["append"]
 
     @append.setter
     def append(self, given):
-        self["append"] = (
-            None if given is None else self.check_name("append", given)
-        )
+        if given is None:
+            self["append"] = ()
+            return
+        names = [given] if isinstance(given, str) else list(given)
+        self["append"] = tuple(self.check_name("append", one) for one in names)
 
     @property
     def firmware_ext(self) -> str | None:

@@ -62,6 +62,29 @@ class Build:
         self.material = material
         self.release = release
         self._dump = None
+        self._recipe = None
+
+    @property
+    def recipe(self):
+        """The release's file list for this image type, read once.
+
+        `firmware_ext` goes into its name -- `-i WB` reads `_glitch2_WB.ini`, which the
+        original says when it is not there: "could not open '17559/_glitch2_WB.ini'".
+        """
+        if self._recipe is None:
+            self._recipe = self.release.recipe(self.image_type,
+                                               self.config.firmware_ext or "")
+        return self._recipe
+
+    @property
+    def stage_list(self) -> tuple:
+        """What the file list names for this console's chain and update slot.
+
+        `section_ext` goes into the section's name -- `-r WB` on a corona reads
+        `[coronabl_WB]` -- and, measured, into the patch file's as well: the same build
+        reads `patches_g2corona_WB.bin`. See `patches`.
+        """
+        return self.recipe.stages(self.console, self.config.section_ext or "")
 
     @property
     def console(self):
@@ -308,7 +331,27 @@ class Build:
             raise ValueError("this release ships no patch file for a %s %s image"
                              % (self.console.name, self.image_type.name))
         last = patches.set_raw(len(patches.sets) - 1)
-        return (self._slot_lead() + last).ljust(block, b"\x00")
+        return (self._slot_lead() + self._with_addons(last)).ljust(block, b"\x00")
+
+    def _with_addons(self, listed: bytes) -> bytes:
+        """The slot's patch set with every `-a` file's entries spliced in.
+
+        Measured by x360mcp, building with `-a` and without: the entries go in behind
+        the set's own, before its terminator, one terminator closes the lot, and the
+        word after it says how many bytes the files brought -- their own lengths added
+        up, 00 00 0C F8 for `xl_usb`'s 3320 and 00 00 0D 14 with `hvFixKeys` as well.
+        Nothing else in the image moves. A file is `bin/<name>.bin` of the release.
+        """
+        if not self.config.append:
+            return listed
+        end = b"\xff\xff\xff\xff"
+        body = listed[:-4] if listed.endswith(end) else listed
+        brought = 0
+        for name in self.config.append:
+            extra = self.release.option(name).raw
+            brought += len(extra)
+            body += extra[:-4] if extra.endswith(end) else extra
+        return body + end + brought.to_bytes(4, "big")
 
     def _slot_lead(self) -> bytes:
         """What sits in front of the patch set: sixteen bytes of 0xFF, or the fuses.
@@ -440,7 +483,7 @@ class Build:
         chain exactly.
         """
         out = []
-        for one in self.release.recipe(self.image_type).stages(self.console):
+        for one in self.stage_list:
             if one.absent or one.kind not in CHAIN_KINDS:
                 continue
             out.append(one)
@@ -594,7 +637,7 @@ class Build:
     def _update_files(self) -> tuple:
         """The CF and the CG the file list names, the first of each."""
         found = {}
-        for one in self.release.recipe(self.image_type).stages(self.console):
+        for one in self.stage_list:
             if one.kind in ("CF", "CG") and one.kind not in found:
                 found[one.kind] = one
         if set(found) != {"CF", "CG"}:
@@ -615,7 +658,7 @@ class Build:
         leaves it; its list states a checksum of zero, which is how it says the file is
         optional.
         """
-        recipe = self.release.recipe(self.image_type)
+        recipe = self.recipe
         out = []
         for listed in recipe.firmware:
             body = self.release.firmware(listed)
@@ -813,6 +856,13 @@ class Build:
             out.mark(at, span)
         if flash.anchors:
             anchors.lay(out, fs.table_at, placed)
+        for name, at in self.config.raw_patches:
+            # "[rawpatch]": raw bytes into the flat image, "just before combining spare
+            # and finalizing ecc". The spare's fields are already settled by then, so a
+            # patch over erased flash leaves its pages' fields erased and only the code
+            # follows the new bytes -- measured at 0xC4200. Relative to the release, as
+            # the original looks for the file.
+            out.put(at, self.release.raw_file(name))
         return out
 
     def _fs_fields(self, slots: int) -> bytes:
@@ -929,7 +979,7 @@ class Build:
         0x0760 for the release measured, and the page of every reference image says the
         same as the CE the release ships.
         """
-        for one in self.release.recipe(self.image_type).stages(self.console):
+        for one in self.stage_list:
             if one.kind == "CE":
                 return Stage(self.release.bootloader(one), 0).build
         raise ValueError("this release names no CE for a %s %s image"
@@ -946,7 +996,8 @@ class Build:
         agree.
         """
         fat = self.console.fat and self.image_type.name == "glitch"
-        return self.release.patches(self.image_type, "fat" if fat else self.console)
+        return self.release.patches(self.image_type, "fat" if fat else self.console,
+                                    self.config.section_ext or "")
 
     def header(self, slots: int, ce_version: int, smc_length: int) -> bytes:
         """The image's first page, built from named fields rather than copied.

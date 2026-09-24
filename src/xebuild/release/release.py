@@ -128,6 +128,13 @@ class Release:
                 return self._read(path)
         return None
 
+    def raw_file(self, name: str) -> bytes:
+        """A file `-8` names, which the original looks for relative to the release."""
+        path = name if os.path.isabs(name) else self._beside(self.where, name)
+        if path is None or not os.path.isfile(path):
+            raise ValueError("could not load [rawpatch] file '%s'" % name)
+        return self._read(path)
+
     def option(self, name: str) -> Patches:
         """The patch set one option carries, as `bin/<name>.bin`."""
         return Patches(self._read(self.where, "bin", "%s.bin" % name))
