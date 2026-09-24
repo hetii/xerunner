@@ -69,6 +69,7 @@ class Build:
         self.material = material
         self.release = release
         self._dump = None
+        self._raw = None
         self._recipe = None
         self._walked = None
         self._drawn = {}
@@ -136,33 +137,127 @@ class Build:
                                "(%#x bytes), ignoring", len(raw))
                 self._dump = False
                 return None
+            why = self._faulty(raw, own.flash)
+            if why:
+                logger.warning("%s, discarding nanddump.bin", why)
+                self._dump = False
+                return None
             bigffs = self.config.bigffs if own is self.console else False
             self._dump = Dump(raw, own, bigffs, remap=not self.config.noremap,
                               ecd=not self.config.noecdremap)
         return self._dump or None
 
+    def _faulty(self, raw: bytes, flash) -> str:
+        """Why the original would throw this dump away, or nothing.
+
+        Thrown away, not refused: the build goes on as it does with no dump at all,
+        which without a `smc.bin`, a `kv.bin` and a `smc_config.bin` beside it ends in
+        "critical bootloader files are missing". Each cause below was measured on the
+        bench console's dump with that one fault put in: the original discarded it, and
+        with the console's own files beside the build made the image this makes.
+
+        **The header, as its loader checks it at 0x416D1D**, every address against the
+        length of the file as it was handed over: the magic; the entry point and the
+        slot offset at 0x08 and 0x0C; a keyvault length over 0x8000 at 0x60; the update
+        slot at 0x64 below the offset at 0x0C or past the file -- "SysUpdateAddr is
+        malformed"; the keyvault, the filesystem and the SMC past the file at 0x6C,
+        0x70 and 0x7C; an SMC length at 0x78 other than 0x3000 or 0x3800. Three more
+        fields it only complains about and goes on, measured too: a slot count at 0x68
+        other than 2, a settings block address at 0x74 other than 0, a keyvault version
+        at 0x6A other than 0x0712.
+
+        **Block 0 marked bad** -- "NAND dump does not appear to have a good block at
+        block 0, discarding dump!".
+
+        **More than 32 blocks to move** -- "MAX REMAPS of 32 exceeded, remapping
+        disabled and image rejected as faulty!". Its table holds 32 (0x479F78); a block
+        failing its code takes a place in it as a block marked bad does, unless
+        `noecdremap` leaves such blocks alone, and `noremap` changes nothing here --
+        all three measured.
+        """
+        head = bytes(raw[:0x80])
+        whole = len(self.material.dump) if self.material.dump is not None else len(raw)
+
+        def word(at: int) -> int:
+            return int.from_bytes(head[at:at + 4], "big")
+
+        # The original's own words for each, which name the fields its way.
+        if head[:2] != b"\xff\x4f":
+            return "flash header magic is incorrect"
+        for name, at in (("Entry", 0x08), ("Size", 0x0C)):
+            if word(at) > whole:
+                return "flash header %s is too large" % name
+        if word(0x60) > 0x8000:
+            return "flash header KeyVaultSize is too large"
+        if word(0x64) > whole or word(0x0C) > word(0x64):
+            return "flash header SysUpdateAddr is malformed"
+        if int.from_bytes(head[0x68:0x6A], "big") != 2:
+            logger.warning("flash header SysUpdateCount is not 2, continuing anyway")
+        if int.from_bytes(head[0x6A:0x6C], "big") != 0x0712:
+            logger.warning("flash header KeyVaultVersion is not 0x0712, continuing "
+                           "anyway")
+        for name, at in (("KeyVaultAddr", 0x6C), ("FileSystemAddr", 0x70)):
+            if word(at) > whole:
+                return "flash header %s is too large" % name
+        if word(0x74):
+            logger.warning("flash header SmcConfigAddr is not 0, continuing anyway")
+        if word(0x78) & ~0x800 != 0x3000:
+            return "flash header SmcBootSize is not 0x3000 or 0x3800"
+        if word(0x7C) > whole:
+            return "flash header SmcBootAddr is too large"
+        if flash.spare is None:
+            return ""
+        per = flash.spare.pages_a_block * (PAGE + flash.spare.length)
+        if order.marked_bad(raw[:per], flash):
+            return "NAND dump does not appear to have a good block at block 0"
+        moved = set(order.marked_bad(raw, flash))
+        if not self.config.noecdremap:
+            moved |= set(order.failing(raw, flash))
+        if len(moved) > 32:
+            return ("MAX REMAPS of 32 exceeded (%d), remapping disabled and image "
+                    "rejected as faulty" % len(moved))
+        return ""
+
     @property
     def dump_raw(self) -> bytes | None:
-        """The dump's bytes as the build reads them: a big block overdump cut to 64 MB.
+        """The dump's bytes as the build reads them: anything past a flash's length cut.
 
-        A 256 or 512 MB part read whole is longer than any image, and the original
-        takes the first 64 MB of it when its first page carries a valid code for a big
-        block chip -- "First page contains a valid ECC, assuming this is a big block
-        flash overdump and truncating load size to 0x4200000 bytes". Measured with a
-        256 MB dump: both tools then build the same image as from its first 64 MB.
+        The original's rule, read out of its loader at 0x417171 and measured on each
+        branch. A dump longer than 48 MB is an eMMC one cut to 48 MB when it holds
+        `FATX` right there -- "FATX magic found, truncating load size to 0x3000000
+        bytes for mmc consoles" -- or when its first page carries no valid code, which
+        a NAND dump's always does: "First page does not contain a valid ECC, assuming
+        this is an mmc dump". Otherwise it is a big block part read whole, 256 or 512
+        MB, cut to its first 64 MB -- "assuming this is a big block flash overdump and
+        truncating load size to 0x4200000 bytes". Measured: an eMMC image padded to
+        64 MB with and without `FATX`, and a 256 MB dump, each building the image its
+        first part does.
         """
-        raw = self.material.dump
-        if raw is None:
-            return None
-        for board in boards.ALL:
-            flash = board.flash
-            if (flash.spare is None or flash.spare.pages_a_block != 256
-                    or len(raw) <= flash.raw_length):
-                continue
-            if flash.spare.ecc_ok(raw[:PAGE + flash.spare.length]):
-                logger.info("assuming a big block flash overdump; reading its first "
-                            "%#x bytes", flash.raw_length)
-                return raw[:flash.raw_length]
+        if self._raw is not None:
+            return self._raw or None
+        self._raw = self._cut(self.material.dump) or b""
+        return self._raw or None
+
+    @staticmethod
+    def _cut(raw: bytes | None) -> bytes | None:
+        """`dump_raw`'s rule, applied once."""
+        if raw is None or len(raw) <= 0x3000000:
+            return raw
+        # The code sits in the same place in every spare layout.
+        spare = next(one.flash.spare for one in boards.ALL
+                     if one.flash.spare is not None)
+        if raw[0x3000000:0x3000004] == b"FATX":
+            logger.info("FATX magic found, truncating load size to 0x3000000 bytes for "
+                        "mmc consoles")
+            return raw[:0x3000000]
+        if not spare.ecc_ok(raw[:PAGE + spare.length]):
+            logger.info("First page does not contain a valid ECC, assuming this is an "
+                        "mmc dump and truncating load size to 0x3000000 bytes")
+            return raw[:0x3000000]
+        if len(raw) > 0x4200000:
+            logger.info("First page contains a valid ECC, assuming this is a big block "
+                        "flash overdump and truncating load size to 0x4200000 bytes")
+            return raw[:0x4200000]
         return raw
 
     @property
@@ -801,6 +896,16 @@ class Build:
         # list with its second pair taken out still writes `aac.xexp2`, measured.
         suffix = "2" if self.image_type.name == "jtag" else "1"
         for listed in recipe.firmware:
+            if listed.name.lower().startswith("sysupdate.xexp"):
+                # The name the tail of CG goes under, so the original will not take a
+                # file of that name from the list: "firmware file sysupdate.xexp
+                # ignored, 'sysupdate.xexp' is a reserved name!" -- measured with one
+                # added to 17559's list, which built as if it were not there. Its test
+                # is `_strnicmp` over those fourteen characters (0x42EB36), so any case
+                # and anything after them, `sysupdate.xexp1` included.
+                logger.warning("firmware file %s ignored, 'sysupdate.xexp' is a "
+                               "reserved name!", listed.name)
+                continue
             body = self.release.firmware(listed)
             if body is None:
                 # A file the list vouches for with no checksum, or with zero, is one
@@ -973,6 +1078,18 @@ class Build:
         page = self.header(slots, self.stated_version, len(smc))
         # Zeros from the page to the SMC, on every reference image.
         out.put(0, page + bytes(smc_at - len(page)))
+        net_kd = self.dump.net_kd if self.dump is not None else None
+        if net_kd:
+            # "Inserting netKd data from dump into header": as many bytes as the block
+            # states, at 0x80 -- see `Dump.net_kd`. Only a block inside the first page
+            # was measured, so a longer one is left out rather than laid over whatever
+            # follows it.
+            if 0x80 + len(net_kd) <= PAGE:
+                logger.info("Inserting netKd data from dump into header")
+                out.put(0x80, net_kd)
+            else:
+                logger.warning("the dump's netKd block states %#x bytes, more than the "
+                               "header's page holds; left out", len(net_kd))
         out.put(smc_at, smc)
         out.put(layout.KEYVAULT_AT, self.keyvault())
         # The chain's last block is filled out with zeros, as a file's is.
@@ -1056,6 +1173,12 @@ class Build:
         see `Dump.memory_unit`. Measured on a jasper256 build from a dump carrying one:
         the range comes across, and without the option nothing does. Only into an image
         for the same big block part.
+
+        The sample ini promises more: "if the dump is provided as a full 256M or 512M
+        dump, the remaining 192M/448M will be copied onto the end of the new image as
+        well". v1.21.810 does not, measured with a 256 MB dump and `nandmu`: its image
+        is 64 MB, like this one. The copy is there (0x416840) but asks for a load size
+        past 64 MB, which the loader has already cut to 64 MB -- see `dump_raw`.
         """
         dump = self.dump
         if dump is None or self.flash.spare is None:

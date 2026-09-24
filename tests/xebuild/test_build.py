@@ -969,3 +969,124 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
         self.assertEqual(len(made), 0x400)
         plain = rc4(derive(key, made[:0x10]), made[0x10:])
         self.assertEqual(plain[:8], security.COMPILED_IN["secdata.bin"])
+
+    def test_a_listed_sysupdate_xexp_is_left_out_in_any_case(self):
+        """ "'sysupdate.xexp' is a reserved name!", `_strnicmp` over fourteen."""
+        listed = (("SysUpdate.xexp1", "12345678"), ("aac.xexp", "12345678"))
+        self.assertEqual(self.names("glitch2", "trinity", *listed), ["aac.xexp1"])
+
+
+class HowMuchOfADumpIsRead(unittest.TestCase):
+    """`Build._cut`: the original's loader rule for a dump longer than 48 MB."""
+
+    SPARE = for_name("trinity")[0].flash.spare
+
+    def a_nand_start(self) -> bytes:
+        page = b"\xff\x4f" + bytes(PAGE - 2)
+        return page + self.SPARE.with_ecc(page, bytes(self.SPARE.length))
+
+    def test_nothing_up_to_48_mb_is_cut(self):
+        raw = bytes(0x3000000)
+        self.assertIs(Build._cut(raw), raw)
+
+    def test_an_emmc_dump_past_48_mb_is_cut_there(self):
+        """Measured both ways: `FATX` at 0x3000000, or no code on the first page."""
+        fatx = self.a_nand_start().ljust(0x3000000, b"\0") + b"FATX" + bytes(0x100)
+        self.assertEqual(len(Build._cut(fatx)), 0x3000000)
+        self.assertEqual(len(Build._cut(bytes(0x4000000))), 0x3000000)
+
+    def test_a_big_block_part_read_whole_is_cut_to_64_mb(self):
+        raw = self.a_nand_start().ljust(0x4200000 + 0x1000, b"\0")
+        self.assertEqual(len(Build._cut(raw)), 0x4200000)
+        exact = raw[:0x4200000]
+        self.assertIs(Build._cut(exact), exact)
+
+
+class WhichDumpsAreThrownAway(unittest.TestCase):
+    """`Build._faulty`, over a made-up run of blocks of a 16 MB part.
+
+    Each rule measured on the bench console's dump with the one fault put in: the
+    original discarded it, and with the console's own files beside the build made the
+    image this makes.
+    """
+
+    FLASH = for_name("trinity")[0].flash
+
+    def a_header(self, fields=None) -> bytes:
+        """A page 0 every check passes, with `fields` -- offset: (width, value) --
+        written over it."""
+        head = Header.blank()
+        head.entrypoint, head.size, head.cf_at = 0x8000, 0x70000, 0x70000
+        head.keyvault_at, head.keyvault_size = 0x4000, 0x4000
+        head.patch_slots, head.keyvault_version = 2, 0x0712
+        head.smc_at, head.smc_size = 0x1000, 0x3000
+        page = bytearray(head.image)
+        for at, (width, value) in (fields or {}).items():
+            page[at:at + width] = value.to_bytes(width, "big")
+        return bytes(page)
+
+    def a_dump(self, blocks=40, bad=(), failing=(), header=None):
+        spare, per = self.FLASH.spare, self.FLASH.spare.pages_a_block
+        out = bytearray()
+        for block in range(blocks):
+            for page in range(per):
+                data = bytearray((header or self.a_header()) if block == page == 0
+                                 else bytes([block & 0xFF]) * PAGE)
+                fields = bytearray(spare.write(block))
+                if block in bad:
+                    fields[spare.mark_at] = 0
+                fields = spare.with_ecc(bytes(data), bytes(fields))
+                if block in failing and page == 1:
+                    data[100] ^= 1
+                out += data + fields
+        return bytes(out)
+
+    def faulty(self, raw, **settings):
+        return a_build(self, dump=False, **settings)._faulty(raw, self.FLASH)
+
+    def test_a_sound_dump_is_kept(self):
+        self.assertEqual(self.faulty(self.a_dump()), "")
+
+    def test_a_header_without_its_magic(self):
+        raw = self.a_dump(header=self.a_header({0x00: (2, 0xFF4E)}))
+        self.assertIn("magic", self.faulty(raw))
+
+    def test_each_header_field_the_loader_checks(self):
+        """0x416D1D, one field at a time, all measured; the file here is 0xA5000."""
+        past = 0x100000
+        for fields, said in (({0x08: (4, past)}, "Entry"),
+                             ({0x0C: (4, past)}, "Size is"),
+                             ({0x60: (4, 0x8004)}, "KeyVaultSize"),
+                             ({0x64: (4, 0x10)}, "SysUpdateAddr"),
+                             ({0x64: (4, past)}, "SysUpdateAddr"),
+                             ({0x6C: (4, past)}, "KeyVaultAddr"),
+                             ({0x70: (4, past)}, "FileSystemAddr"),
+                             ({0x78: (4, 0x2000)}, "SmcBootSize"),
+                             ({0x7C: (4, past)}, "SmcBootAddr")):
+            with self.subTest(said):
+                raw = self.a_dump(header=self.a_header(fields))
+                self.assertIn(said, self.faulty(raw))
+
+    def test_three_header_fields_are_only_complained_about(self):
+        """A keyvault of 0x8000, a slot count of 3, a settings address, and an SMC of
+        0x3800 all pass, the middle two with a warning."""
+        for fields in ({0x60: (4, 0x8000)}, {0x68: (2, 3)}, {0x74: (4, 0x1234)},
+                       {0x78: (4, 0x3800)}):
+            with self.subTest(fields):
+                raw = self.a_dump(header=self.a_header(fields))
+                self.assertEqual(self.faulty(raw), "")
+
+    def test_block_0_marked_bad(self):
+        self.assertIn("block 0", self.faulty(self.a_dump(bad=(0,))))
+
+    def test_more_than_32_to_remap_whether_marked_or_failing_their_code(self):
+        """32 is kept; 33 is not, and `noremap` does not change that -- measured."""
+        self.assertEqual(self.faulty(self.a_dump(bad=range(1, 33))), "")
+        self.assertIn("33", self.faulty(self.a_dump(bad=range(1, 34))))
+        self.assertIn("33", self.faulty(self.a_dump(bad=range(1, 34)), noremap=True))
+        self.assertIn("33", self.faulty(self.a_dump(failing=range(1, 34))))
+
+    def test_noecdremap_takes_the_failing_ones_out_of_the_count(self):
+        self.assertEqual(self.faulty(self.a_dump(failing=range(1, 34)),
+                                     noecdremap=True), "")
+

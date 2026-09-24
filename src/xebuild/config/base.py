@@ -54,7 +54,7 @@ class BaseConfig(dict):
             raise ValueError("%s is true or false, not %r" % (what, given))
         return wanted == "true"
 
-    def check_number(self, what, given, between=None, base=10) -> int:
+    def check_number(self, what, given, between=None, base=10, zero=False) -> int:
         """A value, decimal unless it starts `0x`.
 
         `base` is for the places the original reads a number as hexadecimal whether or
@@ -62,11 +62,14 @@ class BaseConfig(dict):
         it takes.
 
         `between` is the range a value has to be inside, and a value outside it is
-        refused. It is never replaced by the nearest end of the range: a number the
-        caller did not ask for is a fault nobody can see afterwards, so a wrong value
-        has to be said out loud rather than quietly turned into a plausible one. The
-        original does replace -- it clamps `cfldv` to 32 and says so -- and this is a
-        deliberate divergence from it.
+        refused; `zero` takes 0 as well, for the options where 0 says something the
+        range does not. It is never replaced by the nearest end of the range: a
+        number the caller did not ask for is a fault nobody can see afterwards, so a
+        wrong value has to be said out loud rather than quietly turned into a
+        plausible one. The original does replace -- it clamps `cfldv` to 32 and says
+        so -- and it leaves a fan speed or a temperature outside its range unused,
+        saying "out of range ... not using"; refusing both is a deliberate divergence
+        from it.
 
         Negative is refused wherever no range is given, which the original also
         refuses: measured over every option that takes a number, `-o cputemp=-5` and
@@ -90,7 +93,7 @@ class BaseConfig(dict):
                 raise ValueError(
                     "%s is a number, and %r is not" % (what, given)
                 ) from None
-        if between is not None:
+        if between is not None and not (zero and number == 0):
             low, high = between
             if not low <= number <= high:
                 raise ValueError(

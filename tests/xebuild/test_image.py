@@ -607,6 +607,22 @@ class BlocksStandingInWhenAnImageIsWritten(unittest.TestCase):
             order.stand_ins(raw, self.flash, total=0)
 
 
+class TheNetworkDebuggingBlock(unittest.TestCase):
+    """`Dump.net_kd`, off the least a dump can be: its flat bytes."""
+
+    def a_dump(self, head: bytes):
+        flat = bytearray(0x200)
+        flat[0x80:0x80 + len(head)] = head
+        return types.SimpleNamespace(image=types.SimpleNamespace(flat=bytes(flat)))
+
+    def test_as_many_bytes_as_it_states_from_0x80(self):
+        head = b"\xca\x4a" + bytes(10) + (0x28).to_bytes(4, "big") + b"\x5a" * 0x18
+        self.assertEqual(Dump.net_kd.fget(self.a_dump(head)), head[:0x28])
+
+    def test_none_without_its_magic(self):
+        self.assertIsNone(Dump.net_kd.fget(self.a_dump(b"\xca\x4b")))
+
+
 class AMemoryUnitInADump(unittest.TestCase):
     """`Dump.memory_unit`, asked of the least a dump can be: its flash and spares."""
 
@@ -780,6 +796,7 @@ class TheSettingsBlockItself(unittest.TestCase):
     def a_block(self) -> bytes:
         block = bytearray(0x400)
         block[0x10:0x110] = bytes(range(0x100))
+        block[0x237] = 1
         block[:2] = settings.checksum(block).to_bytes(2, "little")
         return bytes(block)
 
@@ -794,7 +811,7 @@ class TheSettingsBlockItself(unittest.TestCase):
         """Even a head that does not sum: the original leaves such a block alone."""
         stale = b"\x00\x00" + self.a_block()[2:]
         one = settings.SmcConfig(stale)
-        one.set_fan("cpu", 0)
+        one.set_fan("cpu", None)
         one.set_temperature("cputemp", 0)
         one.set_regions()
         self.assertEqual(one.sealed(), stale)
@@ -811,6 +828,48 @@ class TheSettingsBlockItself(unittest.TestCase):
         self.assertEqual(out[0x220:0x226], bytes.fromhex("0022480a0b0c"))
         self.assertEqual(out[0x22A:0x22E], bytes.fromhex("100002fe"))
         self.assertEqual(out[0x237], 3)
+        self.assertTrue(settings.SmcConfig(out).sound)
+
+    def test_the_regions_are_written_at_their_whole_width(self):
+        """Measured: `avregion=0` zeroes four bytes at 0x228, `dvdregion=0x1234` writes
+        four at 0x234 -- not the two and one their usual values fit in."""
+        one = settings.SmcConfig(b"\x5a" * 0x400)
+        one.set_regions(av=0, dvd=0x1234)
+        out = one.sealed()
+        self.assertEqual(out[0x228:0x22C], bytes(4))
+        self.assertEqual(out[0x234:0x238], bytes.fromhex("00001234"))
+
+    def test_a_game_region_of_zero_is_not_written(self):
+        one = settings.SmcConfig(self.a_block())
+        one.set_regions(game=0)
+        self.assertEqual(one.sealed(), self.a_block())
+
+    def test_a_dvd_region_of_zero_is_put_to_one_whoever_set_it(self):
+        """ "forcing it to 1 (NTSC/USA)", measured with the block's own and with
+        `dvdregion=0`."""
+        for source in ("block", "option"):
+            with self.subTest(source=source):
+                block = bytearray(self.a_block())
+                if source == "block":
+                    block[0x237] = 0
+                one = settings.SmcConfig(bytes(block))
+                if source == "option":
+                    one.set_regions(dvd=0)
+                with self.assertLogs("xebuild.image.settings", "WARNING"):
+                    out = one.sealed()
+                self.assertEqual(out[0x234:0x238], bytes.fromhex("00000001"))
+                self.assertTrue(settings.SmcConfig(out).sound)
+
+    def test_a_fan_at_zero_is_auto_and_none_leaves_it(self):
+        """0x7F, measured over a byte that said 0xBC; the head follows the change."""
+        block = bytearray(self.a_block())
+        block[0x11] = block[0x12] = 0xBC
+        block[:2] = settings.checksum(block).to_bytes(2, "little")
+        one = settings.SmcConfig(bytes(block))
+        one.set_fan("cpu", None)
+        one.set_fan("gpu", 0)
+        out = one.sealed()
+        self.assertEqual((out[0x11], out[0x12]), (0xBC, 0x7F))
         self.assertTrue(settings.SmcConfig(out).sound)
 
 
