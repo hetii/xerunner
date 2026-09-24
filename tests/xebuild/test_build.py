@@ -970,6 +970,19 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
         plain = rc4(derive(key, made[:0x10]), made[0x10:])
         self.assertEqual(plain[:8], security.COMPILED_IN["secdata.bin"])
 
+    def test_with_no_dump_a_settings_block_has_to_be_given(self):
+        """ "could not read smc_config.bin", "critical bootloader files are missing"."""
+        with self.assertRaises(ValueError) as caught:
+            a_build(self, dump=False)._settings()
+        self.assertIn("smc_config.bin", str(caught.exception))
+
+    def test_an_smc_config_bin_with_no_sound_block_stops_the_build(self):
+        """Dump or not, measured: "unable to find SMC config data!"."""
+        for dump in (True, False):
+            with self.subTest(dump=dump), self.assertRaises(ValueError):
+                a_build(self, dump=dump,
+                        files={"smc_config.bin": bytes(0x400)})._given_config()
+
     def test_a_listed_sysupdate_xexp_is_left_out_in_any_case(self):
         """ "'sysupdate.xexp' is a reserved name!", `_strnicmp` over fourteen."""
         listed = (("SysUpdate.xexp1", "12345678"), ("aac.xexp", "12345678"))

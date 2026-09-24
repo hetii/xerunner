@@ -1321,6 +1321,14 @@ class Build:
             if not self.config.nomobile:
                 out.append((stats_at, self.dump.statistics, span))
         config = self._given_config()
+        if config is None and self.dump is None:
+            # With no dump the block has to come from the directory, and the original
+            # stops without it -- "could not read smc_config.bin", then "critical
+            # bootloader files are missing, cannot proceed!" -- measured with a kv.bin
+            # and an smc.bin beside the build and nothing else.
+            raise ValueError("could not read smc_config.bin, and there is no dump to "
+                             "take the settings block from: critical bootloader files "
+                             "are missing")
         if config is None and self.dump is not None:
             # Where the dump keeps it is the dump's own flash's business, not the one
             # being built for: a 16 MB dump builds a 64 MB image.
@@ -1337,14 +1345,20 @@ class Build:
         pages marked written all the same: measured on donor builds from `Trinity.bin`,
         whose next 0xC00 are erased anyway, and `Falcon.bin`, whose are zeros and still
         come out 0xFF.
+
+        One handed over that holds no sound block stops the build, dump or not: the
+        original says "unable to find SMC config data!", then "critical bootloader
+        files are missing, cannot proceed!", and does not fall back on the dump's --
+        measured with 0x400 zeros beside a build with the bench console's dump and
+        beside one without.
         """
         given = self.material.smc_config
         if given is None:
             return None
         found = SmcConfig.found_in(given)
         if found is None:
-            logger.warning("smc_config.bin holds no valid settings block; not used")
-            return None
+            raise ValueError("unable to find SMC config data in smc_config.bin: "
+                             "critical bootloader files are missing")
         return found.sealed().ljust(0x1000, b"\xff")
 
     def _configured(self, block: bytes) -> bytes:
