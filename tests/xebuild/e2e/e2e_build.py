@@ -11,6 +11,7 @@ import unittest
 from xebuild.boards import for_name
 from xebuild.build import Build, Material, layout, security
 from xebuild.chain import Chain
+from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto import smc as cipher
 from xebuild.image import Directory, Image
@@ -38,6 +39,23 @@ def references() -> tuple:
     return tuple(found)
 
 
+def regions(image, console, kind) -> dict:
+    """What `layout` says of a reference image, from the image's own chain.
+
+    A JTAG image's second chain is two stages at a fixed place, and how long they are is
+    where its filesystem starts from, so that is read off the image as well.
+    """
+    last = Chain(image, console).walked[-1]
+    where = layout.for_type(type_for(kind), console.flash, last.at + last.length)
+    if "second chain" in where:
+        at = start = where["second chain"][0]
+        for _ in range(2):
+            at += Stage(image.flat, at).length
+        where = layout.for_type(type_for(kind), console.flash, last.at + last.length,
+                                second_chain=at - start)
+    return where
+
+
 class WhereTheOriginalPutEachRegion(unittest.TestCase):
     """Every boundary of every reference image, against the arithmetic.
 
@@ -56,16 +74,14 @@ class WhereTheOriginalPutEachRegion(unittest.TestCase):
         console = for_name(board)[0]
         with open(path, "rb") as handle:
             image = Image(handle.read(), console.flash)
-        last = Chain(image, console).walked[-1]
-        where = layout.for_type(type_for(kind), console.flash, last.at + last.length)
-        return image, console, where
+        return image, console, regions(image, console, kind)
 
     def _laid(self) -> tuple:
         """The references of a type `layout` lays out."""
         return tuple(one for one in self.refs if one[1] not in layout.UNMEASURED)
 
     def test_a_type_with_no_reference_image_is_refused_all_the_same(self):
-        """A jtag image is the one that builds, so it is the one that can be swept."""
+        """None of them builds, so none can be among the references; swept if one is."""
         refused = [one for one in self.refs if one[1] in layout.UNMEASURED]
         if not refused:
             raise unittest.SkipTest("no image of a refused type among the references")
@@ -110,7 +126,8 @@ class WhereTheOriginalPutEachRegion(unittest.TestCase):
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
                 image, _, where = self._where(path, kind, board)
-                first = image.flat[layout.XELL_AT:layout.XELL_AT + 4]
+                at = where["xell"][0] if "xell" in where else layout.XELL_AT
+                first = image.flat[at:at + 4]
                 if "xell" in where:
                     self.assertEqual(first[0], 0x48)
                 elif where["slot"][0] == layout.XELL_AT:
@@ -204,27 +221,26 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
     def test_the_loader_is_the_bytes_of_the_glitch_one_where_there_is_one(self):
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
-                image, _ = self._reference(path, board)
+                image, console = self._reference(path, board)
                 ours = self._build(kind, board).xell()
                 if kind == "retail":
                     self.assertIsNone(ours)
                     continue
-                at, span = layout.XELL_AT, layout.XELL_SPAN
+                at, span = regions(image, console, kind)["xell"]
                 self.assertEqual(ours, bytes(image.flat[at:at + span]))
 
     def test_the_patch_slot_is_the_release_s_last_set_where_it_is_measured(self):
-        """A glitch2m image carries the console's fuses in front of the set."""
+        """A glitch2m image carries the console's fuses in front of the set, and a JTAG
+        image the whole file."""
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
                 image, console = self._reference(path, board)
-                last = Chain(image, console).walked[-1]
-                where = layout.for_type(type_for(kind), console.flash,
-                                        last.at + last.length)
-                at, span = where["patches"]
-                one = self._build(kind, board)
-                self.assertEqual(one.patch_slot(),
-                                 bytes(image.flat[at:at + layout.BLOCK]))
-                self.assertEqual(set(image.flat[at + layout.BLOCK:at + span]), {0xFF})
+                at, span = regions(image, console, kind)["patches"]
+                ours = self._build(kind, board).patch_slot()
+                self.assertEqual(ours, bytes(image.flat[at:at + len(ours)]))
+                if kind != "jtag":
+                    self.assertEqual(set(image.flat[at + layout.BLOCK:at + span]),
+                                     {0xFF})
 
     def test_the_header_page_is_the_page_the_original_wrote(self):
         """Every byte of the first page, on every reference image, built from fields.
@@ -235,16 +251,18 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         """
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
-                image, _ = self._reference(path, board)
+                image, console = self._reference(path, board)
                 head = image.header
                 self.assertEqual(layout.smc_at(head.smc_size), head.smc_at)
+                # A JTAG image's payload sits in the page after this one.
+                payload = regions(image, console, kind).get("payload", (0, 0))[1]
                 ours = self._build(kind, board).header(
                     head.size, head.version, head.smc_size
                 )
                 self.assertEqual(ours, bytes(image.flat[:len(ours)]))
                 # Zeros from the page to wherever the SMC begins: 0x1000 on a NAND
                 # console and 0x800 on the eMMC one, the page being 0x200 either way.
-                self.assertEqual(set(image.flat[len(ours):head.smc_at]), {0})
+                self.assertEqual(set(image.flat[len(ours) + payload:head.smc_at]), {0})
 
     def test_the_chain_is_the_chain_the_original_laid(self):
         """Every byte of the bootloader region, on every reference image this dump fits.
@@ -301,15 +319,18 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
                 image, console = self._reference(path, board)
-                last = Chain(image, console).walked[-1]
-                where = layout.for_type(type_for(kind), console.flash,
-                                        last.at + last.length)
+                where = regions(image, console, kind)
                 slot, tail = where["slot"][0], where["tail"][0]
-                run = self._build(kind, board).slot(tail)
+                one = self._build(kind, board)
                 span = layout.SLOT_SPAN
-                self.assertEqual(run[:span], bytes(image.flat[slot:slot + span]))
-                spill = len(run) - span
-                self.assertEqual(run[span:], bytes(image.flat[tail:tail + spill]))
+                # A JTAG image's two pairs, each tail straight behind the one before.
+                for which in range(len(one._update_pairs())):
+                    run = one.slot(tail, which)
+                    at = slot + which * span
+                    self.assertEqual(run[:span], bytes(image.flat[at:at + span]))
+                    spill = len(run) - span
+                    self.assertEqual(run[span:], bytes(image.flat[tail:tail + spill]))
+                    tail += spill + -spill % layout.BLOCK
 
     def test_the_whole_file_is_the_original_s(self):
         """Every byte of the file a programmer writes, spare and codes included.

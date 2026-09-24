@@ -562,6 +562,18 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         self.assertEqual([listed.kind for listed in one._chain_files()],
                          ["CB", "CD", "CE"])
 
+    def test_a_jtag_list_names_two_chains_and_two_pairs(self):
+        """CB 5770, CD 5770, CE, a CF/CG pair, CB 5771, CD 8453, the release's pair."""
+        one = self.a_chain(kind="jtag", board="falcon",
+                           stages=(("CB", 0x100), ("CD", 0x180), ("CE", 0x140),
+                                   ("CF", 0x400), ("CG", 0x14000), ("CB", 0x100),
+                                   ("CD", 0x100), ("CF", 0x400), ("CG", 0x14000)))
+        self.assertEqual([listed.kind for listed in one._chain_files(0)],
+                         ["CB", "CD", "CE"])
+        self.assertEqual([listed.kind for listed in one._chain_files(1)], ["CB", "CD"])
+        self.assertEqual(one._chain_files(2), [])
+        self.assertEqual(len(one._update_pairs()), 2)
+
     def test_a_nonce_is_taken_by_kind_and_not_by_position(self):
         """A chain with one CB takes the dump's CB, CD and CE and leaves its CB_B out.
         By position its CD would take a CB_B's nonce, which reads as a chain and is
@@ -680,6 +692,22 @@ class WhatTheUpdateSlotCarries(unittest.TestCase):
         self.assertEqual(Fields.in_cf(cf).pairing, bytes(3))
         self.assertEqual(Fields.in_cf(cf).ldv, 14)
 
+    def test_only_the_last_of_a_jtag_image_s_two_pairs_is_the_console_s(self):
+        """Measured on the falcon JTAG image: CF 4532 says where its tail is and nothing
+        more of the console; CF 17559 is slot 1 and carries pairing and binding."""
+        stages = (("CB", 0x100), ("CD", 0x180), ("CE", 0x140), ("CF", 0x400),
+                  ("CG", 0x14000), ("CB", 0x100), ("CD", 0x100), ("CF", 0x400),
+                  ("CG", 0x14000))
+        one = WhichStagesTheChainIsMadeOf.a_chain(self, kind="jtag", board="falcon",
+                                                  stages=stages)
+        first = sealing.under(Stage(one.slot(0xE4000, 0), 0), sealing.ONE_BL_KEY)
+        last = sealing.under(Stage(one.slot(0xE8000, 1), 0), sealing.ONE_BL_KEY)
+        self.assertEqual(first[0x218:0x230], bytes(0x18))
+        self.assertEqual(struct.unpack_from(">H", first, 0x32)[0], 0xE4000 // 0x4000)
+        self.assertEqual(last[0x21B], 1)
+        self.assertEqual(Fields.in_cf(last).pairing, one.dump.pairing)
+        self.assertNotEqual(last[0x220:0x230], bytes(0x10))
+
     def test_both_nonces_are_the_console_s_own(self):
         _one, _cf, run = self.a_slot()
         cf = Stage(run, 0)
@@ -691,9 +719,9 @@ class WhatTheUpdateSlotCarries(unittest.TestCase):
         one.config.cpu_key = None
         with self.assertRaises(ValueError):
             one.slot(0xD0000)
+        one = WhichStagesTheChainIsMadeOf.a_chain(self, stages=(("CB", 0x100),))
         with self.assertRaises(ValueError):
-            WhichStagesTheChainIsMadeOf.a_chain(self, kind="jtag",
-                                                board="falcon").slot(0x90000)
+            one.slot(0xD0000)
 
 
 class WhatAnSmcIsRefusedFor(unittest.TestCase):
