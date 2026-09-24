@@ -301,11 +301,11 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 ends = last.at + last.length
                 self.assertEqual(len(ours), ends + -ends % 0x10 - at)
 
-    def test_the_version_the_page_states_is_the_release_s_own_ce(self):
+    def test_the_version_the_page_states_is_1888(self):
         for path, kind, board in self._laid():
             with self.subTest(os.path.basename(path)):
                 image, _ = self._reference(path, board)
-                self.assertEqual(self._build(kind, board).ce_version,
+                self.assertEqual(self._build(kind, board).stated_version,
                                  image.header.version)
 
     def test_the_update_slot_and_its_tail_are_what_the_original_laid(self):
