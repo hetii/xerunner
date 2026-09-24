@@ -147,11 +147,13 @@ class WhichBlockEachFileGets(unittest.TestCase):
         fs.add("small.bin", b"x")
         self.assertEqual(fs.after, 0x35)
 
-    def test_a_file_that_would_run_past_the_last_usable_block_is_refused(self):
-        """Cut to fit it would read back short with nothing said about it."""
+    def test_a_file_that_would_reach_the_last_usable_block_is_left_out(self):
+        """Never cut to fit; skipped, and a smaller one behind it still goes in, as
+        the original does on 17489_RGL's `-i flash` list."""
         fs = self.a_filesystem()
-        with self.assertRaises(ValueError):
-            fs.add("huge.bin", bytes(0x400 * 0x4000))
+        self.assertIsNone(fs.add("huge.bin", bytes(0x400 * 0x4000)))
+        self.assertIsNotNone(fs.add("small.bin", b"x"))
+        self.assertEqual([one.name for one in fs.entries], ["small.bin"])
 
     def test_a_chain_points_along_itself_and_then_says_it_ends(self):
         fs = self.a_filesystem()

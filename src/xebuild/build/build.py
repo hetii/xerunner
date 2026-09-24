@@ -172,10 +172,22 @@ class Build:
 
     @property
     def one_bl_key(self) -> bytes | None:
-        """The 1BL key, the same way."""
-        if self.config.one_bl_key is not None:
-            return self.config.one_bl_key
-        return self.material.key_in_file("1blkey.txt")
+        """The 1BL key, the same way, and refused where its sum is not the 1BL key's.
+
+        The original adds its bytes up and stops a build whose sum is not 0x983 -- "1BL
+        key 0x0011... does not appear to be correct!" -- measured. That is the whole of
+        its test, and sealing here takes the one key there is, `sealing.ONE_BL_KEY`:
+        a different key with the same sum would seal differently in the original, and
+        such a key is not one any console has.
+        """
+        key = self.config.one_bl_key
+        if key is None:
+            key = self.material.key_in_file("1blkey.txt")
+        if key is not None and sealing.key_sum(key) != sealing.key_sum(
+                sealing.ONE_BL_KEY):
+            raise ValueError("1BL key 0x%s does not appear to be correct!"
+                             % key.hex().upper())
+        return key
 
     @property
     def _walk(self) -> tuple:
@@ -1039,6 +1051,8 @@ class Build:
         are marked by their spans, because their pages may hold 0xFF all the same.
         """
         when = int(time.time()) if when is None else when
+        # Refused here, before anything is laid, as the original does.
+        _ = self.one_bl_key
         flash, bigffs = self.flash, self.bigffs
         out = Image.blank(flash, bigffs)
         base = flash.base_of(bigffs) * layout.BLOCK
@@ -1117,9 +1131,6 @@ class Build:
         # already end on one. The blocks stepped over go unnamed in the table where
         # blobs follow and stay free where the table does -- both measured.
         start += -start % flash.round_to
-        if blobs:
-            fs.skipped = range(fs.after, (start - base) // layout.BLOCK)
-        table_at = start + (flash.mobile_region if blobs else 0)
         # On a big block chip the pages of the filesystem carry three bytes of its own
         # and a kind of their own; everywhere else a file's pages carry a block number.
         fields = self._fs_fields(slots) if big else b""
@@ -1138,6 +1149,11 @@ class Build:
         for index, name in enumerate(sorted(blobs)):
             at = start + index * flash.mobile_stride
             body, kind = blobs[name], 0x31 + "BCDE".index(name[6])
+            # Past the last usable block a blob is left out too, as a file is.
+            if at + len(body) > flash.last_block * layout.BLOCK:
+                logger.error("adding %s will exceed available flash space! Skipped!",
+                             name)
+                continue
             out.put(at, body)
             placed[kind] = ((at - base) // layout.BLOCK, len(body))
             if flash.spare is None:
@@ -1151,6 +1167,12 @@ class Build:
             out.mark(at, pages * PAGE, 1, kind,
                      bytes([len(body) // 0x100, free, 0, 0]),
                      b"\x00" if big else b"")
+        # With no blob placed -- none to place, or none that fit -- there is no region
+        # and the table goes where it would have begun: measured with `nomobile`, on a
+        # build with no dump, and on one whose blobs would not fit.
+        if placed:
+            fs.skipped = range(fs.after, (start - base) // layout.BLOCK)
+        table_at = start + (flash.mobile_region if placed else 0)
         fs.table_at = (table_at - base) // layout.BLOCK
         table = fs.table()
         out.put(table_at, table)
@@ -1483,8 +1505,13 @@ class Build:
         agree.
         """
         fat = self.console.fat and self.image_type.name == "glitch"
+        # `-r` and `-i` both put their word into the patch file's name: `-r WB` reads
+        # `patches_g2corona_WB.bin` and `-i flash` `patches_g2mjasper_flash.bin`, both
+        # measured. What the original does with both at once has not been, and `-r`'s
+        # is taken.
+        ext = self.config.section_ext or self.config.firmware_ext or ""
         return self.release.patches(self.image_type, "fat" if fat else self.console,
-                                    self.config.section_ext or "")
+                                    ext)
 
     def header(self, slots: int, stated_version: int, smc_length: int) -> bytes:
         """The image's first page, built from named fields rather than copied.
