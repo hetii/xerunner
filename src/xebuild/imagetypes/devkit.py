@@ -16,6 +16,7 @@ class Devkit(ImageType):
     number = 6
     text = "building devkit image"
     short = "devk"
+    patches = False  # no patch slot, measured: a 17489 devkit build reads none
 
 
 class Devkit16(ImageType):

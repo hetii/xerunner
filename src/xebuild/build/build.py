@@ -105,6 +105,17 @@ class Build:
         return self.config.image_type
 
     @property
+    def flash(self):
+        """The part the image is laid on: the console's, but for a devkit image --
+        see `ImageType.shape`."""
+        return self.image_type.shape(self.console, self.config.bigffs)[0]
+
+    @property
+    def bigffs(self) -> bool:
+        """Whether with the larger filesystem: asked for, or forced by the type."""
+        return self.image_type.shape(self.console, self.config.bigffs)[1]
+
+    @property
     def dump(self) -> Dump | None:
         """The console's own flash, or None when the material holds no dump.
 
@@ -299,7 +310,8 @@ class Build:
                     logger.warning("could not patch the SMC for %s: its routine is not "
                                    "in this image", name)
                 plain, carried = patched, None
-        if self.config.patchsmc and self.image_type.name != "retail":
+        # The hack types only, 2 to 5: a devkit image keeps its limit, measured.
+        if self.config.patchsmc and self.image_type.number in (2, 3, 4, 5):
             patched = Smc(plain).patched()
             if patched != plain:
                 logger.info("patching smc to remove the reset limit")
@@ -449,9 +461,10 @@ class Build:
         `xell-gggggg.bin` for a glitch image and `xell-2f.bin` for a JTAG one, verbatim
         and exactly 0x40000 bytes: the original's default-name resolver chooses by the
         type alone (x360mcp read it out of the jump table at 0x4501E8), and every
-        image measured carries the one it names.
+        image measured carries the one it names. Only the hack types carry one in the
+        system area -- numbers 2 to 5; a devkit image lists XeLL as a file instead.
         """
-        if self.image_type.name == "retail":
+        if self.image_type.number not in (2, 3, 4, 5):
             return None
         jtag = self.image_type.name == "jtag"
         return self.material.xell("xell-2f.bin" if jtag else "xell-gggggg.bin")
@@ -653,15 +666,17 @@ class Build:
 
         `stages` may be the stages or their kinds. A split chain carries it on CB_B.
         A single CB carries it itself -- sealed under its own key, with nothing of the
-        console mixed in -- on a retail image and on a JTAG image's second chain, and
-        a glitch image's single CB carries none at all. Measured on fat retail images
-        of 13604, whose CB 5771 wears the pairing and the computed field, on the JTAG
-        image, and on fat glitch images, whose log has no "CBENC pairing set to" line.
+        console mixed in -- on a retail or devkit image and on a JTAG image's second
+        chain, and a glitch image's single CB carries none at all. Measured on fat
+        retail images of 13604, whose CB 5771 wears the pairing and the computed field,
+        on devkit images, on the JTAG image, and on fat glitch images, whose log has no
+        "CBENC pairing set to" line.
         """
         roles = [ROLES.get(getattr(one, "tag", one)) for one in stages]
         if roles[:2] == ["B", "B"]:
             return 1
-        if roles[:1] == ["B"] and (which > 0 or self.image_type.name == "retail"):
+        alone = self.image_type.number in (1, 6, 7, 8, 9)
+        if roles[:1] == ["B"] and (which > 0 or alone):
             return 0
         return -1
 
@@ -821,7 +836,7 @@ class Build:
         Stage(cf, 0).nonce = cf_nonce
         Stage(cg, 0).nonce = cg_nonce
 
-        span = layout.slot_span(self.image_type, self.console.flash)
+        span = layout.slot_span(self.image_type, self.flash)
         spill = len(cf) + len(cg) - span
         count = max(0, -(-spill // layout.BLOCK))
         blocks = count.to_bytes(2, "big") + b"".join(
@@ -910,7 +925,11 @@ class Build:
                 raise ValueError("%s is named by the file list and the release does "
                                  "not have it" % listed.plain)
             name = listed.plain
-            if name.lower().endswith(("xexp", "xttp")):
+            # Any name ending in `p` that the list vouches for with a checksum: 17489's
+            # and 1838's `rrbkgnd.bmp` go in as `rrbkgnd.bmp1` beside every `.xexp1`,
+            # and 17489_RGL's `rglXam.rglp`, listed with none, goes in as it is --
+            # all three measured.
+            if name.lower().endswith("p") and listed.crc:
                 name += suffix
             out.append((name, body))
         for listed in recipe.security:
@@ -1020,7 +1039,7 @@ class Build:
         are marked by their spans, because their pages may hold 0xFF all the same.
         """
         when = int(time.time()) if when is None else when
-        flash, bigffs = self.console.flash, self.config.bigffs
+        flash, bigffs = self.flash, self.bigffs
         out = Image.blank(flash, bigffs)
         base = flash.base_of(bigffs) * layout.BLOCK
 
@@ -1069,10 +1088,11 @@ class Build:
 
         big = flash.spare is not None and flash.spare.fs_at is not None
         first = (tail_at - base) // layout.BLOCK
-        if flash.spare is None:
+        if not flash.pool:
             # No bad blocks to stand in for, so no pool: an eMMC's table reserves every
             # block from the last one a build may use to the end of the part -- six on
-            # the one measured, where the anchors and the settings live.
+            # the one measured, where the anchors and the settings live -- and a
+            # devkit image's flat 64 MB does the same from 0xF7C.
             held = flash.blocks - (flash.last_block - base // layout.BLOCK)
             fs = Filesystem(flash, first, bigffs, pool=0, held=held)
         else:
@@ -1102,7 +1122,7 @@ class Build:
         table_at = start + (flash.mobile_region if blobs else 0)
         # On a big block chip the pages of the filesystem carry three bytes of its own
         # and a kind of their own; everywhere else a file's pages carry a block number.
-        fields = self._fs_fields(slots, "xell" in where) if big else b""
+        fields = self._fs_fields(slots) if big else b""
         for entry, blocks, body in fs.placed:
             at = flash.offset_of(entry.sector, bigffs)
             span = blocks * layout.BLOCK
@@ -1143,7 +1163,11 @@ class Build:
             out.mark(at, span)
         if flash.anchors:
             anchors.lay(out, fs.table_at, placed)
-        for name, at in self.config.raw_patches:
+        # The file list's own `[rawpatch]` first -- a devkit list names two, "(1)" and
+        # "(2)" in the original's log -- and then `-8`'s. Each line is a name and an
+        # offset, which the list keeps where a checksum would be.
+        listed = [(one.name, one.crc) for one in self.recipe.raw_patches]
+        for name, at in listed + list(self.config.raw_patches):
             # "[rawpatch]": raw bytes into the flat image, "just before combining spare
             # and finalizing ecc". The spare's fields are already settled by then, so a
             # patch over erased flash leaves its pages' fields erased and only the code
@@ -1167,7 +1191,7 @@ class Build:
         across verbatim, spare included, and without the option nothing does.
         """
         dump = self.dump
-        flash = self.console.flash
+        flash = self.flash
         if dump is None or flash.spare is None or dump.flash.spare is None:
             return
         if dump.flash.spare.pages_a_block != 256 or dump.flash.blocks != flash.blocks:
@@ -1197,7 +1221,7 @@ class Build:
         say nothing about a 64 MB part's, and what the original does then has not been
         measured.
         """
-        flash = self.console.flash
+        flash = self.flash
         if self.config.noremap or self.dump is None or flash.spare is None:
             return
         raw, own = self.dump_raw, self.dump.flash
@@ -1299,23 +1323,24 @@ class Build:
         with open(path, "rb") as handle:
             return handle.read()
 
-    def _fs_fields(self, slots: int, xell: bool) -> bytes:
+    def _fs_fields(self, slots: int) -> bytes:
         """The three bytes a big block chip's filesystem pages carry at 7.
 
         free60's FsSize1, FsSize0 and FsPageCount. The first says how much of the flash
-        the system area takes, in blocks of 0x20000: all of the first 2 MB on an image
-        that carries XeLL -- 0x10, on all three glitch types measured -- and on a retail
-        one where its bootloader region ends, the slot and the patch slot included,
-        which is 5 on the trinitybb measured. The second is the filesystem's size in
-        blocks over 32, and the third is 4 on every image measured.
+        the system area takes, in blocks of 0x20000: all of the first 2 MB -- 0x10, on
+        all three glitch types measured and on a jasperbb devkit image, which carries
+        no XeLL there -- and on a retail one where its bootloader region ends, the slot
+        and the patch slot included, which is 5 on the trinitybb measured. The second
+        is the filesystem's size in blocks over 32, and the third is 4 on every image
+        measured.
         """
-        flash = self.console.flash
-        if xell:
+        flash = self.flash
+        if self.image_type.name != "retail":
             system = 0x10
         else:
             span = layout.slot_span(self.image_type, flash)
             system = (slots + 2 * span) // 0x20000
-        size = flash.last_block - flash.base_of(self.config.bigffs)
+        size = flash.last_block - flash.base_of(self.bigffs)
         return bytes([system, size >> 5, 4])
 
     @staticmethod
@@ -1349,7 +1374,7 @@ class Build:
         `nomobile` the statistics are not written at all, spare included, and
         manufacturing data only when the console has any.
         """
-        flash = self.console.flash
+        flash = self.flash
         span = 0x1000
         stats_at = flash.smc_config - flash.round_to
         out = []
@@ -1437,7 +1462,14 @@ class Build:
         the same number; the three that do not settle it. 1838's and 17489's chains end
         in `SE_1838.bin` and `SE_17489.bin`, and the images the original built from them
         state 0x0760 all the same -- measured on both.
+
+        **A devkit image states its E stage's own** -- "flash header build version set
+        to v.17489": 0x4451 from `SE_17489.bin` and 0x072E from `SE_1838.bin`, measured.
         """
+        if self.image_type.number in (6, 7, 8, 9):
+            for one in self._chain_files():
+                if ROLES.get(one.kind) == "E":
+                    return Stage(self.release.bootloader(one), 0).build
         return 1888
 
     @property
@@ -1490,16 +1522,22 @@ class Build:
         head.entrypoint = layout.CHAIN_AT
         head.size = slots
         head.cf_at = slots
-        year = self.console.notice_year(self.image_type.name)
+        # A devkit image carries 2010 whatever the board -- measured on xenon, falcon,
+        # jasper and jasperbb, whose other images say 2005, 2007 and 2009.
+        kit = self.image_type.number in (6, 7, 8, 9)
+        year = 2010 if kit else self.console.notice_year(self.image_type.name)
         head.notice = NOTICE.replace(b"2010", b"%d" % year)
-        head.before_flags = 0 if self.image_type.name == "retail" else 1
+        head.before_flags = 1 if self.image_type.number in (2, 3, 4, 5) else 0
+        if kit:
+            head.word_at_04 = 0x8000
         head.boot_flags = self.boot_flags()
         head.keyvault_at = layout.KEYVAULT_AT
         if self.console.states_keyvault_size:
             head.keyvault_size = layout.KEYVAULT_AT
         head.patch_slots = 2
         head.keyvault_version = 0x0712
-        head.block_size = self.console.stated_block_size()
+        flash = self.flash
+        head.block_size = flash.block_size if flash.states_block_size else 0
         if head.block_size and self.image_type.name == "jtag":
             # A JTAG image states the 16 MB step whatever the part's own is: x360mcp
             # measured `-t jtag -c jasper256`, whose flash steps 0x20000 and whose image
@@ -1524,9 +1562,10 @@ class Build:
             clear it
 
         A retail image carries XeLL on no button at all and the word is zero, which the
-        reference images show.
+        reference images show; so does a devkit one. The whole block belongs to types 2
+        to 5, as x360mcp read at 0x40D700.
         """
-        if self.image_type.name == "retail":
+        if self.image_type.number not in (2, 3, 4, 5):
             return 0
         config, jtag = self.config, self.image_type.name == "jtag"
         if config.nodvd or config.olddvd:
@@ -1550,18 +1589,10 @@ class Build:
         return (switch << 24) | (speed << 16) | (second << 8) | reason
 
     def auto_name(self) -> str:
-        """The name the original gives an image when it is given none.
-
-        The word in the middle is one per arm of its name builder, at 0x44FC62 on:
-        `gg`, `g2` and `g2m` for the three glitches, which share a type number, and by
-        number otherwise -- `devk` and `testk` for both sizes of each.
+        """The name the original gives an image when it is given none: the file list's
+        version and the `-c` spelling, around the type's word -- `ImageType.image_name`.
         """
-        kind = self.image_type
-        glitches = {"glitch": "gg", "glitch2": "g2", "glitch2m": "g2m"}
-        words = {1: "retail", 2: "jtag", 4: "devgl", 5: "devgl", 6: "devk", 7: "devk",
-                 8: "testk", 9: "testk"}
-        word = glitches.get(kind.name) or words[kind.number]
-        return "%s_%s_%s.bin" % (self.recipe.version, word, self.config.console_name)
+        return self.image_type.image_name(self.recipe.version, self.config.console_name)
 
     def __repr__(self) -> str:
         return "Build(%s, %s)" % (self.image_type.name, self.console.name)
