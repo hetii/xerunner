@@ -135,6 +135,16 @@ class Release:
             raise ValueError("could not load [rawpatch] file '%s'" % name)
         return self._read(path)
 
+    def in_bin(self, name: str) -> bytes | None:
+        """A file in the release's `bin/`, or None when it has none.
+
+        Where the original looks first for the loaders a JTAG image carries --
+        `payload.bin` and `freeboot.bin` -- before it falls back to the copies built
+        into itself: "could not read 17559/bin/payload.bin, using built in payload".
+        """
+        path = self._beside(os.path.join(self.where, "bin"), name)
+        return self._read(path) if path else None
+
     def option(self, name: str) -> Patches:
         """The patch set one option carries, as `bin/<name>.bin`."""
         return Patches(self._read(self.where, "bin", "%s.bin" % name))

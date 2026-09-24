@@ -36,12 +36,23 @@ a 16 MB image and at block 0 on a 64 MB one, whose filesystem it opens. An earli
 reading had the 64 MB one list nothing there, which was the table's reader dropping
 every entry at block 0.
 
-**Four of the eleven types are laid out here, and `for_type` refuses the rest.** Each
+**A JTAG image is laid out by the loader it carries**, not by rounding. Its reboot
+core reads its neighbours from addresses compiled into it -- xeBuild's own
+`reboot_core/main.c` states them, and the image the original built puts them there:
+
+    0x000200  payload.bin, the page after the header
+    0x070000  the first slot pair, the release's CF/CG 4532, and 0x80000 the second
+    0x090000  freeboot.bin, the core, one 0x1000 to itself
+    0x091000  the patch list, 0x4000 of room
+    0x095000  the fuses, 0x60 bytes, and XeLL straight behind them at 0x95060
+    0x0D5060  the second chain, and the filesystem from the block after it ends
+
+So the slot pairs are the only part that follows from the chain, and a chain long enough
+to push them into the core's place is refused rather than laid over it.
+
+**Five of the eleven types are laid out here, and `for_type` refuses the rest.** Each
 refusal says why, and none of them is for want of trying:
 
-* `jtag` builds and is measured, and its filesystem start is what is not understood.
-  Two slot pairs and XeLL after the patches put its first file at 0xE4000, which no
-  rounding of anything measured gives.
 * `devkit` and `testkit`, in both spellings, cannot be built from a retail release at
   all: the original stops at `could not open '17559/_devkit.ini'`, because a release
   carries no file list for them.
@@ -49,7 +60,7 @@ refusal says why, and none of them is for want of trying:
   available for resigning` -- it sits on development bootloaders, and resigning them
   needs a private key that is not ours to have.
 
-So the four served here are the four that can be held against an image. What the
+So the five served here are the five that can be held against an image. What the
 original's own layout tables say about the rest is recorded in x360mcp; a number read
 out of a table and never seen in an image is not what this module is for.
 
@@ -86,7 +97,6 @@ SLOT_STEP = 0x10000
 # The types no reference image exists for, and what stops each one being built. Keyed by
 # the name `-t` takes, because that is what the message has to name back.
 UNMEASURED = {
-    "jtag": "a jtag image lays its filesystem somewhere no rounding measured explains",
     "devkit": "no release carries a file list for a devkit image",
     "devkit16": "no release carries a file list for a devkit16 image",
     "testkit": "no release carries a file list for a testkit image",
@@ -132,21 +142,26 @@ def tail_at(slots: int, base: int) -> int:
     return max(slots + SLOT_SPAN * 2, base)
 
 
-def for_type(image_type, flash, chain_end: int, bigffs: bool = False) -> dict:
+def for_type(image_type, flash, chain_end: int, bigffs: bool = False,
+             second_chain: int = 0) -> dict:
     """Every boundary of an image of this type on this flash, by name.
 
     The SMC is not among them: where it goes follows its own length rather than the type
-    or the part, and `smc_at` is that question.
+    or the part, and `smc_at` is that question. `second_chain` is how long a JTAG
+    image's second chain is, which is where its filesystem starts from.
 
-    Refuses the seven types no image of which could be built to hold it against; the
+    Refuses the six types no image of which could be built to hold it against; the
     message says which and why. A number nobody measured is worse here than none.
     """
     if image_type.name in UNMEASURED:
         raise ValueError(
             "%s: %s" % (image_type.name, UNMEASURED[image_type.name])
         )
+    jtag = image_type.name == "jtag"
     xell = image_type.name != "retail"
-    slots = slots_at(chain_end, xell, flash.round_to)
+    # A JTAG image rounds by the smallest step on every part: its slots are at 0x70000
+    # on a jasperbb too, whose flash rounds by 0x20000 everywhere else -- measured.
+    slots = slots_at(chain_end, xell and not jtag, 0 if jtag else flash.round_to)
     base = flash.base_of(bigffs) * BLOCK
     out = {
         "header": (0, PAGE),
@@ -158,4 +173,24 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False) -> dict:
     }
     if xell:
         out["xell"] = (XELL_AT, XELL_SPAN)
+    if not jtag:
+        return out
+    core = 0x90000
+    if slots + SLOT_SPAN * 2 > core:
+        raise ValueError(
+            "a chain ending at %#x puts the second slot pair past %#x, where the "
+            "reboot core has to be" % (chain_end, core)
+        )
+    second = 0xD5060
+    ends = second + second_chain
+    out.update({
+        "payload": (PAGE, PAGE),
+        "second slot": (slots + SLOT_SPAN, SLOT_SPAN),
+        "freeboot": (core, 0x1000),
+        "patches": (0x91000, 0x4000),
+        "fuses": (0x95000, 0x60),
+        "xell": (0x95060, XELL_SPAN),
+        "second chain": (second, second_chain),
+        "tail": (max(ends + -ends % BLOCK, base), 0),
+    })
     return out

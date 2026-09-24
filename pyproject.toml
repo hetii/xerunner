@@ -11,6 +11,10 @@ requires-python = ">=3.10"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The two loaders the original carries inside itself for a JTAG image.
+"xebuild.build" = ["builtin/*.bin"]
+
 [tool.ruff]
 line-length = 88
 
