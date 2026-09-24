@@ -282,7 +282,10 @@ class ADumpThatOnlyAnswersWhatIsAsked:
 
     def __init__(self, smc=AN_SMC, seed=b"\xfb\xd7\x5a\x10", tags=None):
         self.smc = cipher.sealed(smc, seed)
-        self.sealed_keyvault = bytes(range(0x100)) * 0x40
+        # Sealed for real, under the key the tests hand a build: a keyvault that does
+        # not open under its console's key is discarded, as the original discards one.
+        self.sealed_keyvault = Keyvault(bytes(range(0x100)) * 0x40).sealed(
+            bytes(range(0x10)))
         self.pairing = b"\x78\x02\x27"
         self.ldv = 14
         self.chain = AChainOfMadeUpStages(tags or ("CB", "CB", "CD", "CE"))
