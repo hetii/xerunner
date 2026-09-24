@@ -31,10 +31,32 @@ its uses.
 ## Logging
 
 The standard library's `logging`, used as it was meant to be: a module logger, and
-`logger.info("...")` at the point where something has happened. Nothing is buffered to be
-replayed later, there is no silent sink, and no structure exists whose purpose is to make
-the output line up with another tool's. The original's messages are a reference for what
-is worth saying, not a format to reproduce. Where ours diverge, they diverge.
+`logger.info("...")` at the point where something has happened. The log is whatever those
+calls produce, in the order the code happens to reach them.
+
+**The single message may be the original's.** When the original says something about an
+event this code also handles -- "flash header SysUpdateCount is not 2, continuing
+anyway" -- use its sentence, word for word, at the place where that event happens here.
+Rewording it only so it differs is as pointless as copying the log whole. Leave out its
+decoration: the `*******` prefixes, the leading newlines, the "ERROR loading '%s'," frame
+that belongs to its own output; pick the level (`info`, `warning`, `error`) by what the
+event means here.
+
+**The log as a whole is never made to match.** This is the mistake that was made in
+x360mcp and must not come back: lines collected into lists and printed later, messages
+reordered so they come out in the original's sequence, blank lines and separators added
+because the original has them, messages invented or duplicated only to fill a slot the
+original's log has. None of that. Concretely:
+
+- no list, buffer or queue of log lines, and no function that prints a batch of them;
+- no ordering logic of any kind whose purpose is the order of the output;
+- no blank lines, rulers or banners (`------ adding firmware files ------`);
+- no message emitted anywhere but at the point where its event actually happens;
+- no test that compares our log with the original's.
+
+If our code does things in a different order than the original, our log comes out in a
+different order, and that is correct. What is held against the original is the image,
+never the log.
 
 Log files are out of scope for now; the screen is enough.
 

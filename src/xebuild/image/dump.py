@@ -78,11 +78,12 @@ class Dump:
     @property
     def sealed_keyvault(self) -> bytes:
         """The keyvault as it lies in flash, where the header says it is."""
-        head = self.header
-        # A xenon or zephyr image leaves the length at zero, and the keyvault is the
-        # same 0x4000 there as everywhere else.
-        at, length = head.keyvault_at, head.keyvault_size or 0x4000
-        return self.image.flat[at : at + length]
+        # 0x4000 whatever the header states. A xenon or zephyr image leaves the length
+        # at zero, and one stating 0x8000 has a second keyvault behind the first --
+        # "decrypting KeyVault at address 0x4000 of size 0x4000", then "decrypting alt
+        # KeyVault at address 0x8000" -- measured on a dump whose header said 0x8000.
+        at = self.header.keyvault_at
+        return self.image.flat[at : at + 0x4000]
 
     def keyvault(self, cpu_key: bytes) -> Keyvault:
         """The console's keyvault, opened with its CPU key."""
@@ -121,6 +122,23 @@ class Dump:
         """
         at, length = self.flash.smc_config - 2 * self.flash.round_to, 0x1000
         return self.image.flat[at : at + length]
+
+    @property
+    def net_kd(self) -> bytes | None:
+        """The network debugging block a development console keeps in its header, or
+        None where there is none.
+
+        It starts at 0x80 with the magic 0xCA4A and states its own length at 0x8C and
+        its version at 0x90; version 1 carries the console's IP and MAC, a port and the
+        host's IP, which the original prints -- "netKd info found, size 0x28". Read out
+        of it at 0x414300, and measured by putting one into the bench console's header:
+        the image the original built carried those 0x28 bytes at 0x80.
+        """
+        page = self.image.flat
+        if bytes(page[0x80:0x82]) != b"\xca\x4a":
+            return None
+        length = int.from_bytes(bytes(page[0x8C:0x90]), "big")
+        return bytes(page[0x80:0x80 + length])
 
     @property
     def memory_unit(self) -> tuple | None:

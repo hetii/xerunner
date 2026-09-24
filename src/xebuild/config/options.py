@@ -29,6 +29,15 @@ BUTTONS = {
     "wiredxb2": 0x58, "wiredxb1": 0x59, "wiredx": 0x5A, "wiredxb3": 0x5A,
 }
 
+# The ranges the original writes a temperature and a fan speed in, read out of its
+# settings-block routine at 0x4291F0 and measured at both ends of each: 40 and 120 are
+# written, 39 and 121 are not -- "Ini value 39 for cputemp is out of range (40-120), not
+# using" -- and the same at 40 and 100 for a fan. Its sample ini says a fan takes 0 to
+# 100; the code takes 0 and 40 to 100, and writes 40 as 0xA8, with nothing mapped. What
+# it leaves alone this refuses, so that a value asked for is never silently not used.
+TEMPERATURE_RANGE = (40, 120)
+FAN_RANGE = (40, 100)
+
 
 class OptionsConfig(BaseConfig):
     """Every `-o` setting, in the order the original's own table holds them."""
@@ -54,12 +63,12 @@ class OptionsConfig(BaseConfig):
         self.overcputemp = 0
         self.overgputemp = 0
         self.overedramtemp = 0
-        self.cpufan = 0
-        self.gpufan = 0
+        self.cpufan = None
+        self.gpufan = None
         self.cfldv = None
-        self.avregion = 0
+        self.avregion = None
         self.gameregion = 0
-        self.dvdregion = 0
+        self.dvdregion = None
         self.xellbutton = "eject"
         self.xellbutton2 = None
         self.dualboot = None
@@ -199,85 +208,108 @@ class OptionsConfig(BaseConfig):
 
     @property
     def cputemp(self) -> int:
-        """The target temperature in Centigrade for the CPU when fans are on auto."""
+        """The target temperature in Centigrade for the CPU when fans are on auto.
+
+        40 to 120, and 0 leaves the block's own value -- see `TEMPERATURE_RANGE`.
+        """
         return self["cputemp"]
 
     @cputemp.setter
     def cputemp(self, value):
-        self["cputemp"] = self.check_number("cputemp", value)
+        self["cputemp"] = self.check_number(
+            "cputemp", value, between=TEMPERATURE_RANGE, zero=True)
 
     @property
     def gputemp(self) -> int:
-        """The target temperature in Centigrade for the GPU when fans are on auto."""
+        """The target temperature in Centigrade for the GPU when fans are on auto.
+
+        As `cputemp`: 40 to 120, and 0 leaves the block's own value.
+        """
         return self["gputemp"]
 
     @gputemp.setter
     def gputemp(self, value):
-        self["gputemp"] = self.check_number("gputemp", value)
+        self["gputemp"] = self.check_number(
+            "gputemp", value, between=TEMPERATURE_RANGE, zero=True)
 
     @property
     def edramtemp(self) -> int:
-        """The target temperature in Centigrade for the EDRAM when fans are on auto."""
+        """The target temperature in Centigrade for the EDRAM when fans are on auto.
+
+        As `cputemp`: 40 to 120, and 0 leaves the block's own value.
+        """
         return self["edramtemp"]
 
     @edramtemp.setter
     def edramtemp(self, value):
-        self["edramtemp"] = self.check_number("edramtemp", value)
+        self["edramtemp"] = self.check_number(
+            "edramtemp", value, between=TEMPERATURE_RANGE, zero=True)
 
     @property
     def overcputemp(self) -> int:
-        """The overheat temperature in Centigrade for the CPU."""
+        """The overheat temperature in Centigrade for the CPU.
+
+        As `cputemp`: 40 to 120, and 0 leaves the block's own value.
+        """
         return self["overcputemp"]
 
     @overcputemp.setter
     def overcputemp(self, value):
-        self["overcputemp"] = self.check_number("overcputemp", value)
+        self["overcputemp"] = self.check_number(
+            "overcputemp", value, between=TEMPERATURE_RANGE, zero=True)
 
     @property
     def overgputemp(self) -> int:
-        """The overheat temperature in Centigrade for the GPU."""
+        """The overheat temperature in Centigrade for the GPU.
+
+        As `cputemp`: 40 to 120, and 0 leaves the block's own value.
+        """
         return self["overgputemp"]
 
     @overgputemp.setter
     def overgputemp(self, value):
-        self["overgputemp"] = self.check_number("overgputemp", value)
+        self["overgputemp"] = self.check_number(
+            "overgputemp", value, between=TEMPERATURE_RANGE, zero=True)
 
     @property
     def overedramtemp(self) -> int:
-        """The overheat temperature in Centigrade for the EDRAM."""
+        """The overheat temperature in Centigrade for the EDRAM.
+
+        As `cputemp`: 40 to 120, and 0 leaves the block's own value.
+        """
         return self["overedramtemp"]
 
     @overedramtemp.setter
     def overedramtemp(self, value):
-        self["overedramtemp"] = self.check_number("overedramtemp", value)
+        self["overedramtemp"] = self.check_number(
+            "overedramtemp", value, between=TEMPERATURE_RANGE, zero=True)
 
     @property
-    def cpufan(self) -> int:
-        """Runs the CPU fan at this speed always, as a percentage. Zero is auto.
+    def cpufan(self) -> int | None:
+        """Runs the CPU fan at this speed always, as a percentage, or None to leave it.
 
-        The original takes any number here, 256 included, and writes it through.
-        This refuses anything outside 0 to 100, which is the range the sample ini
-        states and the only one a percentage can mean.
+        40 to 100 -- see `FAN_RANGE` -- and 0 puts it back on auto, which the original
+        writes as 0x7F: measured over a block whose byte said 0xBC.
         """
         return self["cpufan"]
 
     @cpufan.setter
     def cpufan(self, value):
-        self["cpufan"] = self.check_number("cpufan", value, between=(0, 100))
+        self["cpufan"] = None if value is None else self.check_number(
+            "cpufan", value, between=FAN_RANGE, zero=True)
 
     @property
-    def gpufan(self) -> int:
-        """Runs the GPU fan at this speed always, as a percentage. Zero is auto.
+    def gpufan(self) -> int | None:
+        """Runs the GPU fan at this speed always, as a percentage, or None to leave it.
 
-        The original takes any number here, 256 included, and writes it through.
-        This refuses anything outside 0 to 100, which is the range the sample ini
-        states and the only one a percentage can mean.
+        As `cpufan`: 40 to 100, and 0 is auto.
         """
         return self["gpufan"]
 
     @gpufan.setter
     def gpufan(self, value):
-        self["gpufan"] = self.check_number("gpufan", value, between=(0, 100))
+        self["gpufan"] = None if value is None else self.check_number(
+            "gpufan", value, between=FAN_RANGE, zero=True)
 
     @property
     def cfldv(self) -> int | None:
@@ -319,31 +351,48 @@ class OptionsConfig(BaseConfig):
         )
 
     @property
-    def avregion(self) -> int:
-        """The video output mode. 0x100 is NTSC and 0x300 is PAL."""
+    def avregion(self) -> int | None:
+        """The video output mode, or None to leave it. 0x100 is NTSC and 0x300 is PAL.
+
+        Thirty-two bits, written whole, 0 included: measured, `avregion=0` zeroes all
+        four bytes and `=0x12345678` writes them as they stand. Its sample ini names
+        only the two values above.
+        """
         return self["avregion"]
 
     @avregion.setter
     def avregion(self, value):
-        self["avregion"] = self.check_number("avregion", value)
+        self["avregion"] = None if value is None else self.check_number(
+            "avregion", value, between=(0, 0xFFFFFFFF))
 
     @property
     def gameregion(self) -> int:
-        """The console's game region, sixteen bits. 0x00FF is NTSC/US."""
+        """The console's game region, sixteen bits. 0x00FF is NTSC/US; 0 leaves it.
+
+        The original writes the low sixteen bits of whatever it is given and only when
+        they are not zero -- `=0x1FFFF` writes FFFF and `=0x10000` nothing, measured.
+        Anything past sixteen bits is refused here instead.
+        """
         return self["gameregion"]
 
     @gameregion.setter
     def gameregion(self, value):
-        self["gameregion"] = self.check_number("gameregion", value)
+        self["gameregion"] = self.check_number("gameregion", value,
+                                               between=(0, 0xFFFF))
 
     @property
-    def dvdregion(self) -> int:
-        """The console's DVD region, thirty-two bits."""
+    def dvdregion(self) -> int | None:
+        """The console's DVD region, thirty-two bits, or None to leave it.
+
+        Written whole, as `avregion` is. 0 is written too, and then the block's rule
+        for a DVD region of zero puts 1 there -- see `SmcConfig.sealed`.
+        """
         return self["dvdregion"]
 
     @dvdregion.setter
     def dvdregion(self, value):
-        self["dvdregion"] = self.check_number("dvdregion", value)
+        self["dvdregion"] = None if value is None else self.check_number(
+            "dvdregion", value, between=(0, 0xFFFFFFFF))
 
     @property
     def xellbutton(self) -> str | None:

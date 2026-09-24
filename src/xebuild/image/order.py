@@ -52,6 +52,7 @@ those announced numbers would find neither.
 
 from __future__ import annotations
 
+import functools
 import logging
 
 from ..boards.flash import PAGE
@@ -77,7 +78,17 @@ def marked_bad(raw: bytes, flash) -> tuple:
 
 
 def failing(raw: bytes, flash) -> tuple:
-    """Every block holding a page whose data no longer matches its own code."""
+    """Every block holding a page whose data no longer matches its own code.
+
+    Two seconds over a 16 MB dump, and a build asks it three times of the same one --
+    to judge the dump, to put its blocks in order and to remap them -- so the answer is
+    kept for the last couple of dumps asked about.
+    """
+    return _failing(bytes(raw), flash)
+
+
+@functools.lru_cache(maxsize=2)
+def _failing(raw: bytes, flash) -> tuple:
     step, per = PAGE + flash.spare.length, flash.spare.pages_a_block
     out = []
     for block in range(len(raw) // (step * per)):

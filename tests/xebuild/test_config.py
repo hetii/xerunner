@@ -29,6 +29,8 @@ NUMBERS = ("cputemp", "gputemp", "edramtemp", "overcputemp", "overgputemp",
            "overedramtemp", "cpufan", "gpufan", "cfldv", "avregion", "gameregion",
            "dvdregion")
 BUTTONS = ("xellbutton", "xellbutton2", "dualboot")
+TEMPERATURES = ("cputemp", "gputemp", "edramtemp", "overcputemp", "overgputemp",
+                "overedramtemp")
 BYTES = ("macid", "dvdkey")
 
 
@@ -223,27 +225,52 @@ class TheOptions(unittest.TestCase):
                     BuildConfig(**{name: "maybe"})
 
     def test_a_number_is_decimal_unless_it_says_otherwise(self):
-        # `cfldv`, `cpufan` and `gpufan` have limits of their own, and the tests below
-        # say what each of them does at them.
-        for name in [one for one in NUMBERS
-                     if one not in ("cfldv", "cpufan", "gpufan")]:
+        for name, good in (("cputemp", "60"), ("overedramtemp", "0x50"),
+                           ("avregion", "0x300"), ("gameregion", "255"),
+                           ("dvdregion", "2"), ("cpufan", "0x40")):
             with self.subTest(option=name):
-                self.assertEqual(BuildConfig()[name], 0)
-                self.assertEqual(BuildConfig(**{name: "60"})[name], 60)
-                self.assertEqual(BuildConfig(**{name: "0x10"})[name], 16)
+                self.assertEqual(BuildConfig(**{name: good})[name], int(good, 0))
                 for wrong in ("abc", "", True, "-5"):
                     with self.assertRaises(ValueError):
                         BuildConfig(**{name: wrong})
 
-    def test_the_fan_speeds_are_percentages(self):
-        """Our own rule: the original writes 256 through, and a percentage cannot."""
-        for name in ("cpufan", "gpufan"):
+    def test_what_nothing_given_means(self):
+        """0 leaves a temperature or the game region alone, as the original's 0 does;
+        a fan and the other two regions write 0 when asked, so nothing is None."""
+        for name in (*TEMPERATURES, "gameregion"):
             with self.subTest(option=name):
-                self.assertEqual(BuildConfig(**{name: 100})[name], 100)
-                self.assertEqual(BuildConfig(**{name: 0})[name], 0)
-                for wrong in (101, 256, -1):
+                self.assertEqual(BuildConfig()[name], 0)
+        for name in ("cpufan", "gpufan", "avregion", "dvdregion", "cfldv"):
+            with self.subTest(option=name):
+                self.assertIsNone(BuildConfig()[name])
+
+    def test_a_temperature_is_forty_to_a_hundred_and_twenty_or_nothing(self):
+        """Measured: 39 and 121 are left unused by the original, 40 and 120 written."""
+        for name in TEMPERATURES:
+            with self.subTest(option=name):
+                for good in (0, 40, 120):
+                    self.assertEqual(BuildConfig(**{name: good})[name], good)
+                for wrong in (1, 39, 121, 256):
                     with self.assertRaises(ValueError):
                         BuildConfig(**{name: wrong})
+
+    def test_the_fan_speeds_are_forty_to_a_hundred_or_auto(self):
+        """Measured: 1 to 39 and past 100 are left unused by the original, 0 is auto."""
+        for name in ("cpufan", "gpufan"):
+            with self.subTest(option=name):
+                for good in (0, 40, 100):
+                    self.assertEqual(BuildConfig(**{name: good})[name], good)
+                for wrong in (1, 39, 101, 256, -1):
+                    with self.assertRaises(ValueError):
+                        BuildConfig(**{name: wrong})
+
+    def test_the_regions_fit_their_fields(self):
+        self.assertEqual(BuildConfig(avregion=0xFFFFFFFF).avregion, 0xFFFFFFFF)
+        self.assertEqual(BuildConfig(dvdregion=0).dvdregion, 0)
+        for name, wrong in (("avregion", 0x100000000), ("dvdregion", 0x100000000),
+                            ("gameregion", 0x10000)):
+            with self.subTest(option=name), self.assertRaises(ValueError):
+                BuildConfig(**{name: wrong})
 
     def test_a_negative_number_is_refused_wherever_one_is_taken(self):
         """Measured: the original turns away `-o cputemp=-5` and every one like it."""
