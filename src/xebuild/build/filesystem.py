@@ -60,17 +60,18 @@ class Filesystem:
     def add(self, name: str, body: bytes, stamp: int = 0) -> Entry | None:
         """One more file, in the next blocks there are, or None where it will not fit.
 
-        A file that would reach the last block a build may use is left out and the
-        next one tried, as the original does -- "ERROR: adding xenonsclatin.xtt will
-        exceed available flash space! Skipped!" -- and a smaller one behind it can still
-        go in: measured on 17489_RGL's longer `-i flash` list on jasperbb, which skips
-        three files and places the rest. Never trimmed: a file cut to fit reads back
-        short with nothing said about it.
+        The block below the last one a build may use is kept for the table, so a file
+        must end before it; one that would not is left out and the next one tried, as
+        the original does -- "ERROR: adding xenonsclatin.xtt will exceed available
+        flash space! Skipped!" -- and a smaller one behind it can still go in. Measured
+        on 17489_RGL's longer `-i flash` list on jasperbb, and on trinity with a file
+        padded to put secdata.bin at block 0x3DA, which goes in, and at 0x3DB, which
+        does not. Never trimmed: a file cut to fit reads back short with nothing said.
         """
         at = self.after
         blocks = -(-len(body) // BLOCK)
         last = self.flash.last_block - self.flash.base_of(self.bigffs)
-        if at + blocks > last:
+        if at + blocks > last - 1:
             logger.error("adding %s will exceed available flash space! Skipped!", name)
             return None
         entry = Entry.for_file(name, at, len(body), stamp)

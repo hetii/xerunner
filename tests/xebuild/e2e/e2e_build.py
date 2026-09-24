@@ -15,6 +15,8 @@ from xebuild.chain import Chain
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto import smc as cipher
+from xebuild.crypto.keys import derive
+from xebuild.crypto.rc4 import rc4
 from xebuild.image import Directory, Image
 from xebuild.imagetypes import for_name as type_for
 from xebuild.release import Release
@@ -377,6 +379,12 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
       and with `noecdremap`.
     * A big block dump carrying memory-unit pages, 64 MB and a 256 MB overdump, with
       and without `nandmu`.
+    * Every file a console's material may hold, handed in beside a build from a dump:
+      a borrowed or sealed kv.bin, a MobileB.dat, smc_config.bin, fcrt.bin, and each
+      security file open, sealed, and sealed under another console's key.
+    * A flash filled so that files and blobs stop fitting; `-i` and `-r` together; a
+      release's own payload.bin and freeboot.bin, known and changed; bad blocks on a
+      big block dump and on a 16 MB dump built for a big block part.
     * Devkit images from 17489 and 1838 on xenon, falcon, jasper and jasperbb, whose
       `[rawpatch]` files no release ships: made up and put in a copy of the release,
       which `cell.json` then names as `release`.
@@ -408,7 +416,6 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                 console, bigffs = for_name(told["board"])
                 flash, bigffs = type_for(told["type"]).shape(console, bigffs)
                 image = Image(raw, flash, bigffs)
-                plain, _ = security.opened_crl(image.read("crl.bin"), self.cpu)
                 data = os.path.join(here, "data")
                 config = BuildConfig(ini=os.path.join(data, "options.ini"),
                                      image_type=told["type"], console=told["board"],
@@ -418,4 +425,14 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                     release = Release(told["release"], os.path.join(
                         os.path.dirname(told["release"]), "common"))
                 one = Build(config, Material(data), release)
-                self.assertEqual(one.image(security.when_in(plain)).raw, raw)
+                self.assertEqual(one.image(self._clock_of(image)).raw, raw)
+
+    def _clock_of(self, image) -> int:
+        """The build's clock, out of its crl.bin -- or its secdata.bin, where the
+        crl.bin was one handed in that no key opens and so went in as it stood."""
+        try:
+            plain, _ = security.opened_crl(image.read("crl.bin"), self.cpu)
+        except ValueError:
+            sealed = image.read("secdata.bin")
+            plain = rc4(derive(self.cpu, sealed[:0x10]), sealed[0x10:])[0x10:]
+        return security.when_in(plain)

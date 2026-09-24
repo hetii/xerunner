@@ -57,8 +57,7 @@ class Flash:
     states_block_size = True  # whether the image's header says so at 0x70
     round_to = BLOCK  # what the bootloader region's start rounds up to
 
-    mobile_stride = BLOCK  # a settings blob gets its own block ...
-    mobile_region = 0x10000  # ... unless they are packed into one region of this size
+    mobile_stride = BLOCK  # how far apart the settings blobs go; the table follows
 
     spare = None  # one of `spare.py`'s three, or None on a part with no spare area
     anchors = False  # two blocks an eMMC console needs to find its own filesystem
@@ -175,7 +174,6 @@ class BigBlockNand(Flash):
     block_size = 0x20000
     round_to = 0x20000
     mobile_stride = 0x800
-    mobile_region = 0x20000
     spare = BigBlockChip()
 
 
