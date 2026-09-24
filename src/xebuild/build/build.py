@@ -12,6 +12,7 @@ were measured, and what a mistake in one of them looks like.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -28,9 +29,11 @@ from ..crypto.rc4 import rc4
 from ..image import Dump, Header, Image, Keyvault, order
 from ..image import anchor as anchors
 from ..image import dump as dumps
+from ..release import Release
 from ..smc import Smc
 from . import layout, security
 from .filesystem import Filesystem
+from .material import Material
 
 # The copyright line every image carries, with the year a build replaces. Read off the
 # sixteen reference images, which carry two different years and nothing else different.
@@ -606,9 +609,7 @@ class Build:
         for stage, nonce in zip(stages, self._nonces(stages), strict=True):
             stage.nonce = nonce
         keys = sealing.keys(stages, self.cpu_key or b"", self._second_pass_at(stages))
-        binds = sealing.binding_at(stages)
-        if binds < 0 and which > 0:
-            binds = 0
+        binds = self._wears_console(stages, which)
         if binds >= 0:
             # Under the manufacturing regime the original computes no binding, and the
             # CB_B of an image it built that way carries sixteen zeros where the digest
@@ -635,6 +636,24 @@ class Build:
             body = bytes(out[stage.at + len(stage.head):stage.at + padded])
             out[stage.at:stage.at + padded] = stage.head + rc4(key, body)
         return bytes(out)
+
+    def _wears_console(self, stages, which: int = 0) -> int:
+        """Which stage of a chain carries the console's block, or -1 for none.
+
+        `stages` may be the stages or their kinds. A split chain carries it on CB_B.
+        A single CB carries it itself -- sealed under its own key, with nothing of the
+        console mixed in -- on a retail image and on a JTAG image's second chain, and
+        a glitch image's single CB carries none at all. Measured on fat retail images
+        of 13604, whose CB 5771 wears the pairing and the computed field, on the JTAG
+        image, and on fat glitch images, whose log has no "CBENC pairing set to" line.
+        """
+        kinds = [getattr(one, "tag", one) for one in stages]
+        if len(kinds) > 1 and kinds[0] in ("CB", "CBA") and kinds[1] in ("CB", "CBB"):
+            return 1
+        if kinds and kinds[0] == "CB" and (which > 0
+                                           or self.image_type.name == "retail"):
+            return 0
+        return -1
 
     def _chain_files(self, which: int = 0) -> list:
         """The stages of one chain, out of the file list, in the order it names them.
@@ -800,8 +819,11 @@ class Build:
         # no CB_B binds nowhere, and its CF carries three zeros there and the lockdown
         # value all the same -- measured on a fat glitch image, the one such chain this
         # release builds beside a slot. A JTAG image binds on its second chain's CB.
-        binds = (any(one.kind == "CBB" for one in self._chain_files())
-                 or bool(self._chain_files(1)))
+        binds = any(
+            self._wears_console([one.kind for one in self._chain_files(chain)],
+                                chain) >= 0
+            for chain in (0, 1) if self._chain_files(chain)
+        )
         cf[0x21C:0x21F] = self.pairing if binds else bytes(3)
         cf[0x21F] = self.ldv
         message = bytearray(cf[:0x220])
@@ -860,8 +882,11 @@ class Build:
         for listed in recipe.firmware:
             body = self.release.firmware(listed)
             if body is None:
-                if listed.outside:
-                    logger.info("%s is not there and is optional", listed.plain)
+                # A file the list vouches for with no checksum, or with zero, is one
+                # the original goes without: "could not read file '..\\launch.xex',
+                # skipping" -- and 7258's `Byrom.xex`, listed with none, likewise.
+                if listed.outside or not listed.crc:
+                    logger.warning("could not read file '%s', skipping", listed.name)
                     continue
                 raise ValueError("%s is named by the file list and the release does "
                                  "not have it" % listed.plain)
@@ -905,7 +930,8 @@ class Build:
                 own = None
         content = self.material.bytes_in(name)
         if content is None and name in ("crl.bin", "dae.bin") and \
-                not config.nosusecurity and name in self.release.container.held:
+                not config.nosusecurity and self.release.container is not None and \
+                name in self.release.container.held:
             content = self.release.container.read(name)
         if content is None:
             content = own
@@ -932,7 +958,13 @@ class Build:
                                     self._buffer(name, carried))
         if name == "fcrt.bin":
             return None if content is None else security.fcrt(content, cpu)
-        raise ValueError("%s is not one of the five security files" % name)
+        # Any other name the list gives -- 9199's names `odd.bin` -- is looked for
+        # like the rest and, found nowhere, left out: "WARNING: odd.bin not found,
+        # skipping". Found beside the build, it goes in as it is -- measured with a
+        # made-up odd.bin, listed between crl.bin and extended.bin as its list says.
+        if content is None:
+            logger.warning("%s not found, skipping", name)
+        return content
 
     @property
     def ldv(self) -> int:
@@ -1196,6 +1228,16 @@ class Build:
         else:
             version = self.recipe.version.encode("ascii")
             core[blank:blank + 0x20] = version.ljust(0x20, b"\x00")[:0x20]
+        if self.recipe.version == "9199":
+            # "9199 ini string detected, patching to old hold address": one doubleword
+            # of the core, 0x8000000001003078 to 0x80000000001FFFF8 -- measured on a
+            # 9199 JTAG image, where it is the one change beside the version string.
+            old = bytes.fromhex("8000000001003078")
+            if core.count(old) != 1:
+                raise ValueError("this core does not carry the hold address 9199 "
+                                 "patches")
+            spot = core.find(old)
+            core[spot:spot + 8] = bytes.fromhex("80000000001ffff8")
         at, room = where["freeboot"]
         out.put(at, bytes(core).ljust(room, b"\x00"))
         listed = self.patch_slot()
@@ -1477,5 +1519,54 @@ class Build:
             switch = 0 if switch == reason else switch
         return (switch << 24) | (speed << 16) | (second << 8) | reason
 
+    def auto_name(self) -> str:
+        """The name the original gives an image when it is given none.
+
+        The word in the middle is one per arm of its name builder, at 0x44FC62 on:
+        `gg`, `g2` and `g2m` for the three glitches, which share a type number, and by
+        number otherwise -- `devk` and `testk` for both sizes of each.
+        """
+        kind = self.image_type
+        glitches = {"glitch": "gg", "glitch2": "g2", "glitch2m": "g2m"}
+        words = {1: "retail", 2: "jtag", 4: "devgl", 5: "devgl", 6: "devk", 7: "devk",
+                 8: "testk", 9: "testk"}
+        word = glitches.get(kind.name) or words[kind.number]
+        return "%s_%s_%s.bin" % (self.recipe.version, word, self.config.console_name)
+
     def __repr__(self) -> str:
         return "Build(%s, %s)" % (self.image_type.name, self.console.name)
+
+
+def build_image(config, when: int | None = None) -> str:
+    """Image Build Mode, whole: the image written to disk, and its SHA-1 if asked for.
+
+    Everything comes from `config`. `data` is the release, and the per-build directory
+    is `per_build`; with neither given the original takes `./data/` for both --
+    "WARNING: you did not specify per build directory! Using ./data/" -- and so does
+    this. The bootloaders shared by every release are `common/` beside the release.
+
+    The image goes to `out`, and with none to the name the original makes up:
+    `<the file list's version>_<word>_<the -c spelling>.bin` -- `17559_g2_trinity.bin`,
+    `17559_gg_jasper256.bin`, `17559mfg_g2m_trinitybigffs.bin`, all measured by x360mcp;
+    the version is the list's own and not the directory's. `sha_file` asks for a
+    SHA-1 of the image beside it, as `sha1sum` writes one -- the digest, " *" and the
+    image's name -- in the file it names, or `<out>.sha1` when it is just `True`.
+
+    Returns where the image went. `when` is the build's clock, for reproducing one.
+    """
+    if config.per_build is None:
+        logger.warning("you did not specify per build directory! Using ./data/")
+    release = Release(config.data or "data")
+    one = Build(config, Material(config.per_build or "data"), release)
+    image = one.image(when)
+    out = config.out or one.auto_name()
+    raw = image.raw
+    with open(out, "wb") as handle:
+        handle.write(raw)
+    logger.info("wrote %s, %#x bytes", out, len(raw))
+    if config.sha_file:
+        where = out + ".sha1" if config.sha_file is True else config.sha_file
+        with open(where, "w") as handle:
+            handle.write("%s *%s\n" % (hashlib.sha1(raw).hexdigest(),
+                                         os.path.basename(out)))
+    return out

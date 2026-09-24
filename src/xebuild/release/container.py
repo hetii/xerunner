@@ -153,9 +153,25 @@ class Package:
 class Container(Package):
     """A release's update container: its firmware files, and its CF and CG."""
 
+    def firmware_name(self, name: str) -> str | None:
+        """What the package calls a firmware file a recipe names, or None.
+
+        Matched without regard to case, as the original matches: 9199's package holds
+        `$flash_XenonCLatin.xttp` for the `xenonclatin.xttp` its list names, and the
+        original's log says "extracted SUPD/xenonclatin.xttp".
+        """
+        wanted = ("$flash_" + name).lower()
+        for held in self.held:
+            if held.lower() == wanted:
+                return held
+        return None
+
     def firmware(self, name: str) -> bytes:
         """One firmware file, under the name a recipe uses for it."""
-        return self.read("$flash_" + name)
+        held = self.firmware_name(name)
+        if held is None:
+            raise ValueError("%s is not in this package" % name)
+        return self.read(held)
 
     @property
     def stages(self) -> tuple:
