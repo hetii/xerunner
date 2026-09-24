@@ -594,7 +594,7 @@ class Build:
         """The update the console runs after the chain: CF, then CG, both sealed.
 
         One run of bytes, because CG does not fit and simply carries on: the first
-        `layout.SLOT_SPAN` of it are the slot, and the rest is the tail, which lands at
+        `layout.slot_span` of it are the slot, and the rest is the tail, which lands at
         `tail_at`. The CF has to say where that is, so the caller passes it.
 
         `which` counts the pairs the file list names, and only a JTAG image names two.
@@ -643,7 +643,8 @@ class Build:
         Stage(cf, 0).nonce = own_cf.nonce
         Stage(cg, 0).nonce = own_cg.nonce
 
-        spill = len(cf) + len(cg) - layout.SLOT_SPAN
+        span = layout.slot_span(self.image_type, self.console.flash)
+        spill = len(cf) + len(cg) - span
         count = max(0, -(-spill // layout.BLOCK))
         blocks = count.to_bytes(2, "big") + b"".join(
             (tail_at // layout.BLOCK + step).to_bytes(2, "big") for step in range(count)
@@ -838,11 +839,11 @@ class Build:
         if xell is not None:
             out.put(where["xell"][0], xell)
         # One slot pair after another, and each tail straight behind the one before.
-        spills, at = [], tail_at
+        spills, at, span = [], tail_at, where["slot"][1]
         for which in range(len(self._update_pairs())):
             run = self.slot(at, which)
-            out.put(slots + which * layout.SLOT_SPAN, run[:layout.SLOT_SPAN])
-            spill = run[layout.SLOT_SPAN:]
+            out.put(slots + which * span, run[:span])
+            spill = run[span:]
             out.put(at, spill + bytes(-len(spill) % layout.BLOCK))
             spills.append(spill)
             at += len(spill) + -len(spill) % layout.BLOCK
@@ -882,6 +883,12 @@ class Build:
         # follows it; with none to write there is no region, and the table goes
         # straight after the files -- measured with `nomobile`, and x360mcp saw the same
         # on a build with no dump.
+        if blobs:
+            # Their region starts on the flash's own step: a jasperbb's files end at
+            # 0x38D0000 and its blobs go to 0x38E0000 -- measured, and x360mcp had the
+            # same four boards' table. On every other part the files already end on one.
+            start += -start % flash.round_to
+            fs.skipped = range(fs.after, (start - base) // layout.BLOCK)
         table_at = start + (flash.mobile_region if blobs else 0)
         # On a big block chip the pages of the filesystem carry three bytes of its own
         # and a kind of their own; everywhere else a file's pages carry a block number.
@@ -1009,7 +1016,8 @@ class Build:
         if self.xell() is not None:
             system = 0x10
         else:
-            system = (slots + 2 * layout.SLOT_SPAN) // 0x20000
+            span = layout.slot_span(self.image_type, flash)
+            system = (slots + 2 * span) // 0x20000
         size = flash.last_block - flash.base_of(self.config.bigffs)
         return bytes([system, size >> 5, 4])
 
