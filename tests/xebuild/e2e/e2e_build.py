@@ -3,6 +3,7 @@
 Needs images the original built. See `tests/xebuild/e2e/__init__.py`.
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -362,24 +363,32 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 self.assertEqual(one.image(security.when_in(plain)).raw, raw)
 
 
-class WhatABuildWithNoDumpProduces(unittest.TestCase):
-    """J-Runner's donor flow -- a dead NAND, so no dump -- against the original's own.
+class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
+    """Builds the original made from material staged for one question each.
 
-    `XEBUILD_DONORS` names a directory of `<type>-<board>/` cells, each holding the
-    per-build `data/` the original was given -- a borrowed `kv.bin`, an `fcrt.bin`, a
-    shipped `smc.bin`, the donor `smc_config.bin`, no `nanddump.bin` -- and the
-    `theirs.bin` it built from it with `-norandom -o cfldv=14`. Under that switch
-    nothing is drawn, so every byte of the file can be held against the reference; the
-    one thing taken from it is the build's clock, out of its crl.bin.
+    `XEBUILD_CELLS` names a directory of cells. A cell holds the per-build `data/` the
+    original was given, the `theirs.bin` it built from it, and a `cell.json` saying the
+    type, the console and the settings -- `BuildConfig`'s own names. What the cells ask:
+
+    * J-Runner's donor flow: a dead NAND, so no dump, a borrowed `kv.bin`, a shipped
+      SMC, the donor `smc_config.bin`, built with `-norandom -o cfldv=14` so that
+      nothing is drawn -- across five types and seven consoles.
+    * A dump with one block marked bad and one failing its code, plain, with `noremap`
+      and with `noecdremap`.
+    * A big block dump carrying memory-unit pages, 64 MB and a 256 MB overdump, with
+      and without `nandmu`.
+
+    Every byte of the file is held against the reference; the one thing taken from it
+    is the build's clock, out of its crl.bin.
     """
 
     def setUp(self):
-        self.where = os.environ.get("XEBUILD_DONORS", "")
+        self.where = os.environ.get("XEBUILD_CELLS", "")
         release = os.environ.get("XEBUILD_RELEASE_DIR", "")
         key = os.environ.get("XEBUILD_CPUKEY", "")
         if not os.path.isdir(self.where) or not os.path.isdir(release) or not key:
             raise unittest.SkipTest(
-                "XEBUILD_DONORS, XEBUILD_RELEASE_DIR and XEBUILD_CPUKEY are needed"
+                "XEBUILD_CELLS, XEBUILD_RELEASE_DIR and XEBUILD_CPUKEY are needed"
             )
         self.cpu = bytes.fromhex(key)
         self.release = Release(release, os.path.join(os.path.dirname(release),
@@ -387,17 +396,18 @@ class WhatABuildWithNoDumpProduces(unittest.TestCase):
 
     def test_the_whole_file_is_the_original_s(self):
         for cell in sorted(os.listdir(self.where)):
-            kind, _, board = cell.partition("-")
+            here = os.path.join(self.where, cell)
             with self.subTest(cell):
-                path = os.path.join(self.where, cell, "theirs.bin")
-                with open(path, "rb") as handle:
+                with open(os.path.join(here, "cell.json")) as handle:
+                    told = json.load(handle)
+                with open(os.path.join(here, "theirs.bin"), "rb") as handle:
                     raw = handle.read()
-                image = Image(raw, for_name(board)[0].flash)
+                console, bigffs = for_name(told["board"])
+                image = Image(raw, console.flash, bigffs)
                 plain, _ = security.opened_crl(image.read("crl.bin"), self.cpu)
-                data = os.path.join(self.where, cell, "data")
+                data = os.path.join(here, "data")
                 config = BuildConfig(ini=os.path.join(data, "options.ini"),
-                                     image_type=kind, console=board, cfldv=14,
-                                     no_random=True)
+                                     image_type=told["type"], console=told["board"],
+                                     **told["settings"])
                 one = Build(config, Material(data), self.release)
-                self.assertIsNone(one.dump)
                 self.assertEqual(one.image(security.when_in(plain)).raw, raw)

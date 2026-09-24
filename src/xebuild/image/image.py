@@ -136,6 +136,44 @@ class Image:
             if self.flat[at:at + PAGE] != erased:
                 self.mark(at, PAGE)
 
+    def carry(self, other: Image, start: int, end: int) -> None:
+        """The bytes and spare of `other` from `start` to `end`, verbatim, pages whole.
+
+        For what a build keeps of a console rather than making: `nandmu`'s memory unit,
+        whose pages go across exactly as the dump holds them -- measured, data and spare
+        alike, erased blocks staying erased.
+        """
+        if not self.writable:
+            raise ValueError("this image was read in from a file and is material; "
+                             "start from Image.blank() to build one")
+        self.flat[start:end] = other.flat[start:end]
+        if self.flash.spare is not None:
+            self.spares[start // PAGE:end // PAGE] = other.spares[start // PAGE:
+                                                                  end // PAGE]
+
+    def retire(self, block: int, stand_in: int) -> None:
+        """Move one block's bytes and spare to the block standing in for it.
+
+        What the original writes for a console whose flash has written a block off,
+        measured on a dump with one block marked bad and one failing its code: the
+        stand-in carries the block's data and its spare verbatim -- the block's own
+        number included, which is how the console finds it -- and the block itself is
+        zeros, data and spare alike.
+        """
+        if not self.writable:
+            raise ValueError("this image was read in from a file and is material; "
+                             "start from Image.blank() to build one")
+        # An erase block, in the chip's own pages: 0x4000 on a 16 MB part and 0x20000
+        # on a big block one -- the unit `order` counts bad blocks in.
+        per = self.flash.spare.pages_a_block
+        length = per * PAGE
+        at, to = block * length, stand_in * length
+        self.flat[to:to + length] = self.flat[at:at + length]
+        self.flat[at:at + length] = bytes(length)
+        for page in range(per):
+            self.spares[stand_in * per + page] = self.spares[block * per + page]
+            self.spares[block * per + page] = bytes(self.flash.spare.length)
+
     def put(self, at: int, data: bytes) -> None:
         """`data` into the flat run at `at`, on an image that is being built.
 
