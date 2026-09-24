@@ -125,10 +125,13 @@ class Listed:
         """Which bootloader this name is, or nothing when it is not one.
 
         `cba_9188.bin` is a CB_A and `cd_9452.bin` a CD -- the stem before the first
-        underscore, which is how a release names every one of them.
+        underscore, which is how a release names every one of them. The development
+        chains 1838 and 17489 name theirs `SB_14352.bin`, `SD_12611.bin`, `SE_1838.bin`,
+        and those are kinds too; what a stage *is* is its magic, which the release's
+        own patches may rewrite -- SB comes out a CB.
         """
         stem = self.plain.split("_")[0].split(".")[0].upper()
-        return stem if stem in BLANKED else ""
+        return stem if stem in BLANKED or stem in ("SB", "SC", "SD", "SE") else ""
 
     def vouches_for(self, body: bytes) -> bool:
         """Whether these bytes are what the release says this name holds.

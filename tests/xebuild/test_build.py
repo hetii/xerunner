@@ -627,11 +627,16 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         self.assertEqual(self.a_chain(kind="glitch")._second_pass_at(single), -1)
 
     def test_which_patch_set_each_kind_of_stage_takes(self):
+        """By role and place: the B stage second takes the first set, a D the second.
+        A development chain's SB and SD are the same two."""
         one = self.a_chain()
-        self.assertEqual(one._patch_set_for("CBB", 4), 0)
-        self.assertEqual(one._patch_set_for("CD", 4), 1)
-        self.assertIsNone(one._patch_set_for("CBA", 4))
-        self.assertIsNone(one._patch_set_for("CE", 4))
+        self.assertEqual(one._patch_set_for("CBB", 1), 0)
+        self.assertEqual(one._patch_set_for("SB", 1), 0)
+        self.assertEqual(one._patch_set_for("CD", 2), 1)
+        self.assertEqual(one._patch_set_for("SD", 2), 1)
+        self.assertIsNone(one._patch_set_for("CBA", 0))
+        self.assertIsNone(one._patch_set_for("CB", 0))
+        self.assertIsNone(one._patch_set_for("CE", 3))
 
     def test_a_jtag_chain_takes_no_set_at_all(self):
         """Measured: its CB, CD and CE are the release's files, nothing laid over."""
@@ -643,7 +648,7 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         """The release's CD is 0x4F20 and comes out 0x5290; a header saying the old
         length would have everything that walks by lengths read it short."""
         one = self.a_chain(sets=([(0x10, (1,))], [(0x180, (2, 3))]))
-        body = one._stage_body(one._chain_files()[2], 2, 4)
+        body = one._stage_body(one._chain_files()[2], 2)
         self.assertEqual(len(body), 0x190)
         self.assertEqual(Stage(body, 0).length, 0x190)
 

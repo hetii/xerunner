@@ -41,7 +41,12 @@ NOTICE = b"\xa9 2004-2010 Microsoft Corporation. All rights reserved."
 
 # The kinds of stage that make up the chain proper. CF and CG are named by the same list
 # and are not in it: they go in the slot behind the chain.
-CHAIN_KINDS = ("CB", "CBA", "CBB", "CD", "CE")
+CHAIN_KINDS = ("CB", "CBA", "CBB", "SB", "SC", "CD", "SD", "CE", "SE")
+
+# What each kind of stage is to the chain, by the letter the original goes by: B for a
+# CB of either half, D, E. The development chains' SB, SD and SE are the same three.
+ROLES = {"CB": "B", "CBA": "B", "CBB": "B", "SB": "B", "SC": "C", "CD": "D", "SD": "D",
+         "CE": "E", "SE": "E"}
 
 # What a stage is sealed in multiples of. Measured: under the manufacturing patch set a
 # patched CD ends at 0x52A8, the image says 0x52B0, and the next stage begins there.
@@ -515,12 +520,13 @@ class Build:
         files = self._chain_files()
         if not files or not Stage(self.release.bootloader(files[0]), 0).manufacturing:
             return b"\xff" * 0x10
-        cbb = [one for one in files if one.kind == "CBB"]
+        cbb = [one for at, one in enumerate(files)
+               if ROLES.get(one.kind) == "B" and at == 1]
         if not cbb:
             raise ValueError("fuses are built from the CB_B, and this chain has none")
         return self.fuses(cbb[0])
 
-    def fuses(self, listed) -> bytes:
+    def fuses(self, listed, devkit: bool = False) -> bytes:
         """The fuses a loader hands a console in place of its own: 0x60 bytes.
 
         Twelve lines of eight bytes, each read out of the original's own code by
@@ -538,10 +544,15 @@ class Build:
         The type and the allow word are the big-endian word at 0x3B0 of `listed`, the
         CB the console is bound on: type in the top byte, allow in the low sixteen
         bits. A manufacturing chain's CB_B, a JTAG image's second CB.
+
+        `devkit` gives a development kernel's instead, type 0 and no allow bits: a JTAG
+        chain that ends in 1838's `SE_1838.bin` is "re-encoded" after its CB and the
+        fuses the original then prints and writes are those -- measured.
         """
         if not self.cpu_key:
             raise ValueError("fuses carry the CPU key, and none was given")
-        word = int.from_bytes(self.release.bootloader(listed)[0x3B0:0x3B4], "big")
+        word = 0 if devkit else int.from_bytes(
+            self.release.bootloader(listed)[0x3B0:0x3B4], "big")
         kind, allow = word >> 24, word & 0xFFFF
         types = {0: b"\x0f\x0f", 1: b"\x0f\xf0", 2: b"\xf0\x0f", 3: b"\xf0\xf0"}
         if kind not in types:
@@ -604,7 +615,7 @@ class Build:
         out, offsets = bytearray(), []
         for index, one in enumerate(listed):
             offsets.append(len(out))
-            out += self._stage_body(one, index, len(listed))
+            out += self._stage_body(one, index)
         stages = [Stage(out, at) for at in offsets]
         for stage, nonce in zip(stages, self._nonces(stages), strict=True):
             stage.nonce = nonce
@@ -647,11 +658,10 @@ class Build:
         of 13604, whose CB 5771 wears the pairing and the computed field, on the JTAG
         image, and on fat glitch images, whose log has no "CBENC pairing set to" line.
         """
-        kinds = [getattr(one, "tag", one) for one in stages]
-        if len(kinds) > 1 and kinds[0] in ("CB", "CBA") and kinds[1] in ("CB", "CBB"):
+        roles = [ROLES.get(getattr(one, "tag", one)) for one in stages]
+        if roles[:2] == ["B", "B"]:
             return 1
-        if kinds and kinds[0] == "CB" and (which > 0
-                                           or self.image_type.name == "retail"):
+        if roles[:1] == ["B"] and (which > 0 or self.image_type.name == "retail"):
             return 0
         return -1
 
@@ -674,21 +684,21 @@ class Build:
                 continue
             if one.kind in CHAIN_KINDS:
                 run.append(one)
-            if run and one.kind not in CHAIN_KINDS[:-1]:
+            if run and ROLES.get(one.kind, "E") == "E":
                 runs.append(run)
                 run = []
         if run:
             runs.append(run)
         return runs[which] if which < len(runs) else []
 
-    def _stage_body(self, listed, index: int, of: int) -> bytes:
+    def _stage_body(self, listed, index: int) -> bytes:
         """One stage in the clear, patched, and as long as its header will say.
 
         Padding to `SEAL_ALIGN` is part of what is sealed, so it is part of the stage
         rather than a gap between stages.
         """
         body = bytearray(self.release.bootloader(listed))
-        which = self._patch_set_for(listed.kind, of)
+        which = self._patch_set_for(listed.kind, index)
         if which is not None:
             patches = self.patches
             if patches is not None and which < len(patches.sets):
@@ -699,18 +709,21 @@ class Build:
                 Stage(body, 0).length = len(body) + -len(body) % SEAL_ALIGN
         return bytes(body) + bytes(-len(body) % SEAL_ALIGN)
 
-    def _patch_set_for(self, kind: str, of: int):
-        """Which set of the release's patch file this kind of stage takes, if any.
+    def _patch_set_for(self, kind: str, index: int):
+        """Which set of the release's patch file this stage takes, if any.
 
-        The first set is CB_B's and the second is CD's. A JTAG image patches no stage of
-        its chain, which is measured rather than assumed: its CB, CD and CE come out of
-        the reference image as the release's files with nothing laid over them.
+        The first set is CB_B's -- the B stage in second place, which is where the
+        development chains keep their SB -- and the second is CD's, SD's likewise. A
+        JTAG image patches no stage of its chain, which is measured rather than assumed:
+        its CB, CD and CE come out of the reference image as the release's files with
+        nothing laid over them.
         """
         if self.image_type.name == "jtag":
             return None
-        if kind == "CBB":
+        role = ROLES.get(kind)
+        if role == "B" and index == 1:
             return 0
-        return 1 if kind == "CD" else None
+        return 1 if role == "D" else None
 
     def _second_pass_at(self, stages) -> int:
         """Which stage runs its key through the console's key a second time.
@@ -795,6 +808,9 @@ class Build:
             raise ValueError("a CF binds itself to the console's CPU key, and none was "
                              "given")
         pairs = self._update_pairs()
+        if not pairs:
+            raise ValueError("this release names no CF and CG for a %s %s image"
+                             % (self.console.name, self.image_type.name))
         which %= len(pairs)
         cf_listed, cg_listed = pairs[which]
         cf = bytearray(self.release.bootloader(cf_listed))
@@ -812,7 +828,11 @@ class Build:
             (tail_at // layout.BLOCK + step).to_bytes(2, "big") for step in range(count)
         )
         cf[0x30:0x68] = blocks.ljust(0x68 - 0x30, b"\x00")
-        if which < len(pairs) - 1:
+        # A JTAG image's first pair is the one its exploit boots through, and it never
+        # carries the console -- 1838 names no second pair, and its one CF still goes
+        # out with nothing of the console in it, measured.
+        jtag_first = self.image_type.name == "jtag" and which == 0
+        if which < len(pairs) - 1 or jtag_first:
             return self._sealed_pair(cf, cg, cg_nonce)
         cf[0x21B] = which
         # The pairing goes in only where a chain binds to the console. A chain with
@@ -856,9 +876,8 @@ class Build:
             elif one.kind == "CG" and cf is not None:
                 pairs.append((cf, one))
                 cf = None
-        if not pairs:
-            raise ValueError("this release names no CF and CG for a %s %s image"
-                             % (self.console.name, self.image_type.name))
+        # None at all is a real answer: 1888, 1838 and 17489 name `none` in both
+        # places and ship no update, and the original leaves the slot erased.
         return pairs
 
     def files(self, when: int) -> list:
@@ -878,7 +897,7 @@ class Build:
         """
         recipe = self.recipe
         out = []
-        suffix = str(len(self._update_pairs()))
+        suffix = str(max(1, len(self._update_pairs())))
         for listed in recipe.firmware:
             body = self.release.firmware(listed)
             if body is None:
@@ -974,6 +993,12 @@ class Build:
         1 with no dump to read it off, which the original says: "cfldv was not set
         anywhere, setting it to 1".
         """
+        if self.image_type.name == "jtag" and len(self._update_pairs()) < 2:
+            # With no pair of the release's own to state it, a JTAG image's lockdown
+            # value is zero -- "Fuse CF LDV set to : 0x0000..." -- and the fuses and the
+            # security files carry that, `cfldv` or not. Measured on 1838, which names
+            # no such pair, with and without `-o cfldv=10`.
+            return 0
         if self.config.cfldv is not None:
             return self.config.cfldv
         if self.dump is None:
@@ -1002,18 +1027,23 @@ class Build:
         chain = self.chain()
         chain_end = layout.CHAIN_AT + len(chain)
         second = self.chain(1) if self._chain_files(1) else b""
-        where = layout.for_type(self.image_type, flash, chain_end, bigffs, len(second))
+        plain_end = layout.CHAIN_AT + sum(
+            -(-len(self.release.bootloader(one)) // SEAL_ALIGN) * SEAL_ALIGN
+            for one in self._chain_files()
+        )
+        where = layout.for_type(self.image_type, flash, chain_end, bigffs, len(second),
+                                plain_end)
         slots, tail_at = where["slot"][0], where["tail"][0]
         smc = self.smc()
         smc_at = layout.smc_at(len(smc))
-        page = self.header(slots, self.ce_version, len(smc))
+        page = self.header(slots, self.stated_version, len(smc))
         # Zeros from the page to the SMC, on every reference image.
         out.put(0, page + bytes(smc_at - len(page)))
         out.put(smc_at, smc)
         out.put(layout.KEYVAULT_AT, self.keyvault())
         # The chain's last block is filled out with zeros, as a file's is.
         out.put(layout.CHAIN_AT, chain + bytes(-chain_end % layout.BLOCK))
-        xell = self.xell()
+        xell = self.xell() if "xell" in where else None
         if xell is not None:
             out.put(where["xell"][0], xell)
         # One slot pair after another, and each tail straight behind the one before.
@@ -1072,7 +1102,7 @@ class Build:
         table_at = start + (flash.mobile_region if blobs else 0)
         # On a big block chip the pages of the filesystem carry three bytes of its own
         # and a kind of their own; everywhere else a file's pages carry a block number.
-        fields = self._fs_fields(slots) if big else b""
+        fields = self._fs_fields(slots, "xell" in where) if big else b""
         for entry, blocks, body in fs.placed:
             at = flash.offset_of(entry.sector, bigffs)
             span = blocks * layout.BLOCK
@@ -1247,7 +1277,9 @@ class Build:
                              "reads" % (len(listed), room))
         out.put(at, listed + bytes(-(at + len(listed)) % layout.BLOCK))
         out.mark(at, room)
-        out.put(where["fuses"][0], self.fuses(self._chain_files(1)[0]))
+        files = self._chain_files(1)
+        out.put(where["fuses"][0],
+                self.fuses(files[0], any(one.kind == "SE" for one in files)))
         at = where["second chain"][0]
         out.put(at, second + bytes(-(at + len(second)) % layout.BLOCK))
 
@@ -1267,7 +1299,7 @@ class Build:
         with open(path, "rb") as handle:
             return handle.read()
 
-    def _fs_fields(self, slots: int) -> bytes:
+    def _fs_fields(self, slots: int, xell: bool) -> bytes:
         """The three bytes a big block chip's filesystem pages carry at 7.
 
         free60's FsSize1, FsSize0 and FsPageCount. The first says how much of the flash
@@ -1278,7 +1310,7 @@ class Build:
         blocks over 32, and the third is 4 on every image measured.
         """
         flash = self.console.flash
-        if self.xell() is not None:
+        if xell:
             system = 0x10
         else:
             span = layout.slot_span(self.image_type, flash)
@@ -1398,17 +1430,15 @@ class Build:
         return bytes(out)
 
     @property
-    def ce_version(self) -> int:
-        """The version word the image's page states, which is CE's own.
+    def stated_version(self) -> int:
+        """The version word the image's page states: 1888, 0x0760, whatever the chain.
 
-        0x0760 for the release measured, and the page of every reference image says the
-        same as the CE the release ships.
+        Every release here but three ships `ce_1888.bin`, so reading it off the CE gave
+        the same number; the three that do not settle it. 1838's and 17489's chains end
+        in `SE_1838.bin` and `SE_17489.bin`, and the images the original built from them
+        state 0x0760 all the same -- measured on both.
         """
-        for one in self.stage_list:
-            if one.kind == "CE":
-                return Stage(self.release.bootloader(one), 0).build
-        raise ValueError("this release names no CE for a %s %s image"
-                         % (self.console.name, self.image_type.name))
+        return 1888
 
     @property
     def patches(self):
@@ -1424,7 +1454,7 @@ class Build:
         return self.release.patches(self.image_type, "fat" if fat else self.console,
                                     self.config.section_ext or "")
 
-    def header(self, slots: int, ce_version: int, smc_length: int) -> bytes:
+    def header(self, slots: int, stated_version: int, smc_length: int) -> bytes:
         """The image's first page, built from named fields rather than copied.
 
         Every byte of it is held against the pages of **sixteen images the original
@@ -1432,8 +1462,8 @@ class Build:
         produces the same page as one with a dump.
 
         What the caller says is what the page states about things it cannot see from
-        here: where the slots begin, the version word -- which is CE's, 0x0760 for the
-        release measured -- and how long the SMC is. Where the SMC goes follows from
+        here: where the slots begin, the version word -- 0x0760, see `stated_version` --
+        and how long the SMC is. Where the SMC goes follows from
         that length, because it ends where the keyvault begins; `layout.smc_at` is the
         rule, and a page stating a place that disagrees with the length is what it
         prevents.
@@ -1456,7 +1486,7 @@ class Build:
           config in dump...found at offset 0xf7c000"
         """
         head = Header.blank()
-        head.version = ce_version
+        head.version = stated_version
         head.entrypoint = layout.CHAIN_AT
         head.size = slots
         head.cf_at = slots

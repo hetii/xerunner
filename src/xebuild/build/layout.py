@@ -160,12 +160,19 @@ def tail_at(slots: int, base: int, span: int = SLOT_SPAN) -> int:
 
 
 def for_type(image_type, flash, chain_end: int, bigffs: bool = False,
-             second_chain: int = 0) -> dict:
+             second_chain: int = 0, plain_end: int | None = None) -> dict:
     """Every boundary of an image of this type on this flash, by name.
 
     The SMC is not among them: where it goes follows its own length rather than the type
     or the part, and `smc_at` is that question. `second_chain` is how long a JTAG
     image's second chain is, which is where its filesystem starts from.
+
+    `plain_end` is where the chain ends before the release's patches grow it, which is
+    the cursor the original decides XeLL and the slot from -- "patch slot offset reset
+    to" is printed before the patches go on. **XeLL is left out when the chain would
+    reach it**: 17489's chain ends at 0xCE0C0, so its glitch2m image has no XeLL and its
+    slot at 0xD0000. The test rounds by a block; a devgl chain that grows past 0x70000
+    only once patched keeps its XeLL, which x360mcp measured.
 
     Refuses the six types no image of which could be built to hold it against; the
     message says which and why. A number nobody measured is worse here than none.
@@ -175,10 +182,13 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False,
             "%s: %s" % (image_type.name, UNMEASURED[image_type.name])
         )
     jtag = image_type.name == "jtag"
-    xell = image_type.name != "retail"
+    cursor = chain_end if plain_end is None else plain_end
+    xell = image_type.name != "retail" and (
+        jtag or cursor + -cursor % BLOCK <= XELL_AT
+    )
     # A JTAG image rounds by the smallest step on every part: its slots are at 0x70000
     # on a jasperbb too, whose flash rounds by 0x20000 everywhere else -- measured.
-    slots = slots_at(chain_end, xell and not jtag, 0 if jtag else flash.round_to)
+    slots = slots_at(cursor, xell and not jtag, 0 if jtag else flash.round_to)
     base = flash.base_of(bigffs) * BLOCK
     span = slot_span(image_type, flash)
     out = {
