@@ -17,6 +17,7 @@ from xebuild.chain import Fields, sealing
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto import smc as cipher
+from xebuild.crypto.keys import derive
 from xebuild.crypto.rc4 import rc4
 from xebuild.image import Directory, Header, Image, Keyvault
 from xebuild.image.directory import CHAIN_END
@@ -215,6 +216,29 @@ class WhereEachRegionGoes(unittest.TestCase):
         self.assertEqual(layout.smc_at(0x3800), 0x800)
         with self.assertRaises(ValueError):
             layout.smc_at(0x4000)
+
+    def test_xell_is_left_out_where_the_chain_would_reach_it(self):
+        """17489's chain ends at 0xCE0C0: no XeLL, and its slot at 0xD0000. The test
+        is on the chain before its patches grow it."""
+        falcon = for_name("falcon")[0].flash
+        where = layout.for_type(type_for("glitch2m"), falcon, 0xCE460,
+                                plain_end=0xCE0C0)
+        self.assertNotIn("xell", where)
+        self.assertEqual(where["slot"][0], 0xD0000)
+        where = layout.for_type(type_for("glitch2m"), falcon, 0x70690,
+                                plain_end=0x6F000)
+        self.assertIn("xell", where)
+
+    def test_a_devkit_slot_rounds_by_the_part_s_own_step_alone(self):
+        """0xD4000 on the flat shape, 0xE0000 on jasperbb; no XeLL region."""
+        devkit = type_for("devkit")
+        flat, _ = devkit.shape(for_name("falcon")[0])
+        where = layout.for_type(devkit, flat, 0xD2B60)
+        self.assertEqual(where["slot"][0], 0xD4000)
+        self.assertNotIn("xell", where)
+        big, bigffs = devkit.shape(for_name("jasperbb")[0])
+        self.assertEqual(layout.for_type(devkit, big, 0xD2B60, bigffs)["slot"][0],
+                         0xE0000)
 
     def test_the_tail_lands_past_the_slot_and_the_patch_slot(self):
         self.assertEqual(layout.tail_at(0xB0000, base=0), 0xD0000)
@@ -800,3 +824,89 @@ class WhatAnSmcIsRefusedFor(unittest.TestCase):
         one = a_build(self, files={"smc.bin": bytes(0x3000)})
         with self.assertRaises(ValueError):
             one.smc()
+
+
+class AListOfFirmware:
+    """A file list naming firmware files and no security files."""
+
+    security = ()
+
+    def __init__(self, *listed):
+        self.firmware = tuple(Listed(name, crc) for name, crc in listed)
+
+
+class AReleaseHoldingEveryFile:
+    def firmware(self, listed):
+        return b"body"
+
+
+class TheSmallerRulesOfABuild(unittest.TestCase):
+    """What the fields of a build turn on, each one measured on the original."""
+
+    def names(self, kind, board, *listed):
+        one = a_build(self, kind=kind, board=board)
+        one.release = AReleaseHoldingEveryFile()
+        one._recipe = AListOfFirmware(*listed)
+        return [name for name, _body in one.files(0x5A000000)]
+
+    def test_a_jtag_image_names_its_patch_files_for_two_slots_whatever_it_lists(self):
+        """`aac.xexp2` from a JTAG list with its own pair taken out -- measured; and
+        any name ending in p that the list vouches for, 17489's `rrbkgnd.bmp` too."""
+        listed = (("aac.xexp", "12345678"), ("rrbkgnd.bmp", "12345678"))
+        self.assertEqual(self.names("jtag", "falcon", *listed),
+                         ["aac.xexp2", "rrbkgnd.bmp2"])
+        self.assertEqual(self.names("glitch2", "trinity", *listed),
+                         ["aac.xexp1", "rrbkgnd.bmp1"])
+
+    def test_a_name_ending_in_p_with_no_checksum_takes_no_number(self):
+        """17489_RGL's `rglXam.rglp`, listed with none."""
+        self.assertEqual(self.names("glitch2", "trinity", ("rglXam.rglp", "")),
+                         ["rglXam.rglp"])
+
+    def test_an_se_in_a_jtag_list_zeroes_the_lockdown_value_cfldv_or_not(self):
+        """1838's; and 17559's list without its own pair keeps the console's."""
+        stages = (("CB", 0x100), ("CD", 0x180), ("CE", 0x140), ("CF", 0x400),
+                  ("CG", 0x14000), ("CB", 0x100), ("CD", 0x100), ("SE", 0x100))
+        one = WhichStagesTheChainIsMadeOf.a_chain(self, kind="jtag", board="falcon",
+                                                  stages=stages, cfldv=10)
+        self.assertEqual(one.ldv, 0)
+        one = WhichStagesTheChainIsMadeOf.a_chain(self, kind="jtag", board="falcon",
+                                                  stages=stages[:7])
+        self.assertEqual(one.ldv, 14)
+
+    def test_which_stage_wears_the_console_by_role(self):
+        """A split chain on its second B, a lone B on retail, devkit and a JTAG
+        image's second chain, nothing on a glitch image."""
+        glitch = a_build(self, kind="glitch", board="falcon")
+        devkit = a_build(self, kind="devkit", board="falcon")
+        self.assertEqual(glitch._wears_console(["CBA", "SB", "SD", "SE"]), 1)
+        self.assertEqual(glitch._wears_console(["CB", "CD", "CE"]), -1)
+        self.assertEqual(glitch._wears_console(["CB", "CD"], which=1), 0)
+        self.assertEqual(devkit._wears_console(["SB", "SC", "SD", "SE"]), 0)
+
+    def test_a_1bl_key_that_does_not_sum_is_refused(self):
+        with self.assertRaises(ValueError):
+            _ = a_build(self, one_bl_key="00112233445566778899AABBCCDDEEFF").one_bl_key
+        good = "DD88AD0C9ED669E7B56794FB68563EFA"
+        self.assertEqual(a_build(self, one_bl_key=good).one_bl_key.hex().upper(), good)
+
+    def test_a_dump_of_no_length_a_flash_has_is_ignored_not_refused(self):
+        """"is not a correct raw (with ecc) dump size (0x10c2000 bytes), ignoring"."""
+        one = a_build(self, dump=False, files={"nanddump.bin": bytes(0x1000)})
+        self.assertIsNone(one.dump)
+
+    def test_a_foreign_crl_beside_the_build_goes_in_as_it_stands(self):
+        from .test_security import OTHER, a_crl
+        foreign = a_crl(OTHER)
+        one = a_build(self, dump=False, files={"crl.bin": foreign},
+                      cpu_key=bytes(range(0x10)).hex())
+        self.assertEqual(one.security_file("crl.bin", 0x5A000000), foreign)
+
+    def test_a_secdata_of_the_wrong_length_is_made_up_clean(self):
+        key = bytes(range(0x10))
+        one = a_build(self, dump=False, files={"secdata.bin": bytes(0x200)},
+                      cpu_key=key.hex(), no_random=True)
+        made = one.security_file("secdata.bin", 0x5A000000)
+        self.assertEqual(len(made), 0x400)
+        plain = rc4(derive(key, made[:0x10]), made[0x10:])
+        self.assertEqual(plain[:8], security.COMPILED_IN["secdata.bin"])

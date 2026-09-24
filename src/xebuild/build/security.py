@@ -42,7 +42,6 @@ reference's own bytes in, and a handed-in drawn value looks exactly like a deriv
 from __future__ import annotations
 
 import hashlib
-import math
 
 from ..crypto import aes
 from ..crypto.keys import derive
@@ -83,10 +82,17 @@ def _unwrapped(blob: bytes, master: bytes) -> bytes:
     return aes.decrypt_block(aes.expand(master), blob[WRAPPED_KEY_AT:BODY_AT])
 
 
-def _states_its_length(body: bytes) -> bool:
-    """Whether a crl body opened: past the stamp it states its own length, and fits."""
-    stated = int.from_bytes(body[0x10:0x14], "big")
-    return 0 < stated <= len(body)
+def _vouched(record: bytes, body: bytes, body_at: int) -> bool:
+    """Whether a signed record's body, in the clear, is what its header hashes.
+
+    SHA-1 over everything from the record's 0x150 on against the twenty bytes at 0x0C:
+    the original's own test for crl.bin at 0x41DCB8 and for each record of dae.bin at
+    0x41E2A2, before it decrypts and again after. `body` starts at `body_at` of the
+    record -- 0x140 for crl.bin, 0x130 for dae.bin -- and what lies before 0x150 is the
+    stamp and preamble a build rewrites, which is why the hash stays true.
+    """
+    hashed = bytes(body[0x150 - body_at:])
+    return hashlib.sha1(hashed).digest() == bytes(record[0x0C:0x20])
 
 
 def opened_crl(blob: bytes, cpu_key: bytes) -> tuple:
@@ -99,7 +105,7 @@ def opened_crl(blob: bytes, cpu_key: bytes) -> tuple:
     for master in (cpu_key, XEX_KEY):
         body = aes.cbc_decrypt(_unwrapped(blob, master), blob[BODY_AT:],
                                blob[IV_AT:IV_AT + aes.BLOCK])
-        if _states_its_length(body):
+        if _vouched(blob, body, BODY_AT):
             return body, master
     raise ValueError(
         "neither this console's key nor the shipped one opens this crl.bin"
@@ -115,7 +121,7 @@ def crl_parameters(own: bytes, cpu_key: bytes) -> tuple:
 
 
 def crl(content: bytes, cpu_key: bytes, when: int, ldv: int, iv: bytes,
-        file_key: bytes) -> bytes:
+        file_key: bytes, clear: bool = False) -> bytes:
     """crl.bin: a body opened, restamped and sealed under a vector and file key.
 
     The header -- magic, hash, signature -- is the content's and is carried. The body is
@@ -125,7 +131,7 @@ def crl(content: bytes, cpu_key: bytes, when: int, ldv: int, iv: bytes,
     vector and file key sitting in the copy the console already had" -- or the ones
     compiled into the original, under `nosecurity`.
     """
-    body, _ = opened_crl(content, cpu_key)
+    body = content[BODY_AT:] if clear else opened_crl(content, cpu_key)[0]
     plain = bytearray(body)
     plain[0:8] = stamp(when)
     plain[0x0F] = ldv & 0xFF
@@ -152,25 +158,21 @@ def records(blob: bytes) -> list:
     return out
 
 
-def _dae_opened_by(blob: bytes, cpu_key: bytes) -> bytes:
-    """Which master key opens a dae.bin, told apart by entropy.
+def _dae_record(record: bytes, cpu_key: bytes) -> tuple:
+    """One dae.bin record's body in the clear, and the key that opened it -- None for a
+    record already in the clear -- or a refusal.
 
-    It has no length word in the clear to check, and its plaintext is dense: about 6.5
-    under the right key against 7.6 under the wrong one.
+    Record by record, as the original goes, at 0x41E1CA: in the clear if the header's
+    hash vouches for it as it stands; otherwise opened under the console's key and then
+    the shipped one, each with its own zero vector, and taken when the hash vouches.
     """
-    best, best_entropy = None, 8.0
-    first = blob[:records(blob)[0][1]]
+    if _vouched(record, record[DAE_BODY_AT:], DAE_BODY_AT):
+        return record[DAE_BODY_AT:], None
     for master in (cpu_key, XEX_KEY):
-        body = aes.cbc_decrypt(master, first[DAE_BODY_AT:], bytes(aes.BLOCK))[:2048]
-        counts = [0] * 256
-        for byte in body:
-            counts[byte] += 1
-        entropy = -sum(n / len(body) * math.log2(n / len(body)) for n in counts if n)
-        if entropy < best_entropy:
-            best, best_entropy = master, entropy
-    if best is None or best_entropy > 7.0:
-        raise ValueError("neither key opens this dae.bin")
-    return best
+        body = aes.cbc_decrypt(master, record[DAE_BODY_AT:], bytes(aes.BLOCK))
+        if _vouched(record, body, DAE_BODY_AT):
+            return body, master
+    raise ValueError("neither key opens this dae.bin")
 
 
 def dae_parameters(own: bytes, cpu_key: bytes) -> tuple:
@@ -180,11 +182,13 @@ def dae_parameters(own: bytes, cpu_key: bytes) -> tuple:
     opened, adds 0x120, and copies thirty-two bytes -- the header's field and the first
     sixteen of the opened body, whose bytes 8 to 0x0E are the head.
     """
-    if _dae_opened_by(own, cpu_key) != cpu_key:
+    found = records(own)
+    if not found:
+        raise ValueError("this is no dae.bin")
+    plain, master = _dae_record(own[:found[0][1]], cpu_key)
+    if master != cpu_key:
         raise ValueError("the console's own dae.bin does not open under its own key, "
                          "so its head and field cannot be carried")
-    first = own[:records(own)[0][1]]
-    plain = aes.cbc_decrypt(cpu_key, first[DAE_BODY_AT:], bytes(aes.BLOCK))
     return plain[0x08:0x0F], own[0x120:0x130]
 
 
@@ -206,14 +210,12 @@ def dae(content: bytes, cpu_key: bytes, when: int, ldv: int, head: bytes,
     `nosecurity`. The content behind the preamble is untouched, which is why the hash
     each record carries stays true.
     """
-    master = _dae_opened_by(content, cpu_key)
     field = bytearray(field)
     field[1] |= 0x01
     out = bytearray()
     for at, length in records(content):
         record = content[at:at + length]
-        plain = bytearray(aes.cbc_decrypt(master, record[DAE_BODY_AT:],
-                                          bytes(aes.BLOCK)))
+        plain = bytearray(_dae_record(record, cpu_key)[0])
         plain[0:8] = stamp(when)
         plain[0x08:0x0F] = head
         plain[0x0F] = ldv & 0xFF
@@ -269,7 +271,8 @@ def _sealed_like_a_keyvault(plain: bytes, nonce: bytes, cpu_key: bytes) -> bytes
     return nonce + rc4(derive(cpu_key, nonce), plain)
 
 
-def extended(own: bytes | None, keyvault_head: bytes, cpu_key: bytes) -> bytes:
+def extended(own: bytes | None, keyvault_head: bytes, cpu_key: bytes,
+             clear: bool = False) -> bytes:
     """extended.bin: the console's own, or a clean one, with the keyvault's head.
 
     It keeps the keyvault's overflow, and its eight bytes of head are the **keyvault's**
@@ -280,6 +283,8 @@ def extended(own: bytes | None, keyvault_head: bytes, cpu_key: bytes) -> bytes:
     """
     if own is None:
         plain = bytearray(CLEAN_LENGTH["extended.bin"] - NONCE_LENGTH)
+    elif clear:
+        plain = bytearray(own[NONCE_LENGTH:])
     else:
         plain = bytearray(_opened_like_a_keyvault(own, cpu_key))
     plain[:HEAD_LENGTH] = keyvault_head[:HEAD_LENGTH]
@@ -293,7 +298,7 @@ def secdata_head(own: bytes, cpu_key: bytes) -> bytes:
 
 
 def secdata(own: bytes | None, cpu_key: bytes, when: int, ldv: int,
-            head: bytes = b"") -> bytes:
+            head: bytes = b"", clear: bool = False) -> bytes:
     """secdata.bin: the console's own, or a clean one, restamped, its nonce derived.
 
     Its head is its own previous copy's -- not the keyvault's -- or `head` when one is
@@ -306,6 +311,9 @@ def secdata(own: bytes | None, cpu_key: bytes, when: int, ldv: int,
     """
     if own is None:
         plain = bytearray(CLEAN_LENGTH["secdata.bin"] - NONCE_LENGTH)
+    elif clear:
+        # Handed in already open: its first sixteen bytes are a stale nonce.
+        plain = bytearray(own[NONCE_LENGTH:])
     else:
         plain = bytearray(_opened_like_a_keyvault(own, cpu_key))
     if head:
@@ -330,6 +338,40 @@ def fcrt(own: bytes, cpu_key: bytes) -> bytes:
     if not clear:
         return own
     return own[:0x140] + aes.cbc_encrypt(cpu_key, own[0x140:], own[0x100:0x110])
+
+
+def in_the_clear(name: str, blob: bytes, cpu_key: bytes) -> bool:
+    """Whether a file handed in beside the build is taken as plaintext.
+
+    Each by the original's own test. crl.bin: the header's hash vouches for the body
+    as it stands (0x41DCB8). extended.bin: its first sixteen bytes are zero, or they
+    are the nonce its body as it stands derives -- HMAC(CPU key, body + 07 12) --
+    both read out of 0x41D6A0; anything else "appears to be encrypted" and is opened.
+    secdata.bin: always, since its handler at 0x41D9B0 never decrypts. dae.bin is
+    asked record by record inside `dae` and so is not asked here.
+    """
+    if name == "crl.bin":
+        return _vouched(blob, blob[BODY_AT:], BODY_AT)
+    if name == "extended.bin":
+        nonce, body = blob[:NONCE_LENGTH], blob[NONCE_LENGTH:]
+        return not any(nonce) or derive(cpu_key, body + b"\x07\x12") == nonce
+    return name == "secdata.bin"
+
+
+def opens(name: str, blob: bytes, cpu_key: bytes) -> bool:
+    """Whether a file handed in beside the build opens under a key this build has:
+    the console's, or for the two a release ships, the shipped one."""
+    try:
+        if name == "crl.bin":
+            opened_crl(blob, cpu_key)
+        elif name == "dae.bin":
+            for at, length in records(blob):
+                _dae_record(blob[at:at + length], cpu_key)
+        elif name in ("extended.bin", "secdata.bin"):
+            return verifies(name, blob, cpu_key)
+    except (ValueError, IndexError):
+        return False
+    return True
 
 
 def verifies(name: str, own: bytes, cpu_key: bytes) -> bool:

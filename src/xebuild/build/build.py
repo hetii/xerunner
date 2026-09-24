@@ -127,11 +127,20 @@ class Build:
         """
         if self._dump is None and self.dump_raw is not None:
             raw = self.dump_raw
-            own = boards.for_dump(raw, self.console)
+            try:
+                own = boards.for_dump(raw, self.console)
+            except ValueError:
+                # A dump of no length a flash has is not refused: it is ignored, and
+                # the build goes on as if there were none -- "is not a correct raw
+                # (with ecc) dump size (0x10c2000 bytes), ignoring", measured.
+                logger.warning("nanddump.bin is not a correct raw (with ecc) dump size "
+                               "(%#x bytes), ignoring", len(raw))
+                self._dump = False
+                return None
             bigffs = self.config.bigffs if own is self.console else False
             self._dump = Dump(raw, own, bigffs, remap=not self.config.noremap,
                               ecd=not self.config.noecdremap)
-        return self._dump
+        return self._dump or None
 
     @property
     def dump_raw(self) -> bytes | None:
@@ -315,8 +324,11 @@ class Build:
                                  "an SMC from")
             carried = self.dump.smc
             plain = cipher.opened(carried)
+        # The two SMC patches are JTAG and glitch options, as the usage groups them, and
+        # a retail image ignores both -- measured, its SMC comes out untouched.
+        hack = self.image_type.number in (2, 3, 4, 5)
         for name in ("smcnoeject", "smcnoblink"):
-            if getattr(self.config, name):
+            if hack and getattr(self.config, name):
                 patched = Smc(plain).with_patch(name)
                 if patched == plain:
                     logger.warning("could not patch the SMC for %s: its routine is not "
@@ -928,8 +940,8 @@ class Build:
         The release's `[flashfs]` list and then its `[security]` list, each in the
         order it names them -- which is the order of every reference image's table.
 
-        A patch file is written under its name with the number of update slots after
-        it: `aac.xexp` goes in as `aac.xexp1` and `xenonclatin.xttp` as
+        A patch file is written under its name with the number of update slots its
+        type has after it: `aac.xexp` goes in as `aac.xexp1` and `xenonclatin.xttp` as
         `xenonclatin.xttp1`, all seven of them on every image measured -- and as
         `aac.xexp2` on the JTAG one, which has two.
 
@@ -939,7 +951,9 @@ class Build:
         """
         recipe = self.recipe
         out = []
-        suffix = str(max(1, len(self._update_pairs())))
+        # The number of update slots the type has, not of pairs the list names: a JTAG
+        # list with its second pair taken out still writes `aac.xexp2`, measured.
+        suffix = "2" if self.image_type.name == "jtag" else "1"
         for listed in recipe.firmware:
             body = self.release.firmware(listed)
             if body is None:
@@ -997,11 +1011,39 @@ class Build:
                 logger.warning("%s verify failed! Discarding data.", name)
                 own = None
         content = self.material.bytes_in(name)
+        # A file beside the build is taken whichever state it is in, each kind by its
+        # own test -- `security.in_the_clear` -- all measured: open, it is sealed like
+        # the rest; sealed, it is opened; sealed under no key this build has --
+        # another console's, say -- crl.bin goes in as it stands, extended.bin is made
+        # up clean, and secdata.bin is never opened in the first place. dae.bin and
+        # fcrt.bin go in as they stand too, which is a deliberate divergence: the
+        # original says "Skipping encryption" and then writes what its failed
+        # decryption left -- dae.bin's first record opened under the shipped key,
+        # fcrt.bin's body under this console's -- which no console can read.
+        # And one of the wrong length is not taken at all where the original checks it:
+        # "extended.bin is not the correct size! Making up an clean/empty
+        # extended.bin!", and the same of secdata.bin -- 0x41D6B4 and 0x41D9BF.
+        made_clean = content is not None and len(content) != security.CLEAN_LENGTH.get(
+            name, len(content))
+        if made_clean:
+            logger.warning("%s is not the correct size! Making up a clean one", name)
+            content = None
+        clear = content is not None and security.in_the_clear(name, content,
+                                                              self.cpu_key)
+        if (content is not None and not clear
+                and name in ("crl.bin", "dae.bin", "extended.bin")
+                and not security.opens(name, content, self.cpu_key)):
+            logger.error("%s appears to be crypted with the wrong key or damaged",
+                         name)
+            if name in ("crl.bin", "dae.bin"):
+                return content
+            return security.extended(None, self.plain_keyvault()[0x10:0x18],
+                                     self.cpu_key)
         if content is None and name in ("crl.bin", "dae.bin") and \
                 not config.nosusecurity and self.release.container is not None and \
                 name in self.release.container.held:
             content = self.release.container.read(name)
-        if content is None:
+        if content is None and not made_clean:
             content = own
         cpu, ldv = self.cpu_key, self.ldv
         if name == "crl.bin":
@@ -1009,7 +1051,7 @@ class Build:
                 return None
             own_params = None if own is None else security.crl_parameters(own, cpu)
             iv, key = self._buffer(name, own_params)
-            return security.crl(content, cpu, when, ldv, iv, key)
+            return security.crl(content, cpu, when, ldv, iv, key, clear)
         if name == "dae.bin":
             if content is None:
                 return None
@@ -1017,13 +1059,14 @@ class Build:
             head, field = self._buffer(name, own_params)
             return security.dae(content, cpu, when, ldv, head, field)
         if name == "extended.bin":
-            return security.extended(content, self.plain_keyvault()[0x10:0x18], cpu)
+            return security.extended(content, self.plain_keyvault()[0x10:0x18], cpu,
+                                     clear)
         if name == "secdata.bin":
             carried = None
             if own is not None:
                 carried = security.secdata_head(own, cpu)
             return security.secdata(content, cpu, when, ldv,
-                                    self._buffer(name, carried))
+                                    self._buffer(name, carried), clear)
         if name == "fcrt.bin":
             return None if content is None else security.fcrt(content, cpu)
         # Any other name the list gives -- 9199's names `odd.bin` -- is looked for
@@ -1042,11 +1085,14 @@ class Build:
         1 with no dump to read it off, which the original says: "cfldv was not set
         anywhere, setting it to 1".
         """
-        if self.image_type.name == "jtag" and len(self._update_pairs()) < 2:
-            # With no pair of the release's own to state it, a JTAG image's lockdown
-            # value is zero -- "Fuse CF LDV set to : 0x0000..." -- and the fuses and the
-            # security files carry that, `cfldv` or not. Measured on 1838, which names
-            # no such pair, with and without `-o cfldv=10`.
+        if self.image_type.name == "jtag" and any(
+                one.kind == "SE" for one in self.stage_list):
+            # A JTAG list naming an SE -- 1838's second chain ends in `SE_1838.bin` --
+            # gives a lockdown value of zero, "Fuse CF LDV set to : 0x0000...", and the
+            # fuses and the security files carry it, `cfldv` or not. The original sets
+            # it as it reads the stage's magic (0x42AD51). Measured on 1838 with and
+            # without `-o cfldv=10`, and on 17559's list with its own pair taken out,
+            # which keeps the console's 14: it is the SE and not the missing pair.
             return 0
         if self.config.cfldv is not None:
             return self.config.cfldv
@@ -1070,6 +1116,8 @@ class Build:
         """
         when = int(time.time()) if when is None else when
         # Refused here, before anything is laid, as the original does.
+        if self.console is None:
+            raise ValueError("you need to specify console type!")
         _ = self.one_bl_key
         flash, bigffs = self.flash, self.bigffs
         out = Image.blank(flash, bigffs)
@@ -1113,9 +1161,10 @@ class Build:
         out.mark_written(0, tail_at)
         if "payload" in where:
             # The payload's page says how long the core is, in words, at bytes 10 and
-            # 11 of its spare -- the one page of any image with anything there. See
-            # `_jtag_regions`.
-            words = len(self._jtag_loader("freeboot.bin")) // 4
+            # 11 of its spare -- the one page of any image with anything there. The
+            # built-in core's length, whatever core goes in: 0x350 beside a 0xD80 one
+            # from the release, whose own length the payload is patched with instead.
+            words = len(self._builtin("freeboot.bin")) // 4
             out.mark(where["payload"][0], PAGE, extra=words.to_bytes(4, "big"))
 
         big = flash.spare is not None and flash.spare.fs_at is not None
@@ -1167,13 +1216,15 @@ class Build:
         for index, name in enumerate(sorted(blobs)):
             at = start + index * flash.mobile_stride
             body, kind = blobs[name], 0x31 + "BCDE".index(name[6])
-            # Past the last usable block a blob is left out too, as a file is.
-            if at + len(body) > flash.last_block * layout.BLOCK:
+            # A blob that would reach the block kept for the table is left out too, as
+            # a file is: measured with B at 0x3DA going in and C at 0x3DB not.
+            if at + len(body) > (flash.last_block - 1) * layout.BLOCK:
                 logger.error("adding %s will exceed available flash space! Skipped!",
                              name)
                 continue
             out.put(at, body)
             placed[kind] = ((at - base) // layout.BLOCK, len(body))
+            ends = at + len(body)
             if flash.spare is None:
                 continue
             per = flash.spare.pages_a_block
@@ -1185,12 +1236,16 @@ class Build:
             out.mark(at, pages * PAGE, 1, kind,
                      bytes([len(body) // 0x100, free, 0, 0]),
                      b"\x00" if big else b"")
-        # With no blob placed -- none to place, or none that fit -- there is no region
-        # and the table goes where it would have begun: measured with `nomobile`, on a
-        # build with no dump, and on one whose blobs would not fit.
+        # The table follows the last blob placed, on the flash's step: 0x10000 past the
+        # start of four 0x4000 blobs, 0x20000 past four packed 0x800 apart on a big
+        # block part, and one block past a lone MobileB when the others would not fit
+        # -- all measured. With none placed -- none to place, or none that fit -- it
+        # goes where they would have begun: measured with `nomobile`, with no dump, and
+        # with blobs that would not fit.
+        table_at = start
         if placed:
             fs.skipped = range(fs.after, (start - base) // layout.BLOCK)
-        table_at = start + (flash.mobile_region if placed else 0)
+            table_at = ends + -ends % flash.round_to
         fs.table_at = (table_at - base) // layout.BLOCK
         table = fs.table()
         out.put(table_at, table)
@@ -1312,17 +1367,30 @@ class Build:
         """
         payload = bytearray(self._jtag_loader("payload.bin"))
         core = bytearray(self._jtag_loader("freeboot.bin"))
-        payload[0x52:0x54] = (len(core) // 4).to_bytes(2, "big")
+        # Only a payload the original recognises -- its own -- takes the length: one
+        # from the release that is a byte different goes in untouched, measured with
+        # three such, where an exact copy of the built-in one is patched.
+        known = self._builtin("payload.bin")
+        if bytes(payload[:len(known)]) == known:
+            payload[0x52:0x54] = (len(core) // 4).to_bytes(2, "big")
         out.put(where["payload"][0], bytes(payload))
-        blank = core.find(b"X" * 0x20)
+        # Only a core the original recognises is patched, and it recognises its own: a
+        # `freeboot.bin` in the release's `bin/` whose first 0xD40 bytes are the
+        # built-in core -- even with more behind them -- gets the version and 9199's
+        # hold address, and one with a single byte changed goes in as it is, X's and
+        # all, "CYGNOS, DEMON and NODVD command line options are ignored due to
+        # external freeboot.bin!". Measured on 17559 and 9199 with four such files.
+        known = self._builtin("freeboot.bin")
+        builtin = bytes(core[:len(known)]) == known
+        blank = core.find(b"X" * 0x20) if builtin else 0
         if blank < 0:
             # The original says so and carries on; whether anything else follows from
             # it has not been measured.
             logger.error("**** ERROR PATCHING FREEBOOT.BIN for kernel version string!")
-        else:
+        elif builtin:
             version = self.recipe.version.encode("ascii")
             core[blank:blank + 0x20] = version.ljust(0x20, b"\x00")[:0x20]
-        if self.recipe.version == "9199":
+        if builtin and self.recipe.version == "9199":
             # "9199 ini string detected, patching to old hold address": one doubleword
             # of the core, 0x8000000001003078 to 0x80000000001FFFF8 -- measured on a
             # 9199 JTAG image, where it is the one change beside the version string.
@@ -1347,6 +1415,13 @@ class Build:
         at = where["second chain"][0]
         out.put(at, second + bytes(-(at + len(second)) % layout.BLOCK))
 
+    @staticmethod
+    def _builtin(name: str) -> bytes:
+        """One of the two loaders the original carries inside itself."""
+        path = os.path.join(os.path.dirname(__file__), "builtin", name)
+        with open(path, "rb") as handle:
+            return handle.read()
+
     def _jtag_loader(self, name: str) -> bytes:
         """`payload.bin` or `freeboot.bin`: the release's own, else the built-in one.
 
@@ -1359,9 +1434,7 @@ class Build:
         if own is not None:
             return own
         logger.info("could not read %s, using built in %s", name, name)
-        path = os.path.join(os.path.dirname(__file__), "builtin", name)
-        with open(path, "rb") as handle:
-            return handle.read()
+        return self._builtin(name)
 
     def _fs_fields(self, slots: int) -> bytes:
         """The three bytes a big block chip's filesystem pages carry at 7.
@@ -1524,10 +1597,11 @@ class Build:
         """
         fat = self.console.fat and self.image_type.name == "glitch"
         # `-r` and `-i` both put their word into the patch file's name: `-r WB` reads
-        # `patches_g2corona_WB.bin` and `-i flash` `patches_g2mjasper_flash.bin`, both
-        # measured. What the original does with both at once has not been, and `-r`'s
-        # is taken.
-        ext = self.config.section_ext or self.config.firmware_ext or ""
+        # `patches_g2corona_WB.bin`, `-i flash` `patches_g2mjasper_flash.bin`, and both
+        # at once `-i`'s first -- `-i X -r Y` reads `patches_g2trinity_X_Y.bin`. All
+        # three measured.
+        ext = "_".join(one for one in (self.config.firmware_ext,
+                                       self.config.section_ext) if one)
         return self.release.patches(self.image_type, "fat" if fat else self.console,
                                     ext)
 
