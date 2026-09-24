@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 
 from ..boards.flash import BLOCK
-from ..image.directory import Directory, Entry
+from ..image.directory import POOL, Directory, Entry
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,8 @@ class Filesystem:
         self.pool = pool
         self.held = held
         self.placed = []
+        # Blocks the build stepped over between the files and the settings blobs.
+        self.skipped = range(0)
 
     @property
     def after(self) -> int:
@@ -89,11 +91,18 @@ class Filesystem:
         which block the table goes in.
         """
         chains = tuple((entry.sector, blocks) for entry, blocks, _body in self.placed)
-        return Directory.map_for(
+        out = Directory.map_for(
             chains, self.flash.blocks, self.first, self.table_at,
             self.flash.last_block - self.flash.base_of(self.bigffs), self.pool,
             self.held,
         )
+        # A block the build stepped over to start the blobs on the flash's own step is
+        # never named at all, and the table keeps the zero it started with -- measured
+        # on a jasperbb image, whose four blocks between the files and the blobs say
+        # 0x0000 where the free ones around them say 0x1FFE.
+        for block in self.skipped:
+            out[block] = POOL
+        return out
 
     def table(self) -> bytes:
         """The block a flash keeps this table in."""

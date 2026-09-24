@@ -88,7 +88,8 @@ CHAIN_AT = 0x8000
 # Where XeLL goes when an image carries one, and how much room it is given.
 XELL_AT, XELL_SPAN = 0x70000, 0x40000
 
-# The slot and the patch slot get this much each, whatever they put in it.
+# The slot and the patch slot get this much each where the part says nothing else --
+# see `slot_span`.
 SLOT_SPAN = 0x10000
 
 # The smallest step the slot rounds by, whatever the flash rounds by elsewhere.
@@ -133,13 +134,29 @@ def slots_at(chain_end: int, xell: bool, round_to: int) -> int:
     return (at + step - 1) // step * step
 
 
-def tail_at(slots: int, base: int) -> int:
+def slot_span(image_type, flash) -> int:
+    """How much room the slot and the patch slot get each: the part's erase block.
+
+    `boards.flash` says so of `block_size`, and the images agree: a jasperbb, whose
+    blocks are 0x20000, gives CF and CG 0x20000 and puts the patch slot behind that,
+    where a trinitybb's 0x10000 blocks give them 0x10000 -- measured on retail images
+    of both, which differed by exactly that. An eMMC states no block size and takes
+    0x10000. A JTAG image takes 0x10000 on every part, because its reboot core reads its
+    neighbours at fixed addresses behind two such slots: a jasperbb JTAG image has them
+    at 0x70000 and 0x80000.
+    """
+    if image_type.name == "jtag":
+        return SLOT_SPAN
+    return flash.block_size or SLOT_SPAN
+
+
+def tail_at(slots: int, base: int, span: int = SLOT_SPAN) -> int:
     """Where the part of the CG that does not fit its slot lands.
 
     `base` is where the filesystem counts from, in bytes. Past the slot and the patch
     slot, unless the filesystem starts higher than that, which a 64 MB image does.
     """
-    return max(slots + SLOT_SPAN * 2, base)
+    return max(slots + span * 2, base)
 
 
 def for_type(image_type, flash, chain_end: int, bigffs: bool = False,
@@ -163,13 +180,14 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False,
     # on a jasperbb too, whose flash rounds by 0x20000 everywhere else -- measured.
     slots = slots_at(chain_end, xell and not jtag, 0 if jtag else flash.round_to)
     base = flash.base_of(bigffs) * BLOCK
+    span = slot_span(image_type, flash)
     out = {
         "header": (0, PAGE),
         "keyvault": (KEYVAULT_AT, KEYVAULT_AT),
         "chain": (CHAIN_AT, chain_end - CHAIN_AT),
-        "slot": (slots, SLOT_SPAN),
-        "patches": (slots + SLOT_SPAN, SLOT_SPAN),
-        "tail": (tail_at(slots, base), 0),
+        "slot": (slots, span),
+        "patches": (slots + span, span),
+        "tail": (tail_at(slots, base, span), 0),
     }
     if xell:
         out["xell"] = (XELL_AT, XELL_SPAN)
