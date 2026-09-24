@@ -360,3 +360,44 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 one = Build(BuildConfig(image_type=kind, console=board),
                             Material(where), self.release)
                 self.assertEqual(one.image(security.when_in(plain)).raw, raw)
+
+
+class WhatABuildWithNoDumpProduces(unittest.TestCase):
+    """J-Runner's donor flow -- a dead NAND, so no dump -- against the original's own.
+
+    `XEBUILD_DONORS` names a directory of `<type>-<board>/` cells, each holding the
+    per-build `data/` the original was given -- a borrowed `kv.bin`, an `fcrt.bin`, a
+    shipped `smc.bin`, the donor `smc_config.bin`, no `nanddump.bin` -- and the
+    `theirs.bin` it built from it with `-norandom -o cfldv=14`. Under that switch
+    nothing is drawn, so every byte of the file can be held against the reference; the
+    one thing taken from it is the build's clock, out of its crl.bin.
+    """
+
+    def setUp(self):
+        self.where = os.environ.get("XEBUILD_DONORS", "")
+        release = os.environ.get("XEBUILD_RELEASE_DIR", "")
+        key = os.environ.get("XEBUILD_CPUKEY", "")
+        if not os.path.isdir(self.where) or not os.path.isdir(release) or not key:
+            raise unittest.SkipTest(
+                "XEBUILD_DONORS, XEBUILD_RELEASE_DIR and XEBUILD_CPUKEY are needed"
+            )
+        self.cpu = bytes.fromhex(key)
+        self.release = Release(release, os.path.join(os.path.dirname(release),
+                                                     "common"))
+
+    def test_the_whole_file_is_the_original_s(self):
+        for cell in sorted(os.listdir(self.where)):
+            kind, _, board = cell.partition("-")
+            with self.subTest(cell):
+                path = os.path.join(self.where, cell, "theirs.bin")
+                with open(path, "rb") as handle:
+                    raw = handle.read()
+                image = Image(raw, for_name(board)[0].flash)
+                plain, _ = security.opened_crl(image.read("crl.bin"), self.cpu)
+                data = os.path.join(self.where, cell, "data")
+                config = BuildConfig(ini=os.path.join(data, "options.ini"),
+                                     image_type=kind, console=board, cfldv=14,
+                                     no_random=True)
+                one = Build(config, Material(data), self.release)
+                self.assertIsNone(one.dump)
+                self.assertEqual(one.image(security.when_in(plain)).raw, raw)

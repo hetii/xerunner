@@ -224,21 +224,35 @@ def dae(content: bytes, cpu_key: bytes, when: int, ldv: int, head: bytes,
     return bytes(out)
 
 
-# What the original seals with when it is told not to read the dump for these files:
-# constants in its own .data, which x360mcp read out and confirmed twice -- by poisoning
-# each slot in a copy of the binary and watching the file move, and by finding the
-# built image's field back at that address and nowhere else. `nosecurity` is the one
-# situation they are used in; the reference images built with it agree to the byte.
+# The staging area the original keeps its drawn material in, with what it was compiled
+# with: twelve buffers in its .data, from file offset 0x491E0. `init_nonces` (0x41AA00)
+# draws over all twelve unless `-norandom` or a finished nonce walk over the dump has
+# cleared its flag, and reading the console's own files overwrites the ones it can --
+# so each value is drawn, the console's, or this, in that order of precedence. See
+# `Build.drawing`. x360mcp read them out and confirmed each twice: by poisoning the slot
+# in a copy of the binary and watching the image move, and by building with `-norandom`
+# and finding every one of them back in the image.
 #
 #   crl.bin      0x44A630 the vector, 0x44A620 the file key
 #   dae.bin      0x44A618 the seven-byte head, 0x44A600 the header's field
 #   secdata.bin  0x44A5E0 the eight-byte head
+#   kv.bin       0x44A644 the keyvault's eight-byte head
+#   smc.bin      0x44A640 the four bytes an SMC is sealed under
+#   CG ... CB_A  0x44A654 up, the six stage nonces, last stage first
 COMPILED_IN = {
     "crl.bin": (bytes.fromhex("d97598a6f85d9b867bc43499e33da4aa"),
                 bytes.fromhex("c703b932d4077d416052a8135ede6818")),
     "dae.bin": (bytes.fromhex("f424ed2ad36283"),
                 bytes.fromhex("a1b2695058f4ed05e580c7ee189a27b5")),
     "secdata.bin": bytes.fromhex("5aa4d1d27de4453e"),
+    "kv.bin": bytes.fromhex("36cab0878b83b7f6"),
+    "smc.bin": bytes.fromhex("8e0375cc"),
+    "CG": bytes.fromhex("b9a21e3bfc2eabb419812d8a85aaa8ce"),
+    "CF": bytes.fromhex("cee504ee9f612b9ba520f8eb0b64682a"),
+    "CE": bytes.fromhex("56a981cd8cbc0729dd0b7bbc76e57998"),
+    "CD": bytes.fromhex("b338641cebd01e102cdde0f319a19f84"),
+    "CB_B": bytes.fromhex("fbe2709ae7a13f42cfec45928e3f0e37"),
+    "CB_A": bytes.fromhex("3710a2f22ed5f0a8e49cb4c7a1395daa"),
 }
 
 # How long a keyvault-style file is when the build makes one up from nothing -- "Making
@@ -271,6 +285,11 @@ def extended(own: bytes | None, keyvault_head: bytes, cpu_key: bytes) -> bytes:
     plain[:HEAD_LENGTH] = keyvault_head[:HEAD_LENGTH]
     nonce = derive(cpu_key, bytes(plain) + b"\x07\x12")
     return _sealed_like_a_keyvault(bytes(plain), nonce, cpu_key)
+
+
+def secdata_head(own: bytes, cpu_key: bytes) -> bytes:
+    """The eight bytes of head a console's own secdata.bin carries."""
+    return _opened_like_a_keyvault(own, cpu_key)[:HEAD_LENGTH]
 
 
 def secdata(own: bytes | None, cpu_key: bytes, when: int, ldv: int,

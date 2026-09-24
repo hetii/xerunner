@@ -63,6 +63,8 @@ class Build:
         self.release = release
         self._dump = None
         self._recipe = None
+        self._walked = None
+        self._drawn = {}
 
     @property
     def recipe(self):
@@ -131,6 +133,84 @@ class Build:
             return self.config.one_bl_key
         return self.material.key_in_file("1blkey.txt")
 
+    @property
+    def _walk(self) -> tuple:
+        """What the original's survey reads off the dump: nonces by buffer, and whether
+        it finished.
+
+        Positional, and it stops at the first stage that is not the one due -- CB_A,
+        CB_B, CD, CE, then the CF and CG of the console's slot. A single CB goes
+        straight on to its CD and has still finished. An RGH3 chain does not: its third
+        CB stands where the CD is due, so the walk stops with the exploit's own stage
+        read as CB_B. x360mcp read the walk at 0x417651 and found the flag it clears in
+        its very last instruction; `drawing` is what that flag decides.
+        """
+        if self._walked is None:
+            read, finished = {}, False
+            if self.dump is not None:
+                due = 0
+                for stage in self.dump.chain.walked:
+                    if stage.tag == "CB" and due < 2:
+                        read[("CB_A", "CB_B")[due]] = stage.nonce
+                        due += 1
+                    elif stage.tag == "CD" and due in (1, 2):
+                        read["CD"], due = stage.nonce, 3
+                    elif stage.tag == "CE" and due == 3:
+                        read["CE"], finished = stage.nonce, True
+                        break
+                    else:
+                        break
+                if finished:
+                    cf = self.dump.chain.slot
+                    read["CF"] = cf.nonce
+                    read["CG"] = Stage(cf.image, cf.at + cf.length).nonce
+            self._walked = (read, finished)
+        return self._walked
+
+    @property
+    def drawing(self) -> bool:
+        """Whether this build draws its nonces and sealing material afresh.
+
+        The original draws all twelve of its staging buffers -- see
+        `security.COMPILED_IN` -- unless `-norandom` says not to or its survey walked
+        the dump's chain to the end: "initializing random nonces" is the line that says
+        it did. So a build from a console's own dump draws nothing, one with no dump
+        draws everything, and so does one from a dump whose chain it cannot walk.
+        """
+        return not self.config.no_random and not self._walk[1]
+
+    def _buffer(self, name: str, carried=None):
+        """One staging buffer's value: drawn, the console's own, or compiled in.
+
+        Drawn once a build and then kept, because the original draws each buffer once
+        and every stage that reads it reads the same bytes.
+        """
+        static = security.COMPILED_IN[name]
+        if self.drawing:
+            if name not in self._drawn:
+                parts = static if isinstance(static, tuple) else (static,)
+                drawn = tuple(os.urandom(len(one)) for one in parts)
+                self._drawn[name] = drawn if isinstance(static, tuple) else drawn[0]
+            return self._drawn[name]
+        return carried if carried is not None else static
+
+    @property
+    def pairing(self) -> bytes:
+        """The three bytes of pairing: the console's, or with no dump drawn or static.
+
+        Off the dump's CF whenever there is a dump -- "setting pairing data from image
+        to 0x780227". With none, `-norandom` leaves the three bytes the original stores
+        one at a time at 0x41BA43, "initializing static pairing value", and otherwise
+        they are drawn with everything else.
+        """
+        if self.dump is not None:
+            return self.dump.pairing
+        if self.config.no_random:
+            return bytes.fromhex("2345f1")
+        if "pairing" not in self._drawn:
+            self._drawn["pairing"] = os.urandom(3)
+        return self._drawn["pairing"]
+
     def smc(self, seed: bytes = b"") -> bytes:
         """The SMC as the image carries it: sealed, and patched if the options ask.
 
@@ -192,13 +272,20 @@ class Build:
                 logger.info("patching smc to remove the reset limit")
                 plain, carried = patched, None
         self._check_smc(plain)
-        if carried is not None:
+        if carried is not None and not self.drawing:
             return carried
         if not seed:
-            if self.dump is None:
-                raise ValueError("sealing an SMC needs a seed, and there is no dump to "
-                                 "take the console's own from")
-            seed = self.dump.smc[:4]
+            # The console's own four bytes where the survey read them, and the staging
+            # buffer's otherwise: drawn with no dump, compiled in under `-norandom`.
+            if self.dump is None and not self.drawing:
+                # Not the staging buffer's 8E0375CC: with no dump under `-norandom`
+                # the original seals every SMC under these four, measured on a
+                # trinity, a falcon JTAG and a corona build with three different
+                # SMCs, twice over. Where they come from is not read out.
+                seed = bytes.fromhex("cc7ac1e7")
+            else:
+                own = self.dump.smc[:4] if self.dump is not None else None
+                seed = self._buffer("smc.bin", own)
         return cipher.sealed(plain, seed)
 
     def _smc_in_the_clear(self, given: bytes) -> bytes:
@@ -264,35 +351,64 @@ class Build:
     def keyvault(self) -> bytes:
         """The console's keyvault, as the image carries it: sealed under its CPU key.
 
-        `kv.bin` from the per-build directory when there is one, and the dump's own
-        otherwise -- "reading data/kv.bin failed, using kv.bin from nand dump". A
-        dump's keyvault is already sealed for this console, so it is carried as it
-        stands rather than opened and closed again; the derivation is deterministic
-        either way, and carrying it means a console whose keyvault this build cannot
-        open still gets its own back.
+        The dump's own, carried as it stands, when nothing asks for a change: sealing is
+        deterministic -- the nonce is derived from the content -- so opening and closing
+        it again would give the same bytes, and carrying it means a console whose
+        keyvault this build cannot open still gets its own back.
 
-        The original takes a plaintext `kv.bin` as well as a sealed one and says which
-        it got; telling them apart is not measured here, so a file is passed through as
-        it
-        stands, and a build handing over the wrong shape is refused by the console
-        rather than by this.
+        Otherwise it is `plain_keyvault` sealed again. See there.
         """
+        if (self.material.keyvault is None and self.dump is not None
+                and not self.drawing and not self._dvdkey_goes_in):
+            return self.dump.sealed_keyvault
+        return Keyvault(self.plain_keyvault()).sealed(self.cpu_key)
+
+    @property
+    def _dvdkey_goes_in(self) -> bool:
+        """The DVD key goes into the keyvault on every type but retail, as the shipped
+        ini says."""
+        return bool(self.config.dvdkey) and self.image_type.name != "retail"
+
+    def plain_keyvault(self) -> bytes:
+        """The keyvault in the clear, as this build will seal it.
+
+        **A `kv.bin` beside the build is written, over the dump's too** -- measured by
+        x360mcp on a build with both, whose image carried the file's keyvault. J-Runner
+        hands one over in the clear for a dead NAND and the original says so: "kv.bin
+        appears to be decrypted already". One sealed under this console's key is opened
+        first; which it is, is whether its nonce is the one its content derives.
+
+        **Its eight bytes at 0x10 are not the file's.** They are a staging buffer: the
+        console's own keyvault's where the survey read them, drawn with no dump,
+        compiled in under `-norandom`. Measured on donor builds in both regimes.
+
+        No `kv.bin` and no dump is what the original refuses as "critical bootloader
+        files are missing".
+        """
+        if not self.cpu_key:
+            raise ValueError("a keyvault is sealed under the CPU key, and none was "
+                             "given")
+        own = None
+        if self.dump is not None:
+            own = self.dump.keyvault(self.cpu_key).plain
         given = self.material.keyvault
         if given is not None:
-            return given
-        if self.dump is None:
-            raise ValueError("this build has neither a kv.bin nor a dump to take a "
-                             "keyvault from")
-        sealed = self.dump.sealed_keyvault
-        if self.config.dvdkey and self.image_type.name != "retail":
-            # The DVD key goes into the keyvault at 0x100 on every type but retail, as
-            # the shipped ini says, and the keyvault is sealed again -- its nonce is
-            # derived from what it holds, so this is deterministic.
-            vault = Keyvault.opened(sealed, self.cpu_key)
-            plain = bytearray(vault.plain)
+            opened = Keyvault.opened(given, self.cpu_key).plain
+            if Keyvault(opened).sealed(self.cpu_key)[:0x10] == given[:0x10]:
+                plain = bytearray(opened)
+            else:
+                logger.warning("kv.bin appears to be decrypted already, but the hash "
+                               "does not match the CPU key")
+                plain = bytearray(given)
+        elif own is not None:
+            plain = bytearray(own)
+        else:
+            raise ValueError("could not read kv.bin, and there is no dump to take the "
+                             "keyvault from: critical bootloader files are missing")
+        plain[0x10:0x18] = self._buffer("kv.bin", own[0x10:0x18] if own else None)
+        if self._dvdkey_goes_in:
             plain[0x100:0x110] = self.config.dvdkey
-            sealed = Keyvault(bytes(plain)).sealed(self.cpu_key)
-        return sealed
+        return bytes(plain)
 
     def xell(self) -> bytes | None:
         """The loader, or None for an image type that carries none.
@@ -476,7 +592,7 @@ class Build:
             bound_to = None if stages[0].manufacturing else self.cpu_key
             at = offsets[binds] + STAGE_HEADER
             out[at:at + Fields.LENGTH * 2] = Fields.write(
-                self.dump.pairing, bound_to, keys[binds],
+                self.pairing, bound_to, keys[binds],
                 cipher.fingerprint(self.smc()),
             )
         for stage, key in zip(stages, keys, strict=True):
@@ -563,31 +679,34 @@ class Build:
         return 1 if len(stages) > 1 else -1
 
     def _nonces(self, stages) -> list:
-        """One nonce a stage, the console's own where there is a dump to read.
+        """One nonce a stage, out of the original's six stage buffers.
 
-        **Matched by kind and not by position.** A chain with a single CB takes the
-        dump's CB, CD and CE nonces and leaves the dump's CB_B out; taking them in order
-        instead hands its CD the nonce of a CB_B, which reads as a chain and is not one.
-        Measured on a fat glitch image and a JTAG one, both of which carry exactly the
-        dump's CB_A, CD and CE nonces.
+        **By role and not by position**: the second letter of the tag -- B, D or E --
+        names the buffers a stage reads, CB_A and then CB_B for a CB. A chain with a
+        single CB takes the dump's CB_A, CD and CE and leaves its CB_B out; taking them
+        in order instead hands its CD the nonce of a CB_B, which reads as a chain and
+        is not one. Measured on a fat glitch image and a JTAG one -- whose second chain
+        takes the same CB_A and CD again -- and a role the buffers have no name for, a
+        devgl chain's SC, takes the buffer of its position.
 
-        A dump with nothing of that kind left to give, and a build with no dump at all,
-        leave the original drawing one -- "initializing random nonces" -- so this draws
-        one too.
+        What each buffer holds is `_buffer`'s: the dump's where the survey read it,
+        drawn where the original draws, compiled in under `-norandom`.
         """
-        left = {}
-        if self.dump is not None:
-            for stage in self.dump.chain.walked:
-                left.setdefault(stage.tag, []).append(stage.nonce)
-        out = []
-        for stage in stages:
-            own = left.get(stage.tag) or []
-            if own:
-                out.append(own.pop(0))
+        read, _finished = self._walk
+        order = ("CB_A", "CB_B", "CD", "CE", "CF", "CG")
+        held = {name: self._buffer(name, read.get(name)) for name in order}
+        roles = {"B": [held["CB_A"], held["CB_B"]], "D": [held["CD"]],
+                 "E": [held["CE"]]}
+        seen, out = {}, []
+        for at, stage in enumerate(stages):
+            role = stage.tag[1:2]
+            have = roles.get(role)
+            if not have:
+                out.append(held[order[min(at, len(order) - 1)]])
                 continue
-            logger.info("this dump has no %s nonce left to carry; drawing one",
-                        stage.tag)
-            out.append(os.urandom(0x10))
+            index = seen.get(role, 0)
+            seen[role] = index + 1
+            out.append(have[min(index, len(have) - 1)])
         return out
 
     def slot(self, tail_at: int, which: int = -1) -> bytes:
@@ -610,7 +729,8 @@ class Build:
         * **Both nonces are the console's own**, taken from the dump's CF and the CG
           behind it -- the slot the console's values come from, the one with the
           largest lockdown value. Carried across releases: the dump's CF is 17502, the
-          image's is 17559, and they share a nonce.
+          image's is 17559, and they share a nonce. With no dump they are two of the
+          original's staging buffers, like the chain's -- see `_nonces`.
         * **CF says where the rest of CG is**: a count at 0x30 and then that many
           block numbers, one up from the other. The number is the block's place in the
           flash, not in the filesystem -- 0x34 on a 16 MB image and 0xAE0 on a 64 MB
@@ -627,9 +747,6 @@ class Build:
 
         Nothing else. CG's plaintext is the release's, byte for byte.
         """
-        if self.dump is None:
-            raise ValueError("an update slot carries the console's own values, and "
-                             "there is no dump to take them from")
         if not self.cpu_key:
             raise ValueError("a CF binds itself to the console's CPU key, and none was "
                              "given")
@@ -638,10 +755,11 @@ class Build:
         cf_listed, cg_listed = pairs[which]
         cf = bytearray(self.release.bootloader(cf_listed))
         cg = bytearray(self.release.bootloader(cg_listed))
-        own_cf = self.dump.chain.slot
-        own_cg = Stage(own_cf.image, own_cf.at + own_cf.length)
-        Stage(cf, 0).nonce = own_cf.nonce
-        Stage(cg, 0).nonce = own_cg.nonce
+        read, _finished = self._walk
+        cf_nonce = self._buffer("CF", read.get("CF"))
+        cg_nonce = self._buffer("CG", read.get("CG"))
+        Stage(cf, 0).nonce = cf_nonce
+        Stage(cg, 0).nonce = cg_nonce
 
         span = layout.slot_span(self.image_type, self.console.flash)
         spill = len(cf) + len(cg) - span
@@ -651,7 +769,7 @@ class Build:
         )
         cf[0x30:0x68] = blocks.ljust(0x68 - 0x30, b"\x00")
         if which < len(pairs) - 1:
-            return self._sealed_pair(cf, cg, own_cg.nonce)
+            return self._sealed_pair(cf, cg, cg_nonce)
         cf[0x21B] = which
         # The pairing goes in only where a chain binds to the console. A chain with
         # no CB_B binds nowhere, and its CF carries three zeros there and the lockdown
@@ -659,12 +777,12 @@ class Build:
         # release builds beside a slot. A JTAG image binds on its second chain's CB.
         binds = (any(one.kind == "CBB" for one in self._chain_files())
                  or bool(self._chain_files(1)))
-        cf[0x21C:0x21F] = self.dump.pairing if binds else bytes(3)
+        cf[0x21C:0x21F] = self.pairing if binds else bytes(3)
         cf[0x21F] = self.ldv
         message = bytearray(cf[:0x220])
-        message[0x20:0x30] = derive(sealing.ONE_BL_KEY, own_cf.nonce)
+        message[0x20:0x30] = derive(sealing.ONE_BL_KEY, cf_nonce)
         cf[0x220:0x230] = derive(self.cpu_key, bytes(message))
-        return self._sealed_pair(cf, cg, own_cg.nonce)
+        return self._sealed_pair(cf, cg, cg_nonce)
 
     @staticmethod
     def _sealed_pair(cf: bytearray, cg: bytearray, cg_nonce: bytes) -> bytes:
@@ -770,25 +888,23 @@ class Build:
         if name == "crl.bin":
             if content is None:
                 return None
-            if own is not None:
-                iv, key = security.crl_parameters(own, cpu)
-            else:
-                iv, key = security.COMPILED_IN[name]
+            own_params = None if own is None else security.crl_parameters(own, cpu)
+            iv, key = self._buffer(name, own_params)
             return security.crl(content, cpu, when, ldv, iv, key)
         if name == "dae.bin":
             if content is None:
                 return None
-            if own is not None:
-                head, field = security.dae_parameters(own, cpu)
-            else:
-                head, field = security.COMPILED_IN[name]
+            own_params = None if own is None else security.dae_parameters(own, cpu)
+            head, field = self._buffer(name, own_params)
             return security.dae(content, cpu, when, ldv, head, field)
         if name == "extended.bin":
-            vault = self.dump.keyvault(cpu).plain
-            return security.extended(content, vault[0x10:0x18], cpu)
+            return security.extended(content, self.plain_keyvault()[0x10:0x18], cpu)
         if name == "secdata.bin":
-            head = b"" if own is not None else security.COMPILED_IN[name]
-            return security.secdata(content, cpu, when, ldv, head)
+            carried = None
+            if own is not None:
+                carried = security.secdata_head(own, cpu)
+            return security.secdata(content, cpu, when, ldv,
+                                    self._buffer(name, carried))
         if name == "fcrt.bin":
             return None if content is None else security.fcrt(content, cpu)
         raise ValueError("%s is not one of the five security files" % name)
@@ -797,10 +913,15 @@ class Build:
     def ldv(self) -> int:
         """The lockdown value written into the chain's CF and three security files.
 
-        `cfldv` when it is given, the console's own -- read off its CF -- otherwise.
+        `cfldv` when it is given, the console's own -- read off its CF -- otherwise, and
+        1 with no dump to read it off, which the original says: "cfldv was not set
+        anywhere, setting it to 1".
         """
         if self.config.cfldv is not None:
             return self.config.cfldv
+        if self.dump is None:
+            logger.warning("cfldv was not set anywhere, setting it to 1")
+            return 1
         return self.dump.ldv
 
     def image(self, when: int | None = None) -> Image:
@@ -883,11 +1004,13 @@ class Build:
         # follows it; with none to write there is no region, and the table goes
         # straight after the files -- measured with `nomobile`, and x360mcp saw the same
         # on a build with no dump.
+        # What follows the files starts on the flash's own step: a jasperbb's files end
+        # at 0x38D0000 and its blobs go to 0x38E0000 -- and so does its table when there
+        # are no blobs, measured on a donor build. On every other part the files
+        # already end on one. The blocks stepped over go unnamed in the table where
+        # blobs follow and stay free where the table does -- both measured.
+        start += -start % flash.round_to
         if blobs:
-            # Their region starts on the flash's own step: a jasperbb's files end at
-            # 0x38D0000 and its blobs go to 0x38E0000 -- measured, and x360mcp had the
-            # same four boards' table. On every other part the files already end on one.
-            start += -start % flash.round_to
             fs.skipped = range(fs.after, (start - base) // layout.BLOCK)
         table_at = start + (flash.mobile_region if blobs else 0)
         # On a big block chip the pages of the filesystem carry three bytes of its own
@@ -1052,24 +1175,46 @@ class Build:
         `nomobile` the statistics are not written at all, spare included, and
         manufacturing data only when the console has any.
         """
-        if self.dump is None:
-            return []
         flash = self.console.flash
         span = 0x1000
         stats_at = flash.smc_config - flash.round_to
         out = []
-        if self.dump.manufacturing_written:
-            out.append((stats_at - flash.round_to, self.dump.manufacturing, span))
-        if not self.config.nomobile:
-            out.append((stats_at, self.dump.statistics, span))
-        config = self.material.smc_config
-        if config is None:
+        if self.dump is not None:
+            if self.dump.manufacturing_written:
+                out.append((stats_at - flash.round_to, self.dump.manufacturing, span))
+            if not self.config.nomobile:
+                out.append((stats_at, self.dump.statistics, span))
+        config = self._given_config()
+        if config is None and self.dump is not None:
             # Where the dump keeps it is the dump's own flash's business, not the one
             # being built for: a 16 MB dump builds a 64 MB image.
             own = self.dump.flash.smc_config
             config = bytes(self.dump.image.flat[own:own + span])
-        out.append((flash.smc_config, self._configured(config), span))
+        if config is not None:
+            out.append((flash.smc_config, self._configured(config), span))
         return out
+
+    def _given_config(self) -> bytes | None:
+        """The settings block handed over as `smc_config.bin`, and what follows it.
+
+        J-Runner hands over the whole 0x10000 the console keeps its copies in, and the
+        original searches it for the block whose head sums -- "valid SMC config data
+        found at offset 0xc000" in `Donor Files/smc_config/Trinity.bin`, one 0x400
+        step at a time. It writes that block and leaves the rest of the 0x1000 erased,
+        its pages marked written all the same: measured on donor builds from
+        `Trinity.bin`, whose next 0xC00 are erased anyway, and `Falcon.bin`, whose are
+        zeros and still come out 0xFF.
+        """
+        given = self.material.smc_config
+        if given is None:
+            return None
+        length = dumps.CONFIG_LENGTH
+        for at in range(0, len(given) - length + 1, length):
+            block = given[at:at + length]
+            if int.from_bytes(block[:2], "little") == dumps.checksum(block):
+                return block.ljust(0x1000, b"\xff")
+        logger.warning("smc_config.bin holds no valid settings block; not used")
+        return None
 
     def _configured(self, block: bytes) -> bytes:
         """The settings block with the options that land in it written in.
