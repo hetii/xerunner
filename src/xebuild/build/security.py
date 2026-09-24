@@ -398,3 +398,30 @@ def verifies(name: str, own: bytes, cpu_key: bytes) -> bool:
     except (ValueError, IndexError):
         return False
     return True
+
+
+def taken_beside(name: str, blob: bytes, cpu_key: bytes) -> tuple:
+    """What a build does with a security file handed in beside it: `(verdict, clear)`.
+
+    Each kind by its own test, all measured with files made for the purpose:
+
+    * `clean` -- the wrong length, where the original checks it: "extended.bin is not
+      the correct size! Making up an clean/empty extended.bin!", and the same of
+      secdata.bin (0x41D6B4, 0x41D9BF); and an extended.bin no key opens, "could not
+      be decrypted, filling clean/empty data".
+    * `as is` -- a crl.bin no key opens goes in as it stands, "crl data appears to be
+      crypted with the wrong key or damaged". A dae.bin likewise, which is a
+      deliberate divergence: the original says "Skipping encryption" and then writes
+      what its failed decryption left of the first record -- as it does for fcrt.bin,
+      whose `fcrt` carries a copy it cannot vouch for as it stands too -- which no
+      console can read.
+    * `use` -- anything else, sealed again; `clear` says it was handed in open --
+      `in_the_clear` -- and secdata.bin always is.
+    """
+    if len(blob) != CLEAN_LENGTH.get(name, len(blob)):
+        return "clean", False
+    clear = in_the_clear(name, blob, cpu_key)
+    if not clear and name in ("crl.bin", "dae.bin", "extended.bin") and \
+            not opens(name, blob, cpu_key):
+        return ("clean" if name == "extended.bin" else "as is"), False
+    return "use", clear

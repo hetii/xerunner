@@ -120,5 +120,35 @@ class TheKeyvaultStyleTwo(unittest.TestCase):
         self.assertTrue(security.opens("extended.bin", sealed, OTHER))
 
 
+
+class AFileHandedInBesideTheBuild(unittest.TestCase):
+    """`taken_beside`: made up clean, written as it stands, or sealed again."""
+
+    def test_the_wrong_length_is_made_up_clean(self):
+        """0x41D6B4 and 0x41D9BF: "is not the correct size!"."""
+        self.assertEqual(security.taken_beside("extended.bin", bytes(0x10), KEY),
+                         ("clean", False))
+        self.assertEqual(security.taken_beside("secdata.bin", bytes(0x3FF), KEY),
+                         ("clean", False))
+
+    def test_an_extended_no_key_opens_is_made_up_clean(self):
+        sealed = security.extended(None, b"HEADHEAD", OTHER)
+        self.assertEqual(security.taken_beside("extended.bin", sealed, KEY),
+                         ("clean", False))
+
+    def test_a_crl_or_dae_no_key_opens_goes_in_as_it_stands(self):
+        for name, blob in (("crl.bin", a_crl(OTHER)), ("dae.bin", a_dae(OTHER))):
+            with self.subTest(name):
+                self.assertEqual(security.taken_beside(name, blob, KEY)[0], "as is")
+
+    def test_the_rest_is_used_and_says_whether_it_came_open(self):
+        self.assertEqual(security.taken_beside("crl.bin", a_crl(), KEY), ("use", False))
+        self.assertEqual(security.taken_beside("crl.bin", a_crl(clear=True), KEY),
+                         ("use", True))
+        self.assertEqual(security.taken_beside("secdata.bin", bytes(0x400), KEY),
+                         ("use", True))
+        self.assertEqual(security.taken_beside("odd.bin", b"anything", KEY),
+                         ("use", False))
+
 if __name__ == "__main__":
     unittest.main()

@@ -148,6 +148,49 @@ class Header:
     def boot_flags(self, value: int) -> None:
         self._put(">I", 0x4C, value)
 
+    # The four bytes of that word one by one, named as the reboot core that reads them
+    # names them -- xeBuild's own `reboot_core/main.c`, OPTS_DUAL, OPTS_OPTIONS,
+    # OPTS_PWRR2 and OPTS_PWRR1, at 0x4C to 0x4F. A reason is a power-on reason: the
+    # byte the SMC reports for what woke the console, which `config.options.BUTTONS`
+    # names.
+    @property
+    def dualboot_reason(self) -> int:
+        """The power-on reason that makes a two-NAND console boot the other one."""
+        return self.image[0x4C]
+
+    @dualboot_reason.setter
+    def dualboot_reason(self, value: int) -> None:
+        self.image[0x4C] = value
+
+    @property
+    def boot_options(self) -> int:
+        """A bitfield: 1 the debug UART's speed for a Cygnos or Demon, 2 the tray has to
+        be ejected for XeLL (the old nodvd way), 4 the tray check a JTAG image starts
+        with."""
+        return self.image[0x4D]
+
+    @boot_options.setter
+    def boot_options(self, value: int) -> None:
+        self.image[0x4D] = value
+
+    @property
+    def xell_reason2(self) -> int:
+        """A second power-on reason XeLL starts on."""
+        return self.image[0x4E]
+
+    @xell_reason2.setter
+    def xell_reason2(self, value: int) -> None:
+        self.image[0x4E] = value
+
+    @property
+    def xell_reason(self) -> int:
+        """The power-on reason XeLL starts on."""
+        return self.image[0x4F]
+
+    @xell_reason.setter
+    def xell_reason(self, value: int) -> None:
+        self.image[0x4F] = value
+
     @property
     def cf_at(self) -> int:
         """Where the slots begin, which the page states twice.

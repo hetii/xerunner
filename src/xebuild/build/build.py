@@ -17,18 +17,17 @@ import logging
 import os
 import time
 
-from .. import boards
+from .. import boards, jtag
 from ..boards.flash import PAGE
-from ..chain import Fields, sealing
+from ..chain import Fields, fuses, sealing, update
 from ..chain.stage import LENGTH as STAGE_HEADER
 from ..chain.stage import Stage
 from ..config.options import BUTTONS
 from ..crypto import smc as cipher
-from ..crypto.keys import derive
 from ..crypto.rc4 import rc4
-from ..image import Dump, Header, Image, Keyvault, order
+from ..image import Dump, Entry, Header, Image, Keyvault, order
 from ..image import anchor as anchors
-from ..image import dump as dumps
+from ..image.settings import TEMPERATURES, SmcConfig
 from ..release import Release
 from ..smc import Smc
 from . import layout, security
@@ -200,36 +199,10 @@ class Build:
 
     @property
     def _walk(self) -> tuple:
-        """What the original's survey reads off the dump: nonces by buffer, and whether
-        it finished.
-
-        Positional, and it stops at the first stage that is not the one due -- CB_A,
-        CB_B, CD, CE, then the CF and CG of the console's slot. A single CB goes
-        straight on to its CD and has still finished. An RGH3 chain does not: its third
-        CB stands where the CD is due, so the walk stops with the exploit's own stage
-        read as CB_B. x360mcp read the walk at 0x417651 and found the flag it clears in
-        its very last instruction; `drawing` is what that flag decides.
-        """
+        """The dump's `Chain.nonce_walk`, read once; nothing read with no dump."""
         if self._walked is None:
-            read, finished = {}, False
-            if self.dump is not None:
-                due = 0
-                for stage in self.dump.chain.walked:
-                    if stage.tag == "CB" and due < 2:
-                        read[("CB_A", "CB_B")[due]] = stage.nonce
-                        due += 1
-                    elif stage.tag == "CD" and due in (1, 2):
-                        read["CD"], due = stage.nonce, 3
-                    elif stage.tag == "CE" and due == 3:
-                        read["CE"], finished = stage.nonce, True
-                        break
-                    else:
-                        break
-                if finished:
-                    cf = self.dump.chain.slot
-                    read["CF"] = cf.nonce
-                    read["CG"] = Stage(cf.image, cf.at + cf.length).nonce
-            self._walked = (read, finished)
+            self._walked = (self.dump.chain.nonce_walk() if self.dump is not None
+                            else ({}, False))
         return self._walked
 
     @property
@@ -281,71 +254,54 @@ class Build:
 
         **The original chooses no image of its own.** It takes `smc.bin` from the
         per-build directory, and where there is none it keeps the console's --
-        "reading data/smc.bin failed, using smc.bin from nand dump". Measured three
-        ways: with the nineteen shipped images sitting in the per-build directory, in
-        the base path's `data/`, and nowhere at all. Forty-six builds over every board
-        spelling and three hack types wrote the dump's own SMC, byte for byte, without
-        one exception. Which shipped image belongs to a console
-        is J-Runner's decision, and it hands it over as this file; the names are
-        recorded on the boards for whoever plays that part.
+        "reading data/smc.bin failed, using smc.bin from nand dump". Measured over
+        forty-six builds on every board spelling and three hack types. Which shipped
+        image belongs to a console is J-Runner's decision, handed over as this file.
 
-        **`patchsmc` lifts the reset limit and does nothing else**, and the ini
-        shipped beside the original says where it does not apply: "will patch clean smc
-        to remove 5 reset limit, ignored for retail". Measured both ways -- a JTAG build
-        of
-        `SMCfzj.bin`, which still has a limit, came out with the two bytes at its
-        signature zeroed and nothing else changed; a retail build of
-        `TRINITY_CLEAN.bin` kept its limit although the same option was set.
+        **Three patches, the hack types' alone** -- JTAG, the glitches and devgl, 2 to
+        5: `smcnoeject` and `smcnoblink` replace a routine each, and `patchsmc` lifts
+        the reset limit -- "will patch clean smc to remove 5 reset limit, ignored for
+        retail". A retail or devkit image keeps its SMC untouched, measured.
 
-        **The seal takes the console's own seed**, which is the first four bytes of the
-        SMC the dump carries. Where nothing patches and nothing replaces it, that means
-        the dump's bytes come out unchanged; where an image was replaced or patched, it
-        is sealed again under that same seed. Measured on seven images built from a
-        plaintext `smc.bin`, all of which carry the dump's seed `fbd75a10`.
-
-        The one reading that looked like an exception was not one: a `xenon` build whose
-        image carried a different seed turned out to be a build that never ran -- the
-        original stopped at "could not find label [xenonbl] in file list ini" and what
-        was read back was the previous build's image, left in the directory. Every build
-        that really ran carries the dump's.
-
-        **Two more SMC patches exist and neither is reproduced here.** `smcnoeject` and
-        `smcnoblink` each replace a signature, measured in x360mcp along with what the
-        original says when the signature is not there. A build that asks for either is
-        refused rather than handed an SMC that quietly does not do what was asked.
+        **The seal takes the console's own seed**, the first four bytes of the SMC the
+        dump carries, so an unchanged SMC comes out as the dump's bytes; with no dump it
+        is a staging buffer's -- see `_buffer` -- and under `-norandom` with no dump,
+        four the original holds elsewhere.
         """
         given = self.material.smc
         carried = None
         if given is not None:
-            plain = self._smc_in_the_clear(given)
+            smc = Smc.handed_in(given)
+            if smc is None:
+                if not self.config.smcnocheck:
+                    raise ValueError("smc.bin is neither in the clear nor a valid, "
+                                     "decryptable SMC; smcnocheck builds with it all "
+                                     "the same")
+                smc = Smc(cipher.opened(given))
+            plain = smc.plain
         else:
             if self.dump is None:
                 raise ValueError("this build has neither an smc.bin nor a dump to take "
                                  "an SMC from")
             carried = self.dump.smc
             plain = cipher.opened(carried)
-        # The two SMC patches are JTAG and glitch options, as the usage groups them, and
-        # a retail image ignores both -- measured, its SMC comes out untouched.
-        hack = self.image_type.number in (2, 3, 4, 5)
-        for name in ("smcnoeject", "smcnoblink"):
-            if hack and getattr(self.config, name):
-                patched = Smc(plain).with_patch(name)
-                if patched == plain:
-                    logger.warning("could not patch the SMC for %s: its routine is not "
-                                   "in this image", name)
-                plain, carried = patched, None
-        # The hack types only, 2 to 5: a devkit image keeps its limit, measured.
-        if self.config.patchsmc and self.image_type.number in (2, 3, 4, 5):
-            patched = Smc(plain).patched()
-            if patched != plain:
-                logger.info("patching smc to remove the reset limit")
-                plain, carried = patched, None
-        self._check_smc(plain)
+        if self.image_type.number in (2, 3, 4, 5):
+            for name in ("smcnoeject", "smcnoblink"):
+                if getattr(self.config, name):
+                    patched = Smc(plain).with_patch(name)
+                    if patched == plain:
+                        logger.warning("could not patch the SMC for %s: its routine is "
+                                       "not in this image", name)
+                    plain, carried = patched, None
+            if self.config.patchsmc:
+                patched = Smc(plain).patched()
+                if patched != plain:
+                    logger.info("patching smc to remove the reset limit")
+                    plain, carried = patched, None
+        self._check_smc(Smc(plain))
         if carried is not None and not self.drawing:
             return carried
         if not seed:
-            # The console's own four bytes where the survey read them, and the staging
-            # buffer's otherwise: drawn with no dump, compiled in under `-norandom`.
             if self.dump is None and not self.drawing:
                 # Not the staging buffer's 8E0375CC: with no dump under `-norandom`
                 # the original seals every SMC under these four, measured on a
@@ -357,57 +313,26 @@ class Build:
                 seed = self._buffer("smc.bin", own)
         return cipher.sealed(plain, seed)
 
-    def _smc_in_the_clear(self, given: bytes) -> bytes:
-        """An `smc.bin` as handed over, opened if it was handed over sealed.
-
-        The original's own test, read out of it at 0x41BABC: four zero bytes at the end
-        mean the image is in the clear, since every plaintext SMC is padded that way;
-        otherwise it says "SMC binary appears to be encrypted, attempting to decrypt..."
-        and asks the same question of what comes out. An image that still does not end
-        in zeros did not decrypt, which is fatal unless `smcnocheck` waives it.
-        """
-        if given[-4:] == bytes(4):
-            return given
-        plain = cipher.opened(given)
-        if plain[-4:] != bytes(4) and not self.config.smcnocheck:
-            raise ValueError("smc.bin is neither in the clear nor a valid, decryptable "
-                             "SMC; smcnocheck builds with it all the same")
-        return plain
-
-    def _check_smc(self, plain: bytes) -> None:
+    def _check_smc(self, smc: Smc) -> None:
         """What the original refuses an SMC for, and what `smcnocheck` waives.
 
-        Its classifier at 0x40BD80, read out by x360mcp, calls an SMC clean when its
-        checksum is one of the stock images, and otherwise asks by image type: a glitch
-        image's SMC is clean while it still has its reset limit, a JTAG image's while it
-        carries neither hack mark, a retail or development one's only when both hold,
-        and a devgl one's never. Then three cases are fatal and `smcnocheck` waives
-        exactly those three: a retail image over an SMC that is not clean, a JTAG image
-        over one that is, and an SMC that would not decrypt. A glitch image over a clean
-        SMC only draws a complaint.
+        Three cases are fatal and `smcnocheck` waives exactly those: a retail image
+        over an SMC that is not clean, a JTAG image over one that is -- `Smc.clean_for`
+        -- and an SMC that would not decrypt, which `smc` asks. A glitch image over a
+        clean SMC only draws a complaint.
 
-        One more refusal is ours and not the original's: an SMC that is nothing but
-        0x00 or 0xFF passes every test the original makes and is written, which gives a
-        console no SMC at all. Agreed with the user as a deliberate divergence in
+        One more refusal is ours: a blank SMC passes every test the original makes and
+        is written, which gives a console none. A deliberate divergence agreed in
         x360mcp, and waived by `smcnocheck` like the rest.
         """
         if self.config.smcnocheck:
             return
-        if set(plain) <= {0x00} or set(plain) <= {0xFF}:
+        if smc.blank:
             raise ValueError("this SMC is blank -- nothing but 0x00 or 0xFF -- and an "
                              "image built over it would have none; smcnocheck builds "
                              "with it all the same")
-        smc, number = Smc(plain), self.image_type.number
-        if smc.clean:
-            clean = True
-        elif number in (4, 5):
-            clean = False
-        elif number == 3:
-            clean = smc.reset_limit >= 0
-        elif number == 2:
-            clean = not smc.marked
-        else:
-            clean = smc.reset_limit >= 0 and not smc.marked
+        number = self.image_type.number
+        clean = smc.clean_for(number)
         if self.image_type.name == "retail" and not clean:
             raise ValueError("hacked or unknown SMC binary found: a retail image wants "
                              "a clean SMC, and smcnocheck builds with this one anyway")
@@ -431,23 +356,17 @@ class Build:
                 and not self.drawing and not self._dvdkey_goes_in
                 and (not self.cpu_key or self._own_keyvault() is not None)):
             return self.dump.sealed_keyvault
-        return Keyvault(self.plain_keyvault()).sealed(self.cpu_key)
+        return self.plain_keyvault().sealed(self.cpu_key)
 
-    def _own_keyvault(self) -> bytes | None:
-        """The dump's keyvault in the clear, or None where this CPU key cannot open it.
-
-        Its nonce is what its plaintext derives under the right key and nothing else,
-        which is the original's own check -- "keyvault decrypt failed, discarding",
-        measured with a key one bit wrong, where it then stops for want of a kv.bin.
-        """
+    def _own_keyvault(self) -> Keyvault | None:
+        """The dump's keyvault, or None where this CPU key does not open it -- which
+        the original discards, and then stops for want of a kv.bin."""
         if self.dump is None:
             return None
-        sealed = self.dump.sealed_keyvault
-        plain = self.dump.keyvault(self.cpu_key).plain
-        if Keyvault(plain).sealed(self.cpu_key)[:0x10] != sealed[:0x10]:
+        own = Keyvault.opened_if_own(self.dump.sealed_keyvault, self.cpu_key)
+        if own is None:
             logger.warning("keyvault decrypt failed, discarding")
-            return None
-        return plain
+        return own
 
     @property
     def _dvdkey_goes_in(self) -> bool:
@@ -455,16 +374,14 @@ class Build:
         ini says."""
         return bool(self.config.dvdkey) and self.image_type.name != "retail"
 
-    def plain_keyvault(self) -> bytes:
+    def plain_keyvault(self) -> Keyvault:
         """The keyvault in the clear, as this build will seal it.
 
         **A `kv.bin` beside the build is written, over the dump's too** -- measured by
-        x360mcp on a build with both, whose image carried the file's keyvault. J-Runner
-        hands one over in the clear for a dead NAND and the original says so: "kv.bin
-        appears to be decrypted already". One sealed under this console's key is opened
-        first; which it is, is whether its nonce is the one its content derives.
+        x360mcp on a build with both, whose image carried the file's keyvault; see
+        `Keyvault.handed_in` for the two states it may come in.
 
-        **Its eight bytes at 0x10 are not the file's.** They are a staging buffer: the
+        **Its eight bytes of head are not the file's.** They are a staging buffer: the
         console's own keyvault's where the survey read them, drawn with no dump,
         compiled in under `-norandom`. Measured on donor builds in both regimes.
 
@@ -477,22 +394,16 @@ class Build:
         own = self._own_keyvault()
         given = self.material.keyvault
         if given is not None:
-            opened = Keyvault.opened(given, self.cpu_key).plain
-            if Keyvault(opened).sealed(self.cpu_key)[:0x10] == given[:0x10]:
-                plain = bytearray(opened)
-            else:
-                logger.warning("kv.bin appears to be decrypted already, but the hash "
-                               "does not match the CPU key")
-                plain = bytearray(given)
+            vault = Keyvault.handed_in(given, self.cpu_key)
         elif own is not None:
-            plain = bytearray(own)
+            vault = own
         else:
             raise ValueError("could not read kv.bin, and no keyvault the CPU key opens "
                              "in a dump: critical bootloader files are missing")
-        plain[0x10:0x18] = self._buffer("kv.bin", own[0x10:0x18] if own else None)
+        vault = vault.with_head(self._buffer("kv.bin", own.head if own else None))
         if self._dvdkey_goes_in:
-            plain[0x100:0x110] = self.config.dvdkey
-        return bytes(plain)
+            vault = vault.with_dvd_key(self.config.dvdkey)
+        return vault
 
     def xell(self) -> bytes | None:
         """The loader, or None for an image type that carries none.
@@ -579,23 +490,8 @@ class Build:
         return self.fuses(cbb[0])
 
     def fuses(self, listed, devkit: bool = False) -> bytes:
-        """The fuses a loader hands a console in place of its own: 0x60 bytes.
-
-        Twelve lines of eight bytes, each read out of the original's own code by
-        x360mcp -- the template at 0x44A700 and the routines that fill it -- and every
-        manufacturing and JTAG reference image agrees to the byte:
-
-            line 0     C0FFFFFFFFFFFFFF
-            line 1     six of 0x0F, then two bytes naming the console type
-            line 2     one nibble of 0xF for each bit set in the CB's allow word,
-                       counted from the top of the line
-            lines 3-6  the CPU key, each half written twice
-            lines 7-8  the lockdown value in 0xF nibbles, sixteen to a line
-            lines 9-11 zero
-
-        The type and the allow word are the big-endian word at 0x3B0 of `listed`, the
-        CB the console is bound on: type in the top byte, allow in the low sixteen
-        bits. A manufacturing chain's CB_B, a JTAG image's second CB.
+        """The fuses for this console -- see `chain.fuses` -- from the CB it is bound
+        on: a manufacturing chain's CB_B, a JTAG image's second CB.
 
         `devkit` gives a development kernel's instead, type 0 and no allow bits: a JTAG
         chain that ends in 1838's `SE_1838.bin` is "re-encoded" after its CB and the
@@ -603,25 +499,8 @@ class Build:
         """
         if not self.cpu_key:
             raise ValueError("fuses carry the CPU key, and none was given")
-        word = 0 if devkit else int.from_bytes(
-            self.release.bootloader(listed)[0x3B0:0x3B4], "big")
-        kind, allow = word >> 24, word & 0xFFFF
-        types = {0: b"\x0f\x0f", 1: b"\x0f\xf0", 2: b"\xf0\x0f", 3: b"\xf0\xf0"}
-        if kind not in types:
-            raise ValueError("console type %#x is not one the original knows" % kind)
-        sequence = 0
-        for bit in range(16):
-            if allow & (1 << bit):
-                sequence |= 0xF << ((15 - bit) * 4)
-
-        def unary(count: int) -> bytes:
-            count = max(0, min(16, count))
-            return int("F" * count + "0" * (16 - count), 16).to_bytes(8, "big")
-
-        key = self.cpu_key
-        return (bytes.fromhex("C0FFFFFFFFFFFFFF") + b"\x0f" * 6 + types[kind]
-                + sequence.to_bytes(8, "big") + key[:8] * 2 + key[8:] * 2
-                + unary(self.ldv) + unary(self.ldv - 16) + bytes(24))
+        word = 0 if devkit else fuses.cb_word(self.release.bootloader(listed))
+        return fuses.virtual(word, self.cpu_key, self.ldv)
 
     def chain(self, which: int = 0) -> bytes:
         """The bootloader region: the release's stages, patched, bound and sealed.
@@ -834,27 +713,12 @@ class Build:
         binding. The last carries all of it, and its slot number is its place, which
         x360mcp read at 0x41CDB0 and the JTAG image confirms with a 1.
 
-        Taken apart on every reference image and put back, the release's CF and CG come
-        out changed in these places and nowhere else:
-
-        * **Both nonces are the console's own**, taken from the dump's CF and the CG
-          behind it -- the slot the console's values come from, the one with the
-          largest lockdown value. Carried across releases: the dump's CF is 17502, the
-          image's is 17559, and they share a nonce. With no dump they are two of the
-          original's staging buffers, like the chain's -- see `_nonces`.
-        * **CF says where the rest of CG is**: a count at 0x30 and then that many
-          block numbers, one up from the other. The number is the block's place in the
-          flash, not in the filesystem -- 0x34 on a 16 MB image and 0xAE0 on a 64 MB
-          one, whose filesystem starts there. x360mcp read the routine that writes it,
-          at 0x41C910, after first taking the numbers for versions.
-        * **CF carries the console's pairing and lockdown value** at 0x21C, which is
-          what `chain.Fields.in_cf` reads -- the pairing only where a chain binds to the
-          console, zeros otherwise -- and the byte before them says which update slot
-          this is.
-        * **CF carries sixteen bytes binding it to the console**, at 0x220: an HMAC
-          under the CPU key over everything before them, with the nonce replaced by the
-          key it derives, so the CF is hashed as it will be read. Not the construction
-          CB_B's binding uses; J-Runner's `Nand.calcCFhash` spells out the same one.
+        What changes in the release's CF is `chain.update`'s -- where the tail lies,
+        the console's block and the binding -- and **both nonces are the console's
+        own**, taken from the dump's CF and the CG behind it: the slot with the largest
+        lockdown value. Carried across releases: the dump's CF is 17502, the image's is
+        17559, and they share a nonce. With no dump they are two of the original's
+        staging buffers, like the chain's -- see `_nonces`.
 
         Nothing else. CG's plaintext is the release's, byte for byte.
         """
@@ -877,18 +741,14 @@ class Build:
 
         span = layout.slot_span(self.image_type, self.flash)
         spill = len(cf) + len(cg) - span
-        count = max(0, -(-spill // layout.BLOCK))
-        blocks = count.to_bytes(2, "big") + b"".join(
-            (tail_at // layout.BLOCK + step).to_bytes(2, "big") for step in range(count)
-        )
-        cf[0x30:0x68] = blocks.ljust(0x68 - 0x30, b"\x00")
+        update.with_tail(cf, tail_at // layout.BLOCK,
+                         max(0, -(-spill // layout.BLOCK)))
         # A JTAG image's first pair is the one its exploit boots through, and it never
         # carries the console -- 1838 names no second pair, and its one CF still goes
         # out with nothing of the console in it, measured.
         jtag_first = self.image_type.name == "jtag" and which == 0
         if which < len(pairs) - 1 or jtag_first:
-            return self._sealed_pair(cf, cg, cg_nonce)
-        cf[0x21B] = which
+            return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN)
         # The pairing goes in only where a chain binds to the console. A chain with
         # no CB_B binds nowhere, and its CF carries three zeros there and the lockdown
         # value all the same -- measured on a fat glitch image, the one such chain this
@@ -898,23 +758,9 @@ class Build:
                                 chain) >= 0
             for chain in (0, 1) if self._chain_files(chain)
         )
-        cf[0x21C:0x21F] = self.pairing if binds else bytes(3)
-        cf[0x21F] = self.ldv
-        message = bytearray(cf[:0x220])
-        message[0x20:0x30] = derive(sealing.ONE_BL_KEY, cf_nonce)
-        cf[0x220:0x230] = derive(self.cpu_key, bytes(message))
-        return self._sealed_pair(cf, cg, cg_nonce)
-
-    @staticmethod
-    def _sealed_pair(cf: bytearray, cg: bytearray, cg_nonce: bytes) -> bytes:
-        """CF under the 1BL key, and CG under the key CF carries at 0x330."""
-        sealed_cf = sealing.under(Stage(bytes(cf), 0), sealing.ONE_BL_KEY)
-        # CG is sealed over its padding too, as every stage is: its tail file is ten
-        # bytes longer than CG says it is, and those ten are the stream carrying on.
-        cg += bytes(-len(cg) % SEAL_ALIGN)
-        head = len(Stage(cg, 0).head)
-        key = derive(bytes(cf[0x330:0x340]), cg_nonce)
-        return sealed_cf + bytes(cg[:head]) + rc4(key, bytes(cg[head:]))
+        update.with_console(cf, which, self.pairing if binds else bytes(3), self.ldv,
+                            self.cpu_key)
+        return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN)
 
     def _update_pairs(self) -> list:
         """The CF/CG pairs the file list names, in order: one, or a JTAG image's two.
@@ -1010,35 +856,17 @@ class Build:
             if own is not None and not security.verifies(name, own, self.cpu_key):
                 logger.warning("%s verify failed! Discarding data.", name)
                 own = None
-        content = self.material.bytes_in(name)
-        # A file beside the build is taken whichever state it is in, each kind by its
-        # own test -- `security.in_the_clear` -- all measured: open, it is sealed like
-        # the rest; sealed, it is opened; sealed under no key this build has --
-        # another console's, say -- crl.bin goes in as it stands, extended.bin is made
-        # up clean, and secdata.bin is never opened in the first place. dae.bin and
-        # fcrt.bin go in as they stand too, which is a deliberate divergence: the
-        # original says "Skipping encryption" and then writes what its failed
-        # decryption left -- dae.bin's first record opened under the shipped key,
-        # fcrt.bin's body under this console's -- which no console can read.
-        # And one of the wrong length is not taken at all where the original checks it:
-        # "extended.bin is not the correct size! Making up an clean/empty
-        # extended.bin!", and the same of secdata.bin -- 0x41D6B4 and 0x41D9BF.
-        made_clean = content is not None and len(content) != security.CLEAN_LENGTH.get(
-            name, len(content))
-        if made_clean:
-            logger.warning("%s is not the correct size! Making up a clean one", name)
-            content = None
-        clear = content is not None and security.in_the_clear(name, content,
-                                                              self.cpu_key)
-        if (content is not None and not clear
-                and name in ("crl.bin", "dae.bin", "extended.bin")
-                and not security.opens(name, content, self.cpu_key)):
-            logger.error("%s appears to be crypted with the wrong key or damaged",
-                         name)
-            if name in ("crl.bin", "dae.bin"):
+        content, clear, made_clean = self.material.bytes_in(name), False, False
+        if content is not None:
+            verdict, clear = security.taken_beside(name, content, self.cpu_key)
+            if verdict == "as is":
+                logger.error("%s appears to be crypted with the wrong key or damaged",
+                             name)
                 return content
-            return security.extended(None, self.plain_keyvault()[0x10:0x18],
-                                     self.cpu_key)
+            if verdict == "clean":
+                logger.warning("%s is not the correct size or would not open; making "
+                               "up a clean one", name)
+                content, made_clean = None, True
         if content is None and name in ("crl.bin", "dae.bin") and \
                 not config.nosusecurity and self.release.container is not None and \
                 name in self.release.container.held:
@@ -1059,7 +887,7 @@ class Build:
             head, field = self._buffer(name, own_params)
             return security.dae(content, cpu, when, ldv, head, field)
         if name == "extended.bin":
-            return security.extended(content, self.plain_keyvault()[0x10:0x18], cpu,
+            return security.extended(content, self.plain_keyvault().head, cpu,
                                      clear)
         if name == "secdata.bin":
             carried = None
@@ -1119,10 +947,17 @@ class Build:
         if self.console is None:
             raise ValueError("you need to specify console type!")
         _ = self.one_bl_key
-        flash, bigffs = self.flash, self.bigffs
-        out = Image.blank(flash, bigffs)
-        base = flash.base_of(bigffs) * layout.BLOCK
+        out = Image.blank(self.flash, self.bigffs)
+        where, spills = self._system_area(out)
+        placed, table_at = self._filesystem(out, where, spills, when)
+        self._top_of_flash(out, placed, table_at)
+        return out
 
+    def _system_area(self, out: Image) -> tuple:
+        """Everything below the filesystem: header, SMC, keyvault, chains, XeLL, slots,
+        patch slot and JTAG loaders. Returns `layout.for_type`'s regions and the CG
+        tails that spill into the filesystem."""
+        flash, bigffs = self.flash, self.bigffs
         chain = self.chain()
         chain_end = layout.CHAIN_AT + len(chain)
         second = self.chain(1) if self._chain_files(1) else b""
@@ -1164,100 +999,43 @@ class Build:
             # 11 of its spare -- the one page of any image with anything there. The
             # built-in core's length, whatever core goes in: 0x350 beside a 0xD80 one
             # from the release, whose own length the payload is patched with instead.
-            words = len(self._builtin("freeboot.bin")) // 4
+            words = len(jtag.builtin("freeboot.bin")) // 4
             out.mark(where["payload"][0], PAGE, extra=words.to_bytes(4, "big"))
+        return where, spills
 
-        big = flash.spare is not None and flash.spare.fs_at is not None
-        first = (tail_at - base) // layout.BLOCK
-        if not flash.pool:
-            # No bad blocks to stand in for, so no pool: an eMMC's table reserves every
-            # block from the last one a build may use to the end of the part -- six on
-            # the one measured, where the anchors and the settings live -- and a
-            # devkit image's flat 64 MB does the same from 0xF7C.
-            held = flash.blocks - (flash.last_block - base // layout.BLOCK)
-            fs = Filesystem(flash, first, bigffs, pool=0, held=held)
-        else:
-            fs = Filesystem(flash, first, bigffs, held=0 if big else 4)
-        stamp = self._fat(when)
+    def _filesystem(self, out: Image, where: dict, spills: list, when: int) -> tuple:
+        """The files, the settings blobs and the table -- see `Filesystem`. Returns the
+        blobs placed and the table's block, which the anchors of an eMMC point at."""
+        flash, bigffs = self.flash, self.bigffs
+        base = flash.base_of(bigffs) * layout.BLOCK
+        fs = Filesystem.on(flash, (where["tail"][0] - base) // layout.BLOCK, bigffs)
+        # Two seconds on from the build's time, the same two the security files' stamp
+        # carries: the reference images' entries say 15:17:50 where the build began at
+        # 15:17:48 UTC.
+        stamp = Entry.fat_time(when + 2)
         # The tail is the first file on every shape of flash, and a JTAG image's two
         # are the first two.
         for index, spill in enumerate(spills):
             fs.add("sysupdate.xexp%d" % (index + 1), spill, stamp=stamp)
         for name, body in self.files(when):
             fs.add(name, body, stamp=stamp)
-        fs.over(out)
-        start = flash.offset_of(fs.after, bigffs)
-        blobs = {} if self.config.nomobile else self._mobiles()
-        # The settings blobs get a region of their own after the files, and the table
-        # follows it; with none to write there is no region, and the table goes
-        # straight after the files -- measured with `nomobile`, and x360mcp saw the same
-        # on a build with no dump.
-        # What follows the files starts on the flash's own step: a jasperbb's files end
-        # at 0x38D0000 and its blobs go to 0x38E0000 -- and so does its table when there
-        # are no blobs, measured on a donor build. On every other part the files
-        # already end on one. The blocks stepped over go unnamed in the table where
-        # blobs follow and stay free where the table does -- both measured.
-        start += -start % flash.round_to
-        # On a big block chip the pages of the filesystem carry three bytes of its own
-        # and a kind of their own; everywhere else a file's pages carry a block number.
-        fields = self._fs_fields(slots) if big else b""
-        for entry, blocks, body in fs.placed:
-            at = flash.offset_of(entry.sector, bigffs)
-            span = blocks * layout.BLOCK
-            # A file that fits in one block leaves its padding's fields erased on a big
-            # block chip, with a real code over the zeros: measured on four such files
-            # in a jasperbb image and seen again here. A longer file's padding is
-            # written like the rest of it, and nothing of this on a 16 MB image.
-            if big and blocks == 1:
-                span = -(-len(body) // PAGE) * PAGE
-            out.mark(at, span, 0, 0x2A if big else 0, fs=fields)
+        fields = b""
+        if flash.spare is not None and flash.spare.fs_at is not None:
+            fields = self._fs_fields(where["slot"][0])
+        fs.over(out, fields)
+        placed = fs.lay_blobs(out, {} if self.config.nomobile else self._mobiles(),
+                              fields)
+        fs.lay_table(out, fields)
+        return placed, fs.table_at
 
-        placed = {}
-        for index, name in enumerate(sorted(blobs)):
-            at = start + index * flash.mobile_stride
-            body, kind = blobs[name], 0x31 + "BCDE".index(name[6])
-            # A blob that would reach the block kept for the table is left out too, as
-            # a file is: measured with B at 0x3DA going in and C at 0x3DB not.
-            if at + len(body) > (flash.last_block - 1) * layout.BLOCK:
-                logger.error("adding %s will exceed available flash space! Skipped!",
-                             name)
-                continue
-            out.put(at, body)
-            placed[kind] = ((at - base) // layout.BLOCK, len(body))
-            ends = at + len(body)
-            if flash.spare is None:
-                continue
-            per = flash.spare.pages_a_block
-            pages = max(1, len(body) // PAGE)
-            free = per - (at // PAGE) % per - pages
-            # A byte does not hold what is free of 256 pages, so a big block chip counts
-            # it in fours -- 0x3F, 0x3E, 0x3D, 0x3C down a block, measured.
-            free >>= 2 if big else 0
-            out.mark(at, pages * PAGE, 1, kind,
-                     bytes([len(body) // 0x100, free, 0, 0]),
-                     b"\x00" if big else b"")
-        # The table follows the last blob placed, on the flash's step: 0x10000 past the
-        # start of four 0x4000 blobs, 0x20000 past four packed 0x800 apart on a big
-        # block part, and one block past a lone MobileB when the others would not fit
-        # -- all measured. With none placed -- none to place, or none that fit -- it
-        # goes where they would have begun: measured with `nomobile`, with no dump, and
-        # with blobs that would not fit.
-        table_at = start
-        if placed:
-            fs.skipped = range(fs.after, (start - base) // layout.BLOCK)
-            table_at = ends + -ends % flash.round_to
-        fs.table_at = (table_at - base) // layout.BLOCK
-        table = fs.table()
-        out.put(table_at, table)
-        # The table's kind moves with the filesystem's: 0x30 on a 16 MB image, 0x2C on
-        # a big block chip, where it keeps the filesystem's three bytes.
-        out.mark(table_at, len(table), 1, 0x2C if big else 0x30, fs=fields)
-
+    def _top_of_flash(self, out: Image, placed: dict, table_at: int) -> None:
+        """What is laid last: the console's settings, an eMMC's anchors, the raw
+        patches, a kept memory unit, and the blocks moved off bad ones."""
         for at, body, span in self._settings():
             out.put(at, body)
             out.mark(at, span)
-        if flash.anchors:
-            anchors.lay(out, fs.table_at, placed)
+        if self.flash.anchors:
+            anchors.lay(out, table_at, placed)
         # The file list's own `[rawpatch]` first -- a devkit list names two, "(1)" and
         # "(2)" in the original's log -- and then `-8`'s. Each line is a name and an
         # offset, which the list keeps where a checksum would be.
@@ -1272,34 +1050,26 @@ class Build:
         if self.config.nandmu:
             self._memory_unit(out)
         self._remap(out)
-        return out
 
     def _memory_unit(self, out: Image) -> None:
-        """`nandmu`: the memory unit a big block console keeps in its first 64 MB.
-
-        The author's own words, in the ini the source ships: "blocks 0x10 through 0x15B
-        (inclusive) will be copied from the dump to the final image, when NAND MU data
-        is detected only". The blocks are the chip's 0x20000, so 0x200000 up to
-        0x2B80000 -- the gap between the bootloaders and the filesystem. Detected, as
-        at the original's 0x415B8A read by x360mcp, by a page whose kind is 1 to 0x29.
-        Measured on a jasper256 build from a dump carrying such pages: the range comes
-        across verbatim, spare included, and without the option nothing does.
+        """`nandmu`: the dump's memory unit carried across verbatim, spare included --
+        see `Dump.memory_unit`. Measured on a jasper256 build from a dump carrying one:
+        the range comes across, and without the option nothing does. Only into an image
+        for the same big block part.
         """
         dump = self.dump
-        flash = self.flash
-        if dump is None or flash.spare is None or dump.flash.spare is None:
+        if dump is None or self.flash.spare is None:
             return
-        if dump.flash.spare.pages_a_block != 256 or dump.flash.blocks != flash.blocks:
-            logger.info("nandmu: the dump is not from a big block part like this one; "
-                        "nothing to keep")
+        where = dump.memory_unit
+        if where is None:
             return
-        kind = dump.flash.spare.kind
-        if not any(0 < kind(one) <= 0x29 for one in dump.image.spares):
+        if dump.flash.blocks != self.flash.blocks:
+            logger.info("nandmu: the dump is not from a part like this one; nothing "
+                        "to keep")
             return
         logger.warning("nanddump.bin has NAND memory unit data; keeping blocks 0x10 "
                        "to 0x15B of it")
-        step = dump.flash.spare.pages_a_block * PAGE
-        out.carry(dump.image, 0x10 * step, 0x15C * step)
+        out.carry(dump.image, *where)
 
     def _remap(self, out: Image) -> None:
         """Move what lands in the console's written-off blocks to blocks standing in.
@@ -1319,30 +1089,17 @@ class Build:
         flash = self.flash
         if self.config.noremap or self.dump is None or flash.spare is None:
             return
-        raw, own = self.dump_raw, self.dump.flash
-        bad = set(order.marked_bad(raw, own))
-        if not self.config.noecdremap:
-            bad |= set(order.failing(raw, own))
-        if not bad:
+        own = self.dump.flash
+        if own.spare is None:
             return
-        if (own.blocks, own.spare.pages_a_block) != (flash.blocks,
-                                                     flash.spare.pages_a_block):
+        per = own.spare.pages_a_block
+        moves = order.stand_ins(self.dump_raw, own, not self.config.noecdremap,
+                                len(self.dump_raw) // ((PAGE + own.spare.length) * per))
+        if moves and (own.blocks, per) != (flash.blocks, flash.spare.pages_a_block):
             logger.warning("the dump's bad blocks are not carried into an image for "
                            "another flash; nothing is remapped")
             return
-        standing = order.replacements(raw, own)
-        taken = bad | set(standing.values())
-        free = len(out.spares) // flash.spare.pages_a_block - 1
-        for block in sorted(bad):
-            stand_in = standing.get(block)
-            if stand_in is None:
-                while free in taken:
-                    free -= 1
-                if free < 0:
-                    raise ValueError("this flash has no good block left to stand in "
-                                     "for block %#x" % block)
-                stand_in = free
-                taken.add(stand_in)
+        for block, stand_in in moves.items():
             logger.info("remapping block %#x to block %#x", block, stand_in)
             out.retire(block, stand_in)
 
@@ -1351,12 +1108,8 @@ class Build:
 
         Each at the address the reboot core has compiled into it -- see `layout`.
 
-        * **payload.bin**, the page after the header, with the core's length in words
-          written into it at 0x52: the operand of the `li r4` that sets how much it
-          copies. "patching payload.bin to load size 0xd40 (0x350 reps)".
-        * **freeboot.bin**, the core, with the release's kernel version written over the
-          thirty-two X's it carries for one. "patching freeboot.bin with kernel version
-          string '17559'". Zeros to the patch list.
+        * **payload.bin**, the page after the header, and **freeboot.bin**, the core,
+          zeros to the patch list -- each patched as `jtag.loaders` says.
         * **the patch list**, the whole patch file -- see `patch_slot` -- and zeros to
           the end of the block. The block after it is erased and still marked written,
           which is the rest of the list's 0x4000: x360mcp measured the eight pages.
@@ -1365,43 +1118,11 @@ class Build:
 
         All of it byte for byte against the reference image.
         """
-        payload = bytearray(self._jtag_loader("payload.bin"))
-        core = bytearray(self._jtag_loader("freeboot.bin"))
-        # Only a payload the original recognises -- its own -- takes the length: one
-        # from the release that is a byte different goes in untouched, measured with
-        # three such, where an exact copy of the built-in one is patched.
-        known = self._builtin("payload.bin")
-        if bytes(payload[:len(known)]) == known:
-            payload[0x52:0x54] = (len(core) // 4).to_bytes(2, "big")
-        out.put(where["payload"][0], bytes(payload))
-        # Only a core the original recognises is patched, and it recognises its own: a
-        # `freeboot.bin` in the release's `bin/` whose first 0xD40 bytes are the
-        # built-in core -- even with more behind them -- gets the version and 9199's
-        # hold address, and one with a single byte changed goes in as it is, X's and
-        # all, "CYGNOS, DEMON and NODVD command line options are ignored due to
-        # external freeboot.bin!". Measured on 17559 and 9199 with four such files.
-        known = self._builtin("freeboot.bin")
-        builtin = bytes(core[:len(known)]) == known
-        blank = core.find(b"X" * 0x20) if builtin else 0
-        if blank < 0:
-            # The original says so and carries on; whether anything else follows from
-            # it has not been measured.
-            logger.error("**** ERROR PATCHING FREEBOOT.BIN for kernel version string!")
-        elif builtin:
-            version = self.recipe.version.encode("ascii")
-            core[blank:blank + 0x20] = version.ljust(0x20, b"\x00")[:0x20]
-        if builtin and self.recipe.version == "9199":
-            # "9199 ini string detected, patching to old hold address": one doubleword
-            # of the core, 0x8000000001003078 to 0x80000000001FFFF8 -- measured on a
-            # 9199 JTAG image, where it is the one change beside the version string.
-            old = bytes.fromhex("8000000001003078")
-            if core.count(old) != 1:
-                raise ValueError("this core does not carry the hold address 9199 "
-                                 "patches")
-            spot = core.find(old)
-            core[spot:spot + 8] = bytes.fromhex("80000000001ffff8")
+        core = jtag.core_for(self._jtag_loader("freeboot.bin"), self.recipe.version)
+        payload = jtag.payload_for(self._jtag_loader("payload.bin"), len(core))
+        out.put(where["payload"][0], payload)
         at, room = where["freeboot"]
-        out.put(at, bytes(core).ljust(room, b"\x00"))
+        out.put(at, core.ljust(room, b"\x00"))
         listed = self.patch_slot()
         at, room = where["patches"]
         if len(listed) > room:
@@ -1415,13 +1136,6 @@ class Build:
         at = where["second chain"][0]
         out.put(at, second + bytes(-(at + len(second)) % layout.BLOCK))
 
-    @staticmethod
-    def _builtin(name: str) -> bytes:
-        """One of the two loaders the original carries inside itself."""
-        path = os.path.join(os.path.dirname(__file__), "builtin", name)
-        with open(path, "rb") as handle:
-            return handle.read()
-
     def _jtag_loader(self, name: str) -> bytes:
         """`payload.bin` or `freeboot.bin`: the release's own, else the built-in one.
 
@@ -1434,7 +1148,7 @@ class Build:
         if own is not None:
             return own
         logger.info("could not read %s, using built in %s", name, name)
-        return self._builtin(name)
+        return jtag.builtin(name)
 
     def _fs_fields(self, slots: int) -> bytes:
         """The three bytes a big block chip's filesystem pages carry at 7.
@@ -1455,19 +1169,6 @@ class Build:
             system = (slots + 2 * span) // 0x20000
         size = flash.last_block - flash.base_of(self.bigffs)
         return bytes([system, size >> 5, 4])
-
-    @staticmethod
-    def _fat(when: int) -> int:
-        """The build's time as a directory entry keeps it: a FAT date and time.
-
-        In UTC and two seconds on, the same two seconds the security files' stamp
-        carries -- the reference images' entries say 15:17:50 where the build began at
-        15:17:48 UTC. FAT counts seconds in twos.
-        """
-        at = time.gmtime(when + 2)
-        date = ((at.tm_year - 1980) << 9) | (at.tm_mon << 5) | at.tm_mday
-        clock = (at.tm_hour << 11) | (at.tm_min << 5) | (at.tm_sec // 2)
-        return (date << 16) | clock
 
     def _mobiles(self) -> dict:
         """The settings blobs this console carries, by name: the material's first."""
@@ -1507,65 +1208,35 @@ class Build:
         return out
 
     def _given_config(self) -> bytes | None:
-        """The settings block handed over as `smc_config.bin`, and what follows it.
+        """The settings block handed over as `smc_config.bin` -- `SmcConfig.found_in`.
 
-        J-Runner hands over the whole 0x10000 the console keeps its copies in, and the
-        original searches it for the block whose head sums -- "valid SMC config data
-        found at offset 0xc000" in `Donor Files/smc_config/Trinity.bin`, one 0x400
-        step at a time. It writes that block and leaves the rest of the 0x1000 erased,
-        its pages marked written all the same: measured on donor builds from
-        `Trinity.bin`, whose next 0xC00 are erased anyway, and `Falcon.bin`, whose are
-        zeros and still come out 0xFF.
+        The original writes that block and leaves the rest of the 0x1000 erased, its
+        pages marked written all the same: measured on donor builds from `Trinity.bin`,
+        whose next 0xC00 are erased anyway, and `Falcon.bin`, whose are zeros and still
+        come out 0xFF.
         """
         given = self.material.smc_config
         if given is None:
             return None
-        length = dumps.CONFIG_LENGTH
-        for at in range(0, len(given) - length + 1, length):
-            block = given[at:at + length]
-            if int.from_bytes(block[:2], "little") == dumps.checksum(block):
-                return block.ljust(0x1000, b"\xff")
-        logger.warning("smc_config.bin holds no valid settings block; not used")
-        return None
+        found = SmcConfig.found_in(given)
+        if found is None:
+            logger.warning("smc_config.bin holds no valid settings block; not used")
+            return None
+        return found.sealed().ljust(0x1000, b"\xff")
 
     def _configured(self, block: bytes) -> bytes:
-        """The settings block with the options that land in it written in.
-
-        Each field was found by x360mcp building twice, once with the option and once
-        without, and reading the difference; J-Runner's own field table agrees on every
-        one it has:
-
-            0x11  CPU fan, 0x12  GPU fan         0x80 | percent; zero leaves it on auto
-            0x29..0x2B  CPU, GPU, EDRAM target temperature, Centigrade
-            0x2C..0x2E  CPU, GPU, EDRAM overheat temperature
-            0x220  MAC address, six bytes
-            0x22A  video region, 0x22C  game region, both sixteen bits big-endian
-            0x237  DVD region, one byte
-
-        The head then says the block's checksum again, which `image.dump.checksum`
-        computes over 0x10 to 0x10C; the fields past 0x220 lie outside it, which is why
-        changing them never moved the head in any measurement.
-        """
+        """The settings block with the options that land in it written in -- the
+        fields are `SmcConfig`'s."""
         config = self.config
-        out = bytearray(block)
-        for at, name in ((0x11, "cpufan"), (0x12, "gpufan")):
-            if getattr(config, name):
-                out[at] = 0x80 | getattr(config, name)
-        for at, name in ((0x29, "cputemp"), (0x2A, "gputemp"), (0x2B, "edramtemp"),
-                         (0x2C, "overcputemp"), (0x2D, "overgputemp"),
-                         (0x2E, "overedramtemp")):
-            if getattr(config, name):
-                out[at] = getattr(config, name)
+        settings = SmcConfig(block)
+        settings.set_fan("cpu", config.cpufan)
+        settings.set_fan("gpu", config.gpufan)
+        for name in TEMPERATURES:
+            settings.set_temperature(name, getattr(config, name))
         if config.macid:
-            out[0x220:0x226] = config.macid
-        for at, name in ((0x22A, "avregion"), (0x22C, "gameregion")):
-            if getattr(config, name):
-                out[at:at + 2] = getattr(config, name).to_bytes(2, "big")
-        if config.dvdregion:
-            out[0x237] = config.dvdregion & 0xFF
-        if bytes(out) != bytes(block):
-            out[0:2] = dumps.checksum(out).to_bytes(2, "little")
-        return bytes(out)
+            settings.set_mac(config.macid)
+        settings.set_regions(config.avregion, config.gameregion, config.dvdregion)
+        return settings.sealed()
 
     @property
     def stated_version(self) -> int:
@@ -1626,7 +1297,7 @@ class Build:
         * the copyright line, whose year is the board's, and a JTAG image carries the
           other year the board has
         * the word at 0x48: one for every hack measured and zero for retail
-        * the boot flags at 0x4C -- see `boot_flags`
+        * the boot flags at 0x4C -- see `boot_options`
         * the keyvault, at 0x4000 and 0x4000 long on all sixteen -- a xenon and a
           zephyr leave the length zero -- the two patch slots the page counts, and the
           keyvault's version word
@@ -1649,7 +1320,7 @@ class Build:
         head.before_flags = 1 if self.image_type.number in (2, 3, 4, 5) else 0
         if kit:
             head.word_at_04 = 0x8000
-        head.boot_flags = self.boot_flags()
+        self.boot_options(head)
         head.keyvault_at = layout.KEYVAULT_AT
         if self.console.states_keyvault_size:
             head.keyvault_size = layout.KEYVAULT_AT
@@ -1666,46 +1337,41 @@ class Build:
         head.smc_at = layout.smc_at(smc_length)
         return bytes(head.image)
 
-    def boot_flags(self) -> int:
-        """The word at 0x4C: four bytes that decide how the console starts.
+    def boot_options(self, head: Header) -> None:
+        """The four bytes at 0x4C that decide how the console starts, set on `head`.
 
-        Measured by x360mcp a build at a time, each option against a reference:
+        Measured by x360mcp a build at a time, each option against a reference, and
+        named in `Header`:
 
-            0x4C  the button that makes a two-NAND console switch -- `dualboot`, on a
-                  JTAG image only, and zero when it names the button XeLL starts on
-            0x4D  a bitfield: 1 for `cygnos` or `demon`, which write the same byte; on a
-                  JTAG image 2 for `nodvd` and otherwise 4, the tray check it starts on,
-                  unless `olddvd` asks for the older way
-            0x4E  a second reason XeLL starts on, `xellbutton2`, zero when it is the
-            same 0x4F  the reason XeLL starts on, `xellbutton`; `nodvd` and `olddvd`
-            clear it
+        * `xell_reason` is `xellbutton`; `nodvd` and `olddvd` clear it
+        * `xell_reason2` is `xellbutton2`, zero when it is the same button
+        * `boot_options` is 1 for `cygnos` or `demon`, which write the same bit; on a
+          JTAG image 2 for `nodvd` and otherwise 4, unless `olddvd` asks for the older
+          way
+        * `dualboot_reason` is `dualboot`, on a JTAG image only, zero when it is the
+          button XeLL starts on
 
         A retail image carries XeLL on no button at all and the word is zero, which the
         reference images show; so does a devkit one. The whole block belongs to types 2
         to 5, as x360mcp read at 0x40D700.
         """
         if self.image_type.number not in (2, 3, 4, 5):
-            return 0
+            head.boot_flags = 0
+            return
         config, jtag = self.config, self.image_type.name == "jtag"
-        if config.nodvd or config.olddvd:
-            reason = 0
-        else:
-            reason = BUTTONS[config.xellbutton or "eject"]
-        second = 0
-        if config.xellbutton2:
-            second = BUTTONS[config.xellbutton2]
-            second = 0 if second == reason else second
-        speed = 1 if (config.cygnos or config.demon) else 0
-        if jtag:
-            if config.nodvd:
-                speed |= 2
-            elif not config.olddvd:
-                speed |= 4
-        switch = 0
-        if jtag and config.dualboot:
-            switch = BUTTONS[config.dualboot]
-            switch = 0 if switch == reason else switch
-        return (switch << 24) | (speed << 16) | (second << 8) | reason
+        reason = 0 if config.nodvd or config.olddvd else \
+            BUTTONS[config.xellbutton or "eject"]
+        second = BUTTONS[config.xellbutton2] if config.xellbutton2 else 0
+        options = 1 if (config.cygnos or config.demon) else 0
+        if jtag and config.nodvd:
+            options |= 2
+        elif jtag and not config.olddvd:
+            options |= 4
+        switch = BUTTONS[config.dualboot] if jtag and config.dualboot else 0
+        head.xell_reason = reason
+        head.xell_reason2 = 0 if second == reason else second
+        head.boot_options = options
+        head.dualboot_reason = 0 if switch == reason else switch
 
     def auto_name(self) -> str:
         """The name the original gives an image when it is given none: the file list's

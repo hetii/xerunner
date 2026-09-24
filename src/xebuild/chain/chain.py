@@ -111,6 +111,36 @@ class Chain:
         """The slot this console's values come from: the one stating the largest LDV."""
         return max(self._opened_slots(), key=lambda pair: pair[1].ldv)[0]
 
+    def nonce_walk(self) -> tuple:
+        """What the original's survey reads off a dump's chain: nonces by the buffer
+        they fill -- CB_A, CB_B, CD, CE, CF, CG -- and whether it finished.
+
+        Positional, and it stops at the first stage that is not the one due. A single CB
+        goes straight on to its CD and has still finished. An RGH3 chain does not: its
+        third CB stands where the CD is due, so the walk stops with the exploit's own
+        stage read as CB_B. The CF and CG are the console's slot's, read only by a walk
+        that finished. x360mcp read the walk at 0x417651 and found the flag it clears
+        in its very last instruction, which is what decides whether a build draws its
+        nonces.
+        """
+        read, finished, due = {}, False, 0
+        for stage in self.walked:
+            if stage.tag == "CB" and due < 2:
+                read[("CB_A", "CB_B")[due]] = stage.nonce
+                due += 1
+            elif stage.tag == "CD" and due in (1, 2):
+                read["CD"], due = stage.nonce, 3
+            elif stage.tag == "CE" and due == 3:
+                read["CE"], finished = stage.nonce, True
+                break
+            else:
+                break
+        if finished:
+            cf = self.slot
+            read["CF"] = cf.nonce
+            read["CG"] = Stage(cf.image, cf.at + cf.length).nonce
+        return read, finished
+
     def keys(self, cpu_key: bytes = b"") -> tuple:
         """The key each stage in `stages` is sealed under, or None past what opens.
 

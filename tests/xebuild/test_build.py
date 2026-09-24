@@ -12,8 +12,9 @@ import tempfile
 import unittest
 
 from xebuild.boards import for_name
+from xebuild.boards.flash import PAGE
 from xebuild.build import Build, Filesystem, Material, layout, security
-from xebuild.chain import Fields, sealing
+from xebuild.chain import Chain, Fields, sealing
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto import smc as cipher
@@ -193,6 +194,61 @@ class WhichBlockEachFileGets(unittest.TestCase):
             fs.over(Image(bytes(0x1000), board.flash))
 
 
+class WhatFollowsTheFiles(unittest.TestCase):
+    """`Filesystem.on`, `lay_blobs` and `lay_table`: the reserve, the settings blobs
+    behind the files, and the table behind them."""
+
+    def test_the_reserve_each_kind_of_part_keeps(self):
+        """Four held on a 16 MB part, none on a big block chip, and on an eMMC every
+        block from the last usable one to the end, with no pool."""
+        for name, pool, held in (("trinity", 32, 4), ("jasperbb", 32, 0),
+                                 ("corona4g", 0, 6)):
+            with self.subTest(board=name):
+                board, _ = for_name(name)
+                fs = Filesystem.on(board.flash, 0x34)
+                self.assertEqual((fs.first, fs.pool, fs.held), (0x34, pool, held))
+
+    def a_filesystem_with_files(self):
+        board, _ = for_name("trinity")
+        fs = Filesystem.on(board.flash, 0x34)
+        fs.add("one.bin", bytes(0x8000))
+        return board.flash, fs, Image.blank(board.flash)
+
+    def test_blobs_go_a_stride_apart_behind_the_files_and_the_table_after(self):
+        flash, fs, image = self.a_filesystem_with_files()
+        blobs = {"MobileC.dat": b"\x0c" * 0x4000, "MobileB.dat": b"\x0b" * 0x4000}
+        placed = fs.lay_blobs(image, blobs)
+        self.assertEqual(placed, {0x31: (0x36, 0x4000), 0x32: (0x37, 0x4000)})
+        self.assertEqual(image.flat[0x36 * 0x4000:0x37 * 0x4000], blobs["MobileB.dat"])
+        self.assertEqual(fs.table_at, 0x38)
+        page = 0x37 * 0x4000 // PAGE
+        self.assertEqual(flash.spare.kind(image.spares[page]), 0x32)
+
+    def test_with_no_blobs_the_table_goes_where_they_would_have_begun(self):
+        _flash, fs, image = self.a_filesystem_with_files()
+        self.assertEqual(fs.lay_blobs(image, {}), {})
+        self.assertEqual(fs.table_at, 0x36)
+        self.assertEqual(fs.skipped, range(0))
+
+    def test_a_blob_that_would_reach_the_table_s_block_is_left_out(self):
+        board, _ = for_name("trinity")
+        fs = Filesystem.on(board.flash, 0x3DA)
+        image = Image.blank(board.flash)
+        placed = fs.lay_blobs(image, {"MobileB.dat": bytes(0x4000),
+                                      "MobileC.dat": bytes(0x4000)})
+        self.assertEqual(list(placed), [0x31])
+        self.assertEqual(fs.table_at, 0x3DB)
+
+    def test_the_table_lands_in_its_block_with_its_own_kind(self):
+        flash, fs, image = self.a_filesystem_with_files()
+        fs.lay_blobs(image, {})
+        fs.lay_table(image)
+        at = flash.offset_of(fs.table_at)
+        table = Directory(bytes(image.flat[at:at + 0x4000]), flash.blocks)
+        self.assertEqual([one.name for one in table.entries], ["one.bin"])
+        self.assertEqual(flash.spare.kind(image.spares[at // PAGE]), 0x30)
+
+
 class WhereEachRegionGoes(unittest.TestCase):
     """Arithmetic, measured across fifteen images the original built."""
 
@@ -284,7 +340,10 @@ AN_SMC = bytes(0x40) + bytes.fromhex("0501e502b405") + bytes(0x3A)
 
 class AChainOfMadeUpStages:
     """What a dump answers about its chain: the stages for their nonces, and the slot
-    the console's own values come from, with its CG right behind it."""
+    the console's own values come from, with its CG right behind it. The walk over them
+    is the real one."""
+
+    nonce_walk = Chain.nonce_walk
 
     def __init__(self, tags=("CB", "CB", "CD", "CE")):
         self.walked = tuple(

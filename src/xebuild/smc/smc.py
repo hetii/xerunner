@@ -37,15 +37,18 @@ nineteen images, the equivalence is exact: the signature is present in all six s
 images and all three JTAG ones, absent from all six CR4 and SMC+ ones, and "glitch
 hack found in SMC binary!" is printed for exactly the second set.
 
-Nothing here decides what a build does about any of it. Whether an image type demands
-a stock SMC, and whether a complaint stops the build or is only printed, is a rule
-about builds; it is not measured here and is not guessed at either.
+**Whether an SMC is clean for an image type is the original's classifier**, and it is
+here because it asks only the SMC -- `clean_for`. What a build does with the answer --
+whether a complaint stops it or is only printed -- is a rule about builds, and lives
+with them.
 """
 
 from __future__ import annotations
 
 import binascii
 import re
+
+from ..crypto import smc as cipher
 
 # The top half of the byte at 0x100, as the original names it. Seven has no name.
 MOTHERBOARDS = {
@@ -89,6 +92,49 @@ class Smc:
 
     def __init__(self, plain: bytes):
         self.plain = bytes(plain)
+
+    @classmethod
+    def handed_in(cls, given: bytes) -> Smc | None:
+        """An `smc.bin` as handed over, opened if it was handed over sealed, or None
+        where it would not open.
+
+        The original's own test, read out of it at 0x41BABC: four zero bytes at the end
+        mean the image is in the clear, since every plaintext SMC is padded that way;
+        otherwise it says "SMC binary appears to be encrypted, attempting to decrypt..."
+        and asks the same question of what comes out. Still no zeros means it did not
+        decrypt -- which a build may waive, so the refusal is the caller's.
+        """
+        if given[-4:] == bytes(4):
+            return cls(given)
+        plain = cipher.opened(given)
+        return cls(plain) if plain[-4:] == bytes(4) else None
+
+    @property
+    def blank(self) -> bool:
+        """Whether this is nothing but 0x00 or 0xFF: no SMC at all.
+
+        Every test the original makes passes such a buffer; refusing it is ours.
+        """
+        return set(self.plain) <= {0x00} or set(self.plain) <= {0xFF}
+
+    def clean_for(self, number: int) -> bool:
+        """The original's classifier at 0x40BD80, read out by x360mcp, for an image
+        type by its number.
+
+        Clean when the checksum is one of the stock images; otherwise by type: never
+        for devgl (4, 5); for a glitch (3) while the reset limit is still there; for
+        JTAG (2) while neither hack mark is; for retail and the kits only when both
+        hold.
+        """
+        if self.clean:
+            return True
+        if number in (4, 5):
+            return False
+        if number == 3:
+            return self.reset_limit >= 0
+        if number == 2:
+            return not self.marked
+        return self.reset_limit >= 0 and not self.marked
 
     @property
     def checksum(self) -> int:
