@@ -25,7 +25,7 @@ from ..config.options import BUTTONS
 from ..crypto import smc as cipher
 from ..crypto.keys import derive
 from ..crypto.rc4 import rc4
-from ..image import Dump, Header, Image, Keyvault
+from ..image import Dump, Header, Image, Keyvault, order
 from ..image import anchor as anchors
 from ..image import dump as dumps
 from ..smc import Smc
@@ -106,12 +106,37 @@ class Build:
         a falcon image, and read as a falcon's its settings blobs are scanned at the
         wrong offsets.
         """
-        if self._dump is None and self.material.dump is not None:
-            raw = self.material.dump
+        if self._dump is None and self.dump_raw is not None:
+            raw = self.dump_raw
             own = boards.for_dump(raw, self.console)
             bigffs = self.config.bigffs if own is self.console else False
-            self._dump = Dump(raw, own, bigffs)
+            self._dump = Dump(raw, own, bigffs, remap=not self.config.noremap,
+                              ecd=not self.config.noecdremap)
         return self._dump
+
+    @property
+    def dump_raw(self) -> bytes | None:
+        """The dump's bytes as the build reads them: a big block overdump cut to 64 MB.
+
+        A 256 or 512 MB part read whole is longer than any image, and the original
+        takes the first 64 MB of it when its first page carries a valid code for a big
+        block chip -- "First page contains a valid ECC, assuming this is a big block
+        flash overdump and truncating load size to 0x4200000 bytes". Measured with a
+        256 MB dump: both tools then build the same image as from its first 64 MB.
+        """
+        raw = self.material.dump
+        if raw is None:
+            return None
+        for board in boards.ALL:
+            flash = board.flash
+            if (flash.spare is None or flash.spare.pages_a_block != 256
+                    or len(raw) <= flash.raw_length):
+                continue
+            if flash.spare.ecc_ok(raw[:PAGE + flash.spare.length]):
+                logger.info("assuming a big block flash overdump; reading its first "
+                            "%#x bytes", flash.raw_length)
+                return raw[:flash.raw_length]
+        return raw
 
     @property
     def cpu_key(self) -> bytes | None:
@@ -1063,7 +1088,82 @@ class Build:
             # follows the new bytes -- measured at 0xC4200. Relative to the release, as
             # the original looks for the file.
             out.put(at, self.release.raw_file(name))
+        if self.config.nandmu:
+            self._memory_unit(out)
+        self._remap(out)
         return out
+
+    def _memory_unit(self, out: Image) -> None:
+        """`nandmu`: the memory unit a big block console keeps in its first 64 MB.
+
+        The author's own words, in the ini the source ships: "blocks 0x10 through 0x15B
+        (inclusive) will be copied from the dump to the final image, when NAND MU data
+        is detected only". The blocks are the chip's 0x20000, so 0x200000 up to
+        0x2B80000 -- the gap between the bootloaders and the filesystem. Detected, as
+        at the original's 0x415B8A read by x360mcp, by a page whose kind is 1 to 0x29.
+        Measured on a jasper256 build from a dump carrying such pages: the range comes
+        across verbatim, spare included, and without the option nothing does.
+        """
+        dump = self.dump
+        flash = self.console.flash
+        if dump is None or flash.spare is None or dump.flash.spare is None:
+            return
+        if dump.flash.spare.pages_a_block != 256 or dump.flash.blocks != flash.blocks:
+            logger.info("nandmu: the dump is not from a big block part like this one; "
+                        "nothing to keep")
+            return
+        kind = dump.flash.spare.kind
+        if not any(0 < kind(one) <= 0x29 for one in dump.image.spares):
+            return
+        logger.warning("nanddump.bin has NAND memory unit data; keeping blocks 0x10 "
+                       "to 0x15B of it")
+        step = dump.flash.spare.pages_a_block * PAGE
+        out.carry(dump.image, 0x10 * step, 0x15C * step)
+
+    def _remap(self, out: Image) -> None:
+        """Move what lands in the console's written-off blocks to blocks standing in.
+
+        Which blocks: those the dump's chip marks bad, and those holding a page whose
+        code no longer matches -- `noecdremap` leaves those alone and `noremap` all of
+        them, "Discarding remap data as NOREMAP was specified!". Where to: the block the
+        dump already has standing in, and otherwise the highest one nothing else
+        holds, counting down -- "block 0x100 had no remap, assigning remap block 0x3ff".
+        Measured on a dump with one block marked bad and one failing its code: they
+        went to 0x3FF and 0x3FE, in that order, with and without the two options.
+
+        Only where the dump's flash is the part being built for: a 16 MB dump's blocks
+        say nothing about a 64 MB part's, and what the original does then has not been
+        measured.
+        """
+        flash = self.console.flash
+        if self.config.noremap or self.dump is None or flash.spare is None:
+            return
+        raw, own = self.dump_raw, self.dump.flash
+        bad = set(order.marked_bad(raw, own))
+        if not self.config.noecdremap:
+            bad |= set(order.failing(raw, own))
+        if not bad:
+            return
+        if (own.blocks, own.spare.pages_a_block) != (flash.blocks,
+                                                     flash.spare.pages_a_block):
+            logger.warning("the dump's bad blocks are not carried into an image for "
+                           "another flash; nothing is remapped")
+            return
+        standing = order.replacements(raw, own)
+        taken = bad | set(standing.values())
+        free = len(out.spares) // flash.spare.pages_a_block - 1
+        for block in sorted(bad):
+            stand_in = standing.get(block)
+            if stand_in is None:
+                while free in taken:
+                    free -= 1
+                if free < 0:
+                    raise ValueError("this flash has no good block left to stand in "
+                                     "for block %#x" % block)
+                stand_in = free
+                taken.add(stand_in)
+            logger.info("remapping block %#x to block %#x", block, stand_in)
+            out.retire(block, stand_in)
 
     def _jtag_regions(self, out: Image, where: dict, second: bytes) -> None:
         """What a JTAG image carries past its slots: the loaders its hack runs on.

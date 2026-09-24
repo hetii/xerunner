@@ -754,6 +754,28 @@ class AnImageBeingWritten(unittest.TestCase):
         with self.assertRaises(ValueError):
             image.header.version = 1
 
+    def test_a_retired_block_goes_to_its_stand_in_and_leaves_zeros(self):
+        """Data and spare verbatim, the block's own number included; zeros behind."""
+        image = Image.blank(TinyFlash())
+        image.put(0x4000, b"block one" * 10)
+        image.mark(0x4000, 0x4000)
+        before = image.spares[32:64]
+        image.retire(1, 3)
+        self.assertEqual(bytes(image.flat[0xC000:0xC000 + 90]), b"block one" * 10)
+        self.assertEqual(image.spares[96:128], before)
+        self.assertEqual(set(image.flat[0x4000:0x8000]), {0})
+        self.assertEqual(set(b"".join(image.spares[32:64])), {0})
+
+    def test_carrying_takes_bytes_and_spare_as_they_are(self):
+        source = Image.blank(TinyFlash())
+        source.put(0x8000, b"kept")
+        source.mark(0x8000, PAGE, kind=0x28)
+        image = Image.blank(TinyFlash())
+        image.carry(source, 0x8000, 0xC000)
+        self.assertEqual(bytes(image.flat[0x8000:0x8004]), b"kept")
+        self.assertEqual(image.spares[64], source.spares[64])
+        self.assertEqual(set(image.flat[:0x8000]), {0xFF})
+
     def test_one_being_built_says_it_may_be_written_to(self):
         self.assertTrue(Image.blank(TinyFlash()).writable)
 
