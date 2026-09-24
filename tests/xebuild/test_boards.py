@@ -163,13 +163,17 @@ class TheFlatShape(unittest.TestCase):
         self.assertNotIn(flash.FlatBigNand, {type(b.flash) for b in boards.ALL})
 
     def test_it_is_sixty_four_megabytes_counting_from_zero(self):
-        shape = flash.FlatBigNand()
+        shape = flash.FlatBigNand(spare.SmallBlock())
         self.assertEqual(shape.length, SIXTY_FOUR)
         self.assertEqual(shape.offset_of(0), 0)
         self.assertEqual(shape.smc_config, 0x3DFC000)
 
-    def test_the_block_size_a_header_would_state_is_left_unanswered(self):
-        self.assertIsNone(flash.FlatBigNand().block_size)
+    def test_it_states_the_16_mb_step_and_keeps_no_pool(self):
+        """Measured on devkit images for xenon, falcon and jasper."""
+        shape = flash.FlatBigNand(spare.SmallBlock())
+        self.assertEqual((shape.block_size, shape.states_block_size), (0x10000, True))
+        self.assertEqual(shape.round_to, 0x4000)
+        self.assertFalse(shape.pool)
 
 
 class TheSpareLayouts(unittest.TestCase):

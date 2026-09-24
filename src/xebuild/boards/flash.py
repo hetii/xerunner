@@ -62,6 +62,9 @@ class Flash:
 
     spare = None  # one of `spare.py`'s three, or None on a part with no spare area
     anchors = False  # two blocks an eMMC console needs to find its own filesystem
+    # Whether the blocks past the last usable one are a pool for bad ones, which the
+    # table leaves unnamed; where not, it reserves every one of them.
+    pool = True
 
     @property
     def length(self) -> int:
@@ -207,34 +210,31 @@ class Emmc(Flash):
     smc_config = 0x2FFC000
     last_block = 0xBFA
     anchors = True
+    pool = False
 
 
 class FlatBigNand(Flash):
-    """64 MB with the filesystem counting from zero, and no console of its own.
+    """64 MB with the filesystem counting from zero: a devkit image on a small block
+    console.
 
-    The shape a `devkit` or a `testkit` image takes whatever board it is built for: the
-    layout routine tests the image type before the board, and those two take this arm.
-    It is where the `16` in `devkit16` and `testkit16` comes from -- those two are
-    tested and fall through to the board's own shape instead.
+    The shape a `devkit` or a `testkit` image takes on a console whose controller is a
+    small block one -- xenon, zephyr, falcon, a 16 MB jasper -- whatever part it
+    has; on a big block console the same type takes that console's own shape with the
+    larger filesystem instead. The layout routine's arm at 0x40F3D7 gives the four
+    numbers below, and the rest was measured on four devkit images the original built
+    for xenon, falcon and jasper: the console's own spare layout, a region rounded to
+    0x4000, one 0x4000 block a settings blob, the statistics one block under the
+    settings, and 0x10000 stated at 0x70 on every one -- where a 16 MB falcon image of
+    any other type states nothing there.
 
-    Flat means the filesystem starts where the bootloaders end. Every other 64 MB shape
-    reserves a large region below it and counts directory blocks from the far side.
-
-    Four numbers are decoded from the routine's arm at 0x40F3D7. Three more follow from
-    the image's length, which was measured across shapes: a 64 MB image rounds its
-    bootloader region to 0x20000, packs its settings blobs 0x800 apart into one region
-    of 0x20000, and lays its spare out as meta 2. The block size a header states is left
-    unanswered: no image of this shape has been built, so there is nothing to state it
-    from, and a build that needs it takes it from the console its `-c` names.
+    `spare` is the console's, which is why this is made per console.
     """
 
-    part = "no part of its own; the shape two image types carry"
+    part = "no part of its own; the shape a devkit image takes on a small block console"
     blocks = 0x1000
     smc_config = 0x3DFC000
     last_block = 0xF7C
-    round_to = 0x20000
-    mobile_stride = 0x800
-    mobile_region = 0x20000
-    spare = BigBlockChip()
-    block_size = None
-    states_block_size = None
+    pool = False  # the table reserves 0xF7C to the end, measured
+
+    def __init__(self, spare):
+        self.spare = spare

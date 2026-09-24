@@ -82,15 +82,23 @@ class ImageType:
         """
         return self.number not in (4, 5)
 
-    @property
-    def shape(self):
-        """The flash shape this type forces, or None to take the board's own.
+    def shape(self, console, bigffs: bool = False) -> tuple:
+        """The flash an image of this type is laid on, and whether with the larger
+        filesystem.
 
-        `devkit` and `testkit` -- numbers 6 and 8 -- take a 64 MB image whose filesystem
-        counts from zero, whatever board they are built for. The `16` in `devkit16` and
-        `testkit16` is exactly this not happening.
+        The board's own for every type but `devkit` and `testkit` -- numbers 6 and 8 --
+        which take 64 MB whatever board they are built for: `FlatBigNand` on a small
+        block console, and a big block console's own shape with the larger filesystem.
+        Measured on 17489 devkit images: falcon, xenon and jasper come out 64 MB with
+        their files from 0xF4000, and jasperbb's says "extended size FFS". The `16` in
+        `devkit16` and `testkit16` is exactly this not happening.
         """
-        return FlatBigNand() if self.number in (6, 8) else None
+        flash = console.flash
+        if self.number not in (6, 8) or flash.spare is None:
+            return flash, bigffs
+        if flash.bigffs_base is not None:
+            return flash, True
+        return FlatBigNand(flash.spare), False
 
     def __repr__(self) -> str:
         return "%s(%r)" % (type(self).__name__, self.name)

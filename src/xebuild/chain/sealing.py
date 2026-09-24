@@ -4,7 +4,8 @@ Every stage is RC4 under a key of sixteen bytes derived from a secret and that s
 own nonce. What changes down the chain is the secret, and almost always it is the key
 the previous stage was opened with -- which makes this a chain rather than a list.
 
-Three exceptions, and no others were found:
+Four exceptions, and no others were found -- the fourth, a development chain's SC
+starting over from sixteen zero bytes, is noted where it happens in `keys`:
 
 **The first CB opens with a key that is public.** It is burned into every console ever
 made, so nothing about one console is needed to read its first stage. The original
@@ -96,6 +97,11 @@ def keys(stages, cpu_key: bytes = b"", second_pass_at: int = -1) -> tuple:
     binds = binding_at(stages)
     out, secret = [], ONE_BL_KEY
     for index, stage in enumerate(stages):
+        if stage.tag == "SC":
+            # A development chain starts over at its SC, from sixteen zeros: measured
+            # on a 17489 devkit image, whose SC opens under HMAC(zeros, nonce) and whose
+            # SD and SE follow from it as every stage follows from the one before.
+            secret = bytes(KEY_LENGTH)
         if secret is None:
             out.append(None)
             continue

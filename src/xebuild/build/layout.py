@@ -50,12 +50,15 @@ core reads its neighbours from addresses compiled into it -- xeBuild's own
 So the slot pairs are the only part that follows from the chain, and a chain long enough
 to push them into the core's place is refused rather than laid over it.
 
-**Five of the eleven types are laid out here, and `for_type` refuses the rest.** Each
+**Six of the eleven types are laid out here, and `for_type` refuses the rest.** Each
 refusal says why, and none of them is for want of trying:
 
-* `devkit` and `testkit`, in both spellings, cannot be built from a retail release at
-  all: the original stops at `could not open '17559/_devkit.ini'`, because a release
-  carries no file list for them.
+* `devkit` builds from the three releases that carry a `_devkit.ini` -- 17489,
+  17489_RGL and 1838 -- once the two files their `[rawpatch]` names are supplied;
+  measured on xenon, falcon, jasper and jasperbb. It carries no XeLL in the system
+  area and its slot is the chain's end rounded by the part's step: 0xD4000 on the
+  flat 64 MB shape, 0xE0000 on jasperbb. `devkit16`, `testkit` and `testkit16` have
+  no file list in any release, so nothing of theirs was ever seen.
 * `devgl`, in both spellings, stops at `cd_9452.bin failed signature check, RSA key not
   available for resigning` -- it sits on development bootloaders, and resigning them
   needs a private key that is not ours to have.
@@ -98,7 +101,6 @@ SLOT_STEP = 0x10000
 # The types no reference image exists for, and what stops each one being built. Keyed by
 # the name `-t` takes, because that is what the message has to name back.
 UNMEASURED = {
-    "devkit": "no release carries a file list for a devkit image",
     "devkit16": "no release carries a file list for a devkit16 image",
     "testkit": "no release carries a file list for a testkit image",
     "testkit16": "no release carries a file list for a testkit16 image",
@@ -183,12 +185,17 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False,
         )
     jtag = image_type.name == "jtag"
     cursor = chain_end if plain_end is None else plain_end
-    xell = image_type.name != "retail" and (
+    xell = image_type.number in (2, 3, 4, 5) and (
         jtag or cursor + -cursor % BLOCK <= XELL_AT
     )
     # A JTAG image rounds by the smallest step on every part: its slots are at 0x70000
     # on a jasperbb too, whose flash rounds by 0x20000 everywhere else -- measured.
     slots = slots_at(cursor, xell and not jtag, 0 if jtag else flash.round_to)
+    if image_type.number in (6, 7, 8, 9):
+        # A devkit image rounds by the part's own step alone, with no 0x10000 floor:
+        # 0xD4000 on the flat shape, whose step is 0x4000 -- "patch slot offset reset
+        # to: 0xd4000" -- and 0xE0000 on jasperbb.
+        slots = cursor + -cursor % flash.round_to
     base = flash.base_of(bigffs) * BLOCK
     span = slot_span(image_type, flash)
     out = {

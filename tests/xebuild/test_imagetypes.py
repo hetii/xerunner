@@ -10,6 +10,7 @@ both of them wrong.
 import unittest
 
 from xebuild import imagetypes
+from xebuild.boards import for_name
 from xebuild.boards.flash import FlatBigNand
 
 
@@ -77,9 +78,13 @@ class WhichPatchFileEachReads(unittest.TestCase):
     def test_retail_reads_none(self):
         self.assertIsNone(imagetypes.for_name("retail").patch_file("trinity"))
 
-    def test_the_four_never_measured_refuse_to_guess(self):
+    def test_a_devkit_image_reads_none(self):
+        """Measured on 17489 and 1838 devkit builds, whose logs open no patch file."""
+        self.assertIsNone(imagetypes.for_name("devkit").patch_file("falcon"))
+
+    def test_the_three_never_measured_refuse_to_guess(self):
         """No release carries their file lists, so the original never gets that far."""
-        for name in ("devkit", "devkit16", "testkit", "testkit16"):
+        for name in ("devkit16", "testkit", "testkit16"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 imagetypes.for_name(name).patch_file("trinity")
 
@@ -126,17 +131,29 @@ class WhatEachOneIs(unittest.TestCase):
         self.assertEqual(exempt, {"devgl", "devgl16"})
 
     def test_only_devkit_and_testkit_force_a_shape(self):
-        forced = {kind.name: kind.shape for kind in imagetypes.ALL
-                  if kind.shape is not None}
-        self.assertEqual(sorted(forced), ["devkit", "testkit"])
-        for shape in forced.values():
-            self.assertIsInstance(shape, FlatBigNand)
+        """64 MB flat on a small block console, measured on falcon, xenon and jasper."""
+        falcon = for_name("falcon")[0]
+        forced = {kind.name for kind in imagetypes.ALL
+                  if kind.shape(falcon)[0] is not falcon.flash}
+        self.assertEqual(forced, {"devkit", "testkit"})
+        flash, bigffs = imagetypes.for_name("devkit").shape(falcon)
+        self.assertIsInstance(flash, FlatBigNand)
+        self.assertIs(flash.spare, falcon.flash.spare)
+        self.assertFalse(bigffs)
+
+    def test_a_big_block_console_takes_its_own_with_the_larger_filesystem(self):
+        """jasperbb's devkit image says "extended size FFS"."""
+        jasper = for_name("jasperbb")[0]
+        self.assertEqual(imagetypes.for_name("devkit").shape(jasper),
+                         (jasper.flash, True))
 
     def test_the_sixteen_variants_take_the_board_s_own_shape(self):
         """Which is the whole of what the `16` in their names means."""
+        falcon = for_name("falcon")[0]
         for name in ("devkit16", "testkit16"):
             with self.subTest(name=name):
-                self.assertIsNone(imagetypes.for_name(name).shape)
+                self.assertEqual(imagetypes.for_name(name).shape(falcon),
+                                 (falcon.flash, False))
 
 
 if __name__ == "__main__":

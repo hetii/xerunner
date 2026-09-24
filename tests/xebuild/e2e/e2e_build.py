@@ -377,6 +377,9 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
       and with `noecdremap`.
     * A big block dump carrying memory-unit pages, 64 MB and a 256 MB overdump, with
       and without `nandmu`.
+    * Devkit images from 17489 and 1838 on xenon, falcon, jasper and jasperbb, whose
+      `[rawpatch]` files no release ships: made up and put in a copy of the release,
+      which `cell.json` then names as `release`.
 
     Every byte of the file is held against the reference; the one thing taken from it
     is the build's clock, out of its crl.bin.
@@ -403,11 +406,16 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                 with open(os.path.join(here, "theirs.bin"), "rb") as handle:
                     raw = handle.read()
                 console, bigffs = for_name(told["board"])
-                image = Image(raw, console.flash, bigffs)
+                flash, bigffs = type_for(told["type"]).shape(console, bigffs)
+                image = Image(raw, flash, bigffs)
                 plain, _ = security.opened_crl(image.read("crl.bin"), self.cpu)
                 data = os.path.join(here, "data")
                 config = BuildConfig(ini=os.path.join(data, "options.ini"),
                                      image_type=told["type"], console=told["board"],
                                      **told["settings"])
-                one = Build(config, Material(data), self.release)
+                release = self.release
+                if "release" in told:
+                    release = Release(told["release"], os.path.join(
+                        os.path.dirname(told["release"]), "common"))
+                one = Build(config, Material(data), release)
                 self.assertEqual(one.image(security.when_in(plain)).raw, raw)

@@ -228,11 +228,12 @@ class Header:
     # --- not verified here, and each says what it stands on ----------------------
     @property
     def word_at_04(self) -> int:
-        """Zero everywhere it has been looked at, and nothing names it.
+        """Zero on every image but a devkit one, and nothing names it.
 
         Both consoles' dumps and **sixty-two images the original built** -- every
-        board spelling it will build, over five image types. A field nothing has ever
-        been seen to set is not one anything here can use, so the offset stays its name.
+        board spelling it will build, over five image types -- carry zero here. The
+        devkit images it built carry 0x8000, on xenon, falcon and jasperbb and from
+        both 17489 and 1838. What it means is not known, so the offset stays its name.
         """
         return self._word(0x04)
 
