@@ -106,24 +106,29 @@ def opened_crl(blob: bytes, cpu_key: bytes) -> tuple:
     )
 
 
-def crl(content: bytes, own: bytes, cpu_key: bytes, when: int, ldv: int) -> bytes:
-    """crl.bin: the container's body, sealed under the console's own vector and key.
+def crl_parameters(own: bytes, cpu_key: bytes) -> tuple:
+    """The vector and file key a console's own crl.bin was sealed under."""
+    if opened_crl(own, cpu_key)[1] != cpu_key:
+        raise ValueError("the console's own crl.bin does not open under its own key, "
+                         "so its sealing parameters cannot be carried")
+    return own[IV_AT:IV_AT + aes.BLOCK], _unwrapped(own, cpu_key)
+
+
+def crl(content: bytes, cpu_key: bytes, when: int, ldv: int, iv: bytes,
+        file_key: bytes) -> bytes:
+    """crl.bin: a body opened, restamped and sealed under a vector and file key.
 
     The header -- magic, hash, signature -- is the content's and is carried. The body is
     opened, gets the build's stamp at 0 and the lockdown value at 0x0F, and is sealed
-    under the vector and file key the console's own copy carries: "A 17559 build takes
-    crl.bin's body out of the update container and still seals it under the vector and
-    file key sitting in the copy the console already had."
+    under the vector and file key given: the console's own, out of its dump -- "a 17559
+    build takes crl.bin's body out of the update container and still seals it under the
+    vector and file key sitting in the copy the console already had" -- or the ones
+    compiled into the original, under `nosecurity`.
     """
     body, _ = opened_crl(content, cpu_key)
     plain = bytearray(body)
     plain[0:8] = stamp(when)
     plain[0x0F] = ldv & 0xFF
-    if opened_crl(own, cpu_key)[1] != cpu_key:
-        raise ValueError("the console's own crl.bin does not open under its own key, "
-                         "so its sealing parameters cannot be carried")
-    iv = own[IV_AT:IV_AT + aes.BLOCK]
-    file_key = _unwrapped(own, cpu_key)
     out = bytearray(content[:BODY_AT])
     out[IV_AT:IV_AT + aes.BLOCK] = iv
     out[WRAPPED_KEY_AT:BODY_AT] = aes.encrypt_block(aes.expand(cpu_key), file_key)
@@ -168,30 +173,41 @@ def _dae_opened_by(blob: bytes, cpu_key: bytes) -> bytes:
     return best
 
 
-def dae(content: bytes, own: bytes, cpu_key: bytes, when: int, ldv: int) -> bytes:
-    """dae.bin: the container's records, each resealed under the console's key.
+def dae_parameters(own: bytes, cpu_key: bytes) -> tuple:
+    """The seven bytes of head and sixteen of field a console's own dae.bin carries.
+
+    Read out of the original by x360mcp: at 0x40D298 it takes the copy it has just
+    opened, adds 0x120, and copies thirty-two bytes -- the header's field and the first
+    sixteen of the opened body, whose bytes 8 to 0x0E are the head.
+    """
+    if _dae_opened_by(own, cpu_key) != cpu_key:
+        raise ValueError("the console's own dae.bin does not open under its own key, "
+                         "so its head and field cannot be carried")
+    first = own[:records(own)[0][1]]
+    plain = aes.cbc_decrypt(cpu_key, first[DAE_BODY_AT:], bytes(aes.BLOCK))
+    return plain[0x08:0x0F], own[0x120:0x130]
+
+
+def dae(content: bytes, cpu_key: bytes, when: int, ldv: int, head: bytes,
+        field: bytes) -> bytes:
+    """dae.bin: a chain of records, each resealed under the console's key.
 
     Record by record, because each has its own zero vector. The first 0x20 bytes of
     every record's body are a preamble the build rewrites, from 0x41DFA0:
 
         0x00  the stamp
-        0x08  seven bytes of head -- the console's own dae's
+        0x08  seven bytes of head
         0x0F  the lockdown value
         0x10  HMAC(cpu key, field + plain[0:0x10])
 
-    and the sixteen bytes of header at 0x120, the "field", are the console's own dae's
-    with bit 0 of their second byte set -- `or BYTE [ebx+0x121],1` -- which every image
-    measured shows. The content behind the preamble is the container's, which is why the
-    hash each record carries stays true.
+    and the sixteen bytes of header at 0x120, the "field", go in with bit 0 of their
+    second byte set -- `or BYTE [ebx+0x121],1` -- which every image measured shows. The
+    head and field are the console's own, or the ones compiled into the original under
+    `nosecurity`. The content behind the preamble is untouched, which is why the hash
+    each record carries stays true.
     """
     master = _dae_opened_by(content, cpu_key)
-    if _dae_opened_by(own, cpu_key) != cpu_key:
-        raise ValueError("the console's own dae.bin does not open under its own key, "
-                         "so its head and field cannot be carried")
-    first = own[:records(own)[0][1]]
-    own_plain = aes.cbc_decrypt(cpu_key, first[DAE_BODY_AT:], bytes(aes.BLOCK))
-    head = own_plain[0x08:0x0F]
-    field = bytearray(own[0x120:0x130])
+    field = bytearray(field)
     field[1] |= 0x01
     out = bytearray()
     for at, length in records(content):
@@ -208,6 +224,28 @@ def dae(content: bytes, own: bytes, cpu_key: bytes, when: int, ldv: int) -> byte
     return bytes(out)
 
 
+# What the original seals with when it is told not to read the dump for these files:
+# constants in its own .data, which x360mcp read out and confirmed twice -- by poisoning
+# each slot in a copy of the binary and watching the file move, and by finding the
+# built image's field back at that address and nowhere else. `nosecurity` is the one
+# situation they are used in; the reference images built with it agree to the byte.
+#
+#   crl.bin      0x44A630 the vector, 0x44A620 the file key
+#   dae.bin      0x44A618 the seven-byte head, 0x44A600 the header's field
+#   secdata.bin  0x44A5E0 the eight-byte head
+COMPILED_IN = {
+    "crl.bin": (bytes.fromhex("d97598a6f85d9b867bc43499e33da4aa"),
+                bytes.fromhex("c703b932d4077d416052a8135ede6818")),
+    "dae.bin": (bytes.fromhex("f424ed2ad36283"),
+                bytes.fromhex("a1b2695058f4ed05e580c7ee189a27b5")),
+    "secdata.bin": bytes.fromhex("5aa4d1d27de4453e"),
+}
+
+# How long a keyvault-style file is when the build makes one up from nothing -- "Making
+# up an clean/empty extended.bin!" -- nonce included.
+CLEAN_LENGTH = {"extended.bin": 0x4000, "secdata.bin": 0x400}
+
+
 def _opened_like_a_keyvault(blob: bytes, cpu_key: bytes) -> bytes:
     """extended.bin or secdata.bin, the nonce taken off and the rest opened."""
     return rc4(derive(cpu_key, blob[:NONCE_LENGTH]), blob[NONCE_LENGTH:])
@@ -217,32 +255,42 @@ def _sealed_like_a_keyvault(plain: bytes, nonce: bytes, cpu_key: bytes) -> bytes
     return nonce + rc4(derive(cpu_key, nonce), plain)
 
 
-def extended(own: bytes, keyvault_head: bytes, cpu_key: bytes) -> bytes:
-    """extended.bin: the console's own, with the keyvault's head and a derived nonce.
+def extended(own: bytes | None, keyvault_head: bytes, cpu_key: bytes) -> bytes:
+    """extended.bin: the console's own, or a clean one, with the keyvault's head.
 
     It keeps the keyvault's overflow, and its eight bytes of head are the **keyvault's**
     rather than its own previous copy's -- the two agree on both consoles measured, and
-    it holds even when the dump is not read for security files. No stamp, no lockdown
-    value. Its nonce is `HMAC(cpu key, plaintext + 07 12)`, exactly as a keyvault's is,
-    so it follows from the content rather than being drawn.
+    it holds under `nosecurity` too, where the file itself is made up clean: zeros but
+    for that head. No stamp, no lockdown value. Its nonce is `HMAC(cpu key, plaintext +
+    07 12)`, exactly as a keyvault's is, so it follows from the content.
     """
-    plain = bytearray(_opened_like_a_keyvault(own, cpu_key))
+    if own is None:
+        plain = bytearray(CLEAN_LENGTH["extended.bin"] - NONCE_LENGTH)
+    else:
+        plain = bytearray(_opened_like_a_keyvault(own, cpu_key))
     plain[:HEAD_LENGTH] = keyvault_head[:HEAD_LENGTH]
     nonce = derive(cpu_key, bytes(plain) + b"\x07\x12")
     return _sealed_like_a_keyvault(bytes(plain), nonce, cpu_key)
 
 
-def secdata(own: bytes, cpu_key: bytes, when: int, ldv: int) -> bytes:
-    """secdata.bin: the console's own, restamped, with a nonce derived from it.
+def secdata(own: bytes | None, cpu_key: bytes, when: int, ldv: int,
+            head: bytes = b"") -> bytes:
+    """secdata.bin: the console's own, or a clean one, restamped, its nonce derived.
 
-    Its head is its own previous copy's -- measured: not the keyvault's. A one at 0x08
-    that the build writes whatever was there, the lockdown value at 0x09 and the stamp
-    at 0x10. Its nonce is `HMAC(cpu key, plaintext)` with **no** two bytes behind it,
-    which is the one way it differs from extended.bin's -- and which a `-norandom`
-    build, handed nothing, showed by coming out with 1,023 of 1,024 bytes different
+    Its head is its own previous copy's -- not the keyvault's -- or `head` when one is
+    given, which under `nosecurity` is the original's compiled-in one over a file made
+    up clean. A one at 0x08 that the build writes whatever was there, the lockdown value
+    at 0x09 and the stamp at 0x10. Its nonce is `HMAC(cpu key, plaintext)` with **no**
+    two bytes behind it, the one way it differs from extended.bin's -- and a `-norandom`
+    build, handed nothing, showed it by coming out with 1,023 of 1,024 bytes different
     while it was thought to be drawn.
     """
-    plain = bytearray(_opened_like_a_keyvault(own, cpu_key))
+    if own is None:
+        plain = bytearray(CLEAN_LENGTH["secdata.bin"] - NONCE_LENGTH)
+    else:
+        plain = bytearray(_opened_like_a_keyvault(own, cpu_key))
+    if head:
+        plain[:HEAD_LENGTH] = head
     plain[0x08] = 0x01
     plain[0x09] = ldv & 0xFF
     plain[0x10:0x18] = stamp(when)

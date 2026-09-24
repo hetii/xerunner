@@ -345,7 +345,7 @@ class WhichSmcGoesIn(unittest.TestCase):
 
     def test_a_file_in_the_per_build_directory_wins_and_is_sealed(self):
         """Under the console's own seed, so the dump is still what says how to seal."""
-        plain = bytes(0x100)
+        plain = AN_SMC
         one = a_build(self, files={"smc.bin": plain}, patchsmc=False)
         self.assertEqual(one.smc(), cipher.sealed(plain, one.dump.smc[:4]))
 
@@ -494,13 +494,26 @@ class WhatTheHeaderSays(unittest.TestCase):
         self.assertEqual(self.a_page(kind="glitch2").boot_flags, 0x12)
         self.assertEqual(self.a_page(kind="jtag", board="falcon").boot_flags, 0x40012)
 
-    def test_an_option_that_reaches_those_bytes_is_refused(self):
-        """Handing back the default would be an image starting on the wrong button."""
-        with self.assertRaises(ValueError):
-            self.a_page(xellbutton="power")
-        with self.assertRaises(ValueError):
-            self.a_page(nodvd=True)
+    def test_the_button_xell_starts_on_and_a_second_one(self):
+        self.assertEqual(self.a_page(xellbutton="power").boot_flags, 0x11)
+        self.assertEqual(self.a_page(xellbutton2="power").boot_flags, 0x1112)
+        self.assertEqual(self.a_page(xellbutton2="eject").boot_flags, 0x12)
 
+    def test_the_older_ways_of_starting_clear_the_reason(self):
+        self.assertEqual(self.a_page(nodvd=True).boot_flags, 0)
+        self.assertEqual(self.a_page(olddvd=True).boot_flags, 0)
+
+    def test_an_alternate_uart_speed_is_one_bit(self):
+        """`cygnos` and `demon` write the same byte, which is measured, not a slip."""
+        self.assertEqual(self.a_page(cygnos=True).boot_flags, 0x10012)
+        self.assertEqual(self.a_page(demon=True).boot_flags, 0x10012)
+
+    def test_a_jtag_image_s_own_bits_and_its_dual_boot_button(self):
+        jtag = {"kind": "jtag", "board": "falcon"}
+        self.assertEqual(self.a_page(**jtag, nodvd=True).boot_flags, 0x20000)
+        self.assertEqual(self.a_page(**jtag, olddvd=True).boot_flags, 0)
+        self.assertEqual(self.a_page(**jtag, dualboot="power").boot_flags, 0x11040012)
+        self.assertEqual(self.a_page(**jtag, dualboot="eject").boot_flags, 0x40012)
     def test_the_erase_block_is_the_console_s_own_and_not_every_board_states_it(self):
         self.assertEqual(self.a_page(board="trinity").block_size, 0x10000)
         self.assertEqual(self.a_page(board="falcon").block_size, 0)
@@ -681,3 +694,41 @@ class WhatTheUpdateSlotCarries(unittest.TestCase):
         with self.assertRaises(ValueError):
             WhichStagesTheChainIsMadeOf.a_chain(self, kind="jtag",
                                                 board="falcon").slot(0x90000)
+
+
+class WhatAnSmcIsRefusedFor(unittest.TestCase):
+    """The original's classifier and the three fatal cases `smcnocheck` waives."""
+
+    def test_a_retail_image_over_a_hacked_smc_is_refused(self):
+        """No reset limit left, so not clean: the case this console's own dump is."""
+        hacked = bytes(0x40) + bytes(0x40)
+        one = a_build(self, kind="retail", files={"smc.bin": hacked + b"\x01"
+                                                  + bytes(3)})
+        with self.assertRaises(ValueError):
+            one.smc()
+
+    def test_smcnocheck_waives_it(self):
+        hacked = bytes(0x80) + b"\x01" + bytes(3)
+        one = a_build(self, kind="retail", files={"smc.bin": hacked}, smcnocheck=True)
+        self.assertEqual(len(one.smc()), len(hacked))
+
+    def test_a_jtag_image_over_a_clean_smc_is_refused(self):
+        one = a_build(self, kind="jtag", board="falcon", files={"smc.bin": AN_SMC})
+        with self.assertRaises(ValueError):
+            one.smc()
+
+    def test_a_glitch_image_over_a_clean_smc_only_complains(self):
+        one = a_build(self, kind="glitch2", files={"smc.bin": AN_SMC}, patchsmc=False)
+        with self.assertLogs("xebuild.build.build", level="WARNING"):
+            one.smc()
+
+    def test_an_smc_that_does_not_decrypt_is_refused(self):
+        """Four non-zero bytes at the end say sealed, and opening it does not help."""
+        one = a_build(self, files={"smc.bin": bytes(range(0x100))})
+        with self.assertRaises(ValueError):
+            one.smc()
+
+    def test_a_blank_smc_is_refused_which_is_ours_and_not_the_original_s(self):
+        one = a_build(self, files={"smc.bin": bytes(0x3000)})
+        with self.assertRaises(ValueError):
+            one.smc()

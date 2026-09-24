@@ -21,11 +21,13 @@ from ..boards.flash import PAGE
 from ..chain import Fields, sealing
 from ..chain.stage import LENGTH as STAGE_HEADER
 from ..chain.stage import Stage
+from ..config.options import BUTTONS
 from ..crypto import smc as cipher
 from ..crypto.keys import derive
 from ..crypto.rc4 import rc4
-from ..image import Dump, Header, Image
+from ..image import Dump, Header, Image, Keyvault
 from ..image import anchor as anchors
+from ..image import dump as dumps
 from ..smc import Smc
 from . import layout, security
 from .filesystem import Filesystem
@@ -144,26 +146,29 @@ class Build:
         original says when the signature is not there. A build that asks for either is
         refused rather than handed an SMC that quietly does not do what was asked.
         """
-        plain = self.material.smc
+        given = self.material.smc
         carried = None
-        if plain is None:
+        if given is not None:
+            plain = self._smc_in_the_clear(given)
+        else:
             if self.dump is None:
                 raise ValueError("this build has neither an smc.bin nor a dump to take "
                                  "an SMC from")
             carried = self.dump.smc
             plain = cipher.opened(carried)
-        asked = [name for name in ("smcnoeject", "smcnoblink")
-                 if getattr(self.config, name)]
-        if asked:
-            raise ValueError(
-                "%s each patch the SMC at a signature of its own, and neither is "
-                "reproduced here yet" % " and ".join(asked)
-            )
+        for name in ("smcnoeject", "smcnoblink"):
+            if getattr(self.config, name):
+                patched = Smc(plain).with_patch(name)
+                if patched == plain:
+                    logger.warning("could not patch the SMC for %s: its routine is not "
+                                   "in this image", name)
+                plain, carried = patched, None
         if self.config.patchsmc and self.image_type.name != "retail":
             patched = Smc(plain).patched()
             if patched != plain:
                 logger.info("patching smc to remove the reset limit")
                 plain, carried = patched, None
+        self._check_smc(plain)
         if carried is not None:
             return carried
         if not seed:
@@ -172,6 +177,66 @@ class Build:
                                  "take the console's own from")
             seed = self.dump.smc[:4]
         return cipher.sealed(plain, seed)
+
+    def _smc_in_the_clear(self, given: bytes) -> bytes:
+        """An `smc.bin` as handed over, opened if it was handed over sealed.
+
+        The original's own test, read out of it at 0x41BABC: four zero bytes at the end
+        mean the image is in the clear, since every plaintext SMC is padded that way;
+        otherwise it says "SMC binary appears to be encrypted, attempting to decrypt..."
+        and asks the same question of what comes out. An image that still does not end
+        in zeros did not decrypt, which is fatal unless `smcnocheck` waives it.
+        """
+        if given[-4:] == bytes(4):
+            return given
+        plain = cipher.opened(given)
+        if plain[-4:] != bytes(4) and not self.config.smcnocheck:
+            raise ValueError("smc.bin is neither in the clear nor a valid, decryptable "
+                             "SMC; smcnocheck builds with it all the same")
+        return plain
+
+    def _check_smc(self, plain: bytes) -> None:
+        """What the original refuses an SMC for, and what `smcnocheck` waives.
+
+        Its classifier at 0x40BD80, read out by x360mcp, calls an SMC clean when its
+        checksum is one of the stock images, and otherwise asks by image type: a glitch
+        image's SMC is clean while it still has its reset limit, a JTAG image's while it
+        carries neither hack mark, a retail or development one's only when both hold,
+        and a devgl one's never. Then three cases are fatal and `smcnocheck` waives
+        exactly those three: a retail image over an SMC that is not clean, a JTAG image
+        over one that is, and an SMC that would not decrypt. A glitch image over a clean
+        SMC only draws a complaint.
+
+        One more refusal is ours and not the original's: an SMC that is nothing but
+        0x00 or 0xFF passes every test the original makes and is written, which gives a
+        console no SMC at all. Agreed with the user as a deliberate divergence in
+        x360mcp, and waived by `smcnocheck` like the rest.
+        """
+        if self.config.smcnocheck:
+            return
+        if set(plain) <= {0x00} or set(plain) <= {0xFF}:
+            raise ValueError("this SMC is blank -- nothing but 0x00 or 0xFF -- and an "
+                             "image built over it would have none; smcnocheck builds "
+                             "with it all the same")
+        smc, number = Smc(plain), self.image_type.number
+        if smc.clean:
+            clean = True
+        elif number in (4, 5):
+            clean = False
+        elif number == 3:
+            clean = smc.reset_limit >= 0
+        elif number == 2:
+            clean = not smc.marked
+        else:
+            clean = smc.reset_limit >= 0 and not smc.marked
+        if self.image_type.name == "retail" and not clean:
+            raise ValueError("hacked or unknown SMC binary found: a retail image wants "
+                             "a clean SMC, and smcnocheck builds with this one anyway")
+        if self.image_type.name == "jtag" and clean:
+            raise ValueError("clean SMC found: a JTAG image wants a hacked one, and "
+                             "smcnocheck builds with this one anyway")
+        if number == 3 and clean:
+            logger.warning("clean SMC found for a glitch image; building anyway")
 
     def keyvault(self) -> bytes:
         """The console's keyvault, as the image carries it: sealed under its CPU key.
@@ -195,7 +260,16 @@ class Build:
         if self.dump is None:
             raise ValueError("this build has neither a kv.bin nor a dump to take a "
                              "keyvault from")
-        return self.dump.sealed_keyvault
+        sealed = self.dump.sealed_keyvault
+        if self.config.dvdkey and self.image_type.name != "retail":
+            # The DVD key goes into the keyvault at 0x100 on every type but retail, as
+            # the shipped ini says, and the keyvault is sealed again -- its nonce is
+            # derived from what it holds, so this is deterministic.
+            vault = Keyvault.opened(sealed, self.cpu_key)
+            plain = bytearray(vault.plain)
+            plain[0x100:0x110] = self.config.dvdkey
+            sealed = Keyvault(bytes(plain)).sealed(self.cpu_key)
+        return sealed
 
     def xell(self) -> bytes | None:
         """The loader, or None for an image type that carries none.
@@ -504,7 +578,7 @@ class Build:
         # release builds beside a slot.
         binds = any(one.kind == "CBB" for one in self._chain_files())
         cf[0x21C:0x21F] = self.dump.pairing if binds else bytes(3)
-        cf[0x21F] = self.dump.ldv
+        cf[0x21F] = self.ldv
         message = bytearray(cf[:0x220])
         message[0x20:0x30] = derive(sealing.ONE_BL_KEY, own_cf.nonce)
         cf[0x220:0x230] = derive(self.cpu_key, bytes(message))
@@ -556,33 +630,70 @@ class Build:
                 name += "1"
             out.append((name, body))
         for listed in recipe.security:
-            out.append((listed.plain, self.security_file(listed.plain, when)))
+            body = self.security_file(listed.plain, when)
+            if body is not None:
+                out.append((listed.plain, body))
         return out
 
-    def security_file(self, name: str, when: int) -> bytes:
-        """One of the five security files, sealed for this console. See `security`."""
-        if self.config.nosecurity or self.config.nosusecurity:
-            raise ValueError("nosecurity and nosusecurity change where the security "
-                             "files come from, and neither is reproduced here yet")
-        if self.dump is None or not self.cpu_key:
-            raise ValueError("the security files are sealed for a console, and this "
-                             "build has no dump or no CPU key to seal them for")
-        own = self.dump.image.read(name)
-        ldv = self.ldv
-        if name in ("crl.bin", "dae.bin"):
+    def security_file(self, name: str, when: int) -> bytes | None:
+        """One of the five security files sealed for this console, or None to leave out.
+
+        The **content** comes from the first place that has it, in the order the
+        original's log walks: a file beside the build, the update container -- only
+        crl.bin and dae.bin are ever in one, "using data from SUPD" -- and then the
+        console's own dump. `nosusecurity` takes the container out of that and
+        `nosecurity` the dump. What has no source at all is left out of the image, which
+        is what happens to crl.bin, dae.bin and fcrt.bin with both options -- except
+        extended.bin and secdata.bin, which the build makes up clean: "Making up an
+        clean/empty extended.bin!".
+
+        The **sealing parameters** are the console's own copies' unless `nosecurity`
+        says the dump is not to be read, and then the ones compiled into the original.
+        extended.bin's head is the keyvault's either way.
+
+        All of it measured against the original with each option and with both.
+        """
+        if not self.cpu_key:
+            raise ValueError("the security files are sealed for a console's CPU key, "
+                             "and none was given")
+        config = self.config
+        own = None
+        if self.dump is not None and not config.nosecurity:
+            try:
+                own = self.dump.image.read(name)
+            except ValueError:
+                own = None
+        content = self.material.bytes_in(name)
+        if content is None and name in ("crl.bin", "dae.bin") and \
+                not config.nosusecurity and name in self.release.container.held:
+            content = self.release.container.read(name)
+        if content is None:
             content = own
-            if name in self.release.container.held:
-                content = self.release.container.read(name)
-            sealed = security.crl if name == "crl.bin" else security.dae
-            return sealed(content, own, self.cpu_key, when, ldv)
+        cpu, ldv = self.cpu_key, self.ldv
+        if name == "crl.bin":
+            if content is None:
+                return None
+            if own is not None:
+                iv, key = security.crl_parameters(own, cpu)
+            else:
+                iv, key = security.COMPILED_IN[name]
+            return security.crl(content, cpu, when, ldv, iv, key)
+        if name == "dae.bin":
+            if content is None:
+                return None
+            if own is not None:
+                head, field = security.dae_parameters(own, cpu)
+            else:
+                head, field = security.COMPILED_IN[name]
+            return security.dae(content, cpu, when, ldv, head, field)
         if name == "extended.bin":
-            vault = self.dump.keyvault(self.cpu_key).plain
-            return security.extended(own, vault[0x10:0x18], self.cpu_key)
+            vault = self.dump.keyvault(cpu).plain
+            return security.extended(content, vault[0x10:0x18], cpu)
         if name == "secdata.bin":
-            return security.secdata(own, self.cpu_key, when, ldv)
+            head = b"" if own is not None else security.COMPILED_IN[name]
+            return security.secdata(content, cpu, when, ldv, head)
         if name == "fcrt.bin":
-            given = self.material.fcrt
-            return security.fcrt(given if given is not None else own, self.cpu_key)
+            return None if content is None else security.fcrt(content, cpu)
         raise ValueError("%s is not one of the five security files" % name)
 
     @property
@@ -653,7 +764,12 @@ class Build:
             fs.add(name, body, stamp=stamp)
         fs.over(out)
         start = flash.offset_of(fs.after, bigffs)
-        table_at = start + flash.mobile_region
+        blobs = {} if self.config.nomobile else self._mobiles()
+        # The settings blobs get a region of their own after the files, and the table
+        # follows it; with none to write there is no region, and the table goes
+        # straight after the files -- measured with `nomobile`, and x360mcp saw the same
+        # on a build with no dump.
+        table_at = start + (flash.mobile_region if blobs else 0)
         # On a big block chip the pages of the filesystem carry three bytes of its own
         # and a kind of their own; everywhere else a file's pages carry a block number.
         fields = self._fs_fields(slots) if big else b""
@@ -668,7 +784,6 @@ class Build:
                 span = -(-len(body) // PAGE) * PAGE
             out.mark(at, span, 0, 0x2A if big else 0, fs=fields)
 
-        blobs = {} if self.config.nomobile else self._mobiles()
         placed = {}
         for index, name in enumerate(sorted(blobs)):
             at = start + index * flash.mobile_stride
@@ -765,8 +880,47 @@ class Build:
             # being built for: a 16 MB dump builds a 64 MB image.
             own = self.dump.flash.smc_config
             config = bytes(self.dump.image.flat[own:own + span])
-        out.append((flash.smc_config, config, span))
+        out.append((flash.smc_config, self._configured(config), span))
         return out
+
+    def _configured(self, block: bytes) -> bytes:
+        """The settings block with the options that land in it written in.
+
+        Each field was found by x360mcp building twice, once with the option and once
+        without, and reading the difference; J-Runner's own field table agrees on every
+        one it has:
+
+            0x11  CPU fan, 0x12  GPU fan         0x80 | percent; zero leaves it on auto
+            0x29..0x2B  CPU, GPU, EDRAM target temperature, Centigrade
+            0x2C..0x2E  CPU, GPU, EDRAM overheat temperature
+            0x220  MAC address, six bytes
+            0x22A  video region, 0x22C  game region, both sixteen bits big-endian
+            0x237  DVD region, one byte
+
+        The head then says the block's checksum again, which `image.dump.checksum`
+        computes over 0x10 to 0x10C; the fields past 0x220 lie outside it, which is why
+        changing them never moved the head in any measurement.
+        """
+        config = self.config
+        out = bytearray(block)
+        for at, name in ((0x11, "cpufan"), (0x12, "gpufan")):
+            if getattr(config, name):
+                out[at] = 0x80 | getattr(config, name)
+        for at, name in ((0x29, "cputemp"), (0x2A, "gputemp"), (0x2B, "edramtemp"),
+                         (0x2C, "overcputemp"), (0x2D, "overgputemp"),
+                         (0x2E, "overedramtemp")):
+            if getattr(config, name):
+                out[at] = getattr(config, name)
+        if config.macid:
+            out[0x220:0x226] = config.macid
+        for at, name in ((0x22A, "avregion"), (0x22C, "gameregion")):
+            if getattr(config, name):
+                out[at:at + 2] = getattr(config, name).to_bytes(2, "big")
+        if config.dvdregion:
+            out[0x237] = config.dvdregion & 0xFF
+        if bytes(out) != bytes(block):
+            out[0:2] = dumps.checksum(out).to_bytes(2, "little")
+        return bytes(out)
 
     @property
     def ce_version(self) -> int:
@@ -845,35 +999,44 @@ class Build:
         return bytes(head.image)
 
     def boot_flags(self) -> int:
-        """The word at 0x4C, as far as this has measured it.
+        """The word at 0x4C: four bytes that decide how the console starts.
 
-        Three readings over sixteen images, with every option that reaches these bytes
-        left alone: zero for a retail image, 0x12 for a glitch of any kind -- the eject
-        button, which is what a console starts XeLL on when nothing says otherwise --
-        and 0x40012 for a JTAG one, whose extra bit is a tray-status check.
+        Measured by x360mcp a build at a time, each option against a reference:
 
-        Seven options land in these same bytes and none is reproduced here: `xellbutton`
-        and `xellbutton2` name the button, `dualboot` is a byte of its own, and `nodvd`,
-        `olddvd`, `cygnos` and `demon` each set or clear a bit. What each is worth was
-        measured in x360mcp, a build at a time, and reading it across is its own step.
-        Until then a build that sets any of them is refused rather than handed an image
-        whose start-up is not what was asked for.
+            0x4C  the button that makes a two-NAND console switch -- `dualboot`, on a
+                  JTAG image only, and zero when it names the button XeLL starts on
+            0x4D  a bitfield: 1 for `cygnos` or `demon`, which write the same byte; on a
+                  JTAG image 2 for `nodvd` and otherwise 4, the tray check it starts on,
+                  unless `olddvd` asks for the older way
+            0x4E  a second reason XeLL starts on, `xellbutton2`, zero when it is the
+            same 0x4F  the reason XeLL starts on, `xellbutton`; `nodvd` and `olddvd`
+            clear it
+
+        A retail image carries XeLL on no button at all and the word is zero, which the
+        reference images show.
         """
-        asked = [
-            name for name in ("xellbutton2", "dualboot", "nodvd", "olddvd", "cygnos",
-                              "demon")
-            if getattr(self.config, name)
-        ]
-        if self.config.xellbutton != "eject":
-            asked.append("xellbutton")
-        if asked:
-            raise ValueError(
-                "%s reach the header's boot flags, and which byte each one writes has "
-                "not been measured here yet" % ", ".join(sorted(asked))
-            )
         if self.image_type.name == "retail":
             return 0
-        return 0x40012 if self.image_type.name == "jtag" else 0x12
+        config, jtag = self.config, self.image_type.name == "jtag"
+        if config.nodvd or config.olddvd:
+            reason = 0
+        else:
+            reason = BUTTONS[config.xellbutton or "eject"]
+        second = 0
+        if config.xellbutton2:
+            second = BUTTONS[config.xellbutton2]
+            second = 0 if second == reason else second
+        speed = 1 if (config.cygnos or config.demon) else 0
+        if jtag:
+            if config.nodvd:
+                speed |= 2
+            elif not config.olddvd:
+                speed |= 4
+        switch = 0
+        if jtag and config.dualboot:
+            switch = BUTTONS[config.dualboot]
+            switch = 0 if switch == reason else switch
+        return (switch << 24) | (speed << 16) | (second << 8) | reason
 
     def __repr__(self) -> str:
         return "Build(%s, %s)" % (self.image_type.name, self.console.name)
