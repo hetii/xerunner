@@ -27,6 +27,11 @@ class ThePayload(unittest.TestCase):
         self.assertEqual(out[0x50:0x54], bytes.fromhex("38800350"))
         self.assertEqual(out[:0x52] + out[0x54:], known[:0x52] + known[0x54:])
 
+    def test_the_words_are_rounded_up(self):
+        """0x42DB34, and 0x34B on a core of 0xD2B bytes, measured."""
+        out = jtag.payload_for(jtag.builtin("payload.bin"), 0xD2B)
+        self.assertEqual(out[0x52:0x54], bytes.fromhex("034b"))
+
     def test_one_byte_changed_and_it_goes_in_as_it_stands(self):
         other = bytearray(jtag.builtin("payload.bin"))
         other[0x100] ^= 1
@@ -48,6 +53,15 @@ class TheCore(unittest.TestCase):
         out = jtag.core_for(longer, "17559")
         self.assertNotEqual(out, longer)
         self.assertEqual(out[0xD40:], b"\x5a" * 0x40)
+
+    def test_a_prefix_whose_rest_is_zeros_is_still_the_known_one(self):
+        """The file is compared with zeros behind it: 0xD3C bytes is recognised and
+        patched, 0xD2B -- which stops inside the X's -- is not. Both measured."""
+        known = jtag.builtin("freeboot.bin")
+        short = jtag.core_for(known[:0xD3C], "17559")
+        self.assertIn(b"17559", short)
+        self.assertEqual(len(short), 0xD3C)
+        self.assertEqual(jtag.core_for(known[:0xD2B], "17559"), known[:0xD2B])
 
     def test_9199_moves_the_hold_address_back(self):
         """"9199 ini string detected, patching to old hold address"."""
