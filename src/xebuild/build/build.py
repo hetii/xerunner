@@ -416,9 +416,26 @@ class Build:
         Otherwise it is `plain_keyvault` sealed again. See there.
         """
         if (self.material.keyvault is None and self.dump is not None
-                and not self.drawing and not self._dvdkey_goes_in):
+                and not self.drawing and not self._dvdkey_goes_in
+                and (not self.cpu_key or self._own_keyvault() is not None)):
             return self.dump.sealed_keyvault
         return Keyvault(self.plain_keyvault()).sealed(self.cpu_key)
+
+    def _own_keyvault(self) -> bytes | None:
+        """The dump's keyvault in the clear, or None where this CPU key cannot open it.
+
+        Its nonce is what its plaintext derives under the right key and nothing else,
+        which is the original's own check -- "keyvault decrypt failed, discarding",
+        measured with a key one bit wrong, where it then stops for want of a kv.bin.
+        """
+        if self.dump is None:
+            return None
+        sealed = self.dump.sealed_keyvault
+        plain = self.dump.keyvault(self.cpu_key).plain
+        if Keyvault(plain).sealed(self.cpu_key)[:0x10] != sealed[:0x10]:
+            logger.warning("keyvault decrypt failed, discarding")
+            return None
+        return plain
 
     @property
     def _dvdkey_goes_in(self) -> bool:
@@ -445,9 +462,7 @@ class Build:
         if not self.cpu_key:
             raise ValueError("a keyvault is sealed under the CPU key, and none was "
                              "given")
-        own = None
-        if self.dump is not None:
-            own = self.dump.keyvault(self.cpu_key).plain
+        own = self._own_keyvault()
         given = self.material.keyvault
         if given is not None:
             opened = Keyvault.opened(given, self.cpu_key).plain
@@ -460,8 +475,8 @@ class Build:
         elif own is not None:
             plain = bytearray(own)
         else:
-            raise ValueError("could not read kv.bin, and there is no dump to take the "
-                             "keyvault from: critical bootloader files are missing")
+            raise ValueError("could not read kv.bin, and no keyvault the CPU key opens "
+                             "in a dump: critical bootloader files are missing")
         plain[0x10:0x18] = self._buffer("kv.bin", own[0x10:0x18] if own else None)
         if self._dvdkey_goes_in:
             plain[0x100:0x110] = self.config.dvdkey
@@ -977,6 +992,9 @@ class Build:
             try:
                 own = self.dump.image.read(name)
             except ValueError:
+                own = None
+            if own is not None and not security.verifies(name, own, self.cpu_key):
+                logger.warning("%s verify failed! Discarding data.", name)
                 own = None
         content = self.material.bytes_in(name)
         if content is None and name in ("crl.bin", "dae.bin") and \

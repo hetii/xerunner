@@ -330,3 +330,29 @@ def fcrt(own: bytes, cpu_key: bytes) -> bytes:
     if not clear:
         return own
     return own[:0x140] + aes.cbc_encrypt(cpu_key, own[0x140:], own[0x100:0x110])
+
+
+def verifies(name: str, own: bytes, cpu_key: bytes) -> bool:
+    """Whether a console's own copy of a security file opens under this CPU key.
+
+    What the original asks of each before it will take anything from one -- "crl.bin
+    found in sector 0x38d size 0xa00...verify failed! Discarding data." under a key one
+    bit wrong, measured -- and each by its own check: crl.bin and dae.bin open or do
+    not, extended.bin and secdata.bin carry a nonce their plaintext derives, fcrt.bin
+    the start of SHA-1 over its opened body at 0x12C.
+    """
+    try:
+        if name == "crl.bin":
+            opened_crl(own, cpu_key)
+        elif name == "dae.bin":
+            dae_parameters(own, cpu_key)
+        elif name in ("extended.bin", "secdata.bin"):
+            plain = _opened_like_a_keyvault(own, cpu_key)
+            tail = b"\x07\x12" if name == "extended.bin" else b""
+            return derive(cpu_key, plain + tail) == own[:NONCE_LENGTH]
+        elif name == "fcrt.bin":
+            body = aes.cbc_decrypt(cpu_key, own[0x140:], own[0x100:0x110])
+            return hashlib.sha1(body).digest()[:4] == own[0x12C:0x130]
+    except (ValueError, IndexError):
+        return False
+    return True
