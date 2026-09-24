@@ -57,21 +57,22 @@ class Filesystem:
         """The first block past every file: where the blobs and the table go."""
         return self.first + sum(one[1] for one in self.placed)
 
-    def add(self, name: str, body: bytes, stamp: int = 0) -> Entry:
-        """One more file, in the next blocks there are.
+    def add(self, name: str, body: bytes, stamp: int = 0) -> Entry | None:
+        """One more file, in the next blocks there are, or None where it will not fit.
 
-        Refused rather than trimmed when it will not fit below the last block a build
-        may use: a file cut to fit reads back short with nothing said about it, and what
-        lies past that block is the pool a console replaces bad ones from.
+        A file that would reach the last block a build may use is left out and the
+        next one tried, as the original does -- "ERROR: adding xenonsclatin.xtt will
+        exceed available flash space! Skipped!" -- and a smaller one behind it can still
+        go in: measured on 17489_RGL's longer `-i flash` list on jasperbb, which skips
+        three files and places the rest. Never trimmed: a file cut to fit reads back
+        short with nothing said about it.
         """
         at = self.after
         blocks = -(-len(body) // BLOCK)
         last = self.flash.last_block - self.flash.base_of(self.bigffs)
-        if at + blocks > last + 1:
-            raise ValueError(
-                "%s wants blocks %#x to %#x and this flash ends at %#x"
-                % (name, at, at + blocks - 1, last)
-            )
+        if at + blocks > last:
+            logger.error("adding %s will exceed available flash space! Skipped!", name)
+            return None
         entry = Entry.for_file(name, at, len(body), stamp)
         self.placed.append((entry, blocks, bytes(body)))
         logger.info("%s at block %#x, %#x bytes, %d blocks",
