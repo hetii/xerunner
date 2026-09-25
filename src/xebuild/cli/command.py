@@ -91,6 +91,7 @@ Switches:
    -wb <f> <b>    : write series of blocks starting at <b> for the number of blocks in
                     <f>
    -eb <b>        : attempt to erase a single block, even if marked bad on console
+   -bp <f> <o>    : binary patch NAND with contents of <f> to logical offset <o>
    -keys          : will attempt to dump RSA and 1BL keys from console
    -e <d>         : format partition and send avatar/kinect data to HDD from <d>, must
                     match running kernel
@@ -106,7 +107,7 @@ Switches:
                     kernel version
    -p <f>         : update patches with <f>
 
-<b> and <l> are hexadecimal. -bp is not implemented here yet."""
+<b>, <l> and <o> are hexadecimal."""
 
 
 UPDATE_USAGE = """\
@@ -355,7 +356,14 @@ def parse_client(argv) -> tuple:
             settings["action"] = "avatar" if one == "-e" else "compatibility"
             settings["directory"] = rest.pop(0)
         elif one == "-bp":
-            raise UsageError("-bp is not implemented here yet")
+            if "action" in settings:
+                raise UsageError("option flag -bp on command line but option was "
+                                 "already set!")
+            if len(rest) < 2 or any(word.startswith("-") for word in rest[:2]):
+                raise UsageError("option flag -bp on command line not enough "
+                                 "arguments provided!")
+            settings["action"] = "binary-patch"
+            settings["file"], settings["offset"] = rest.pop(0), rest.pop(0)
         else:
             raise UsageError("%s is not a client switch" % one)
     return settings, flags

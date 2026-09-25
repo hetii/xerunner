@@ -51,8 +51,10 @@ class EachActionAsTheOriginalDidIt(unittest.TestCase):
             if name.startswith("patches") and \
                     not os.path.isdir(os.environ.get("XEBUILD_ORIGINAL_DIR", "")):
                 continue
-            # `-bp` is not implemented: the original's writes block 0 whatever
-            # offset it is given and then crashes, so there is nothing to agree with.
+            # `-bp` at 0x4210: the original starts at block 0 whatever offset it is
+            # given, and here it crashed after the read; this starts at the block the
+            # offset names -- a deliberate divergence, see `client._binary_patch`.
+            # `binary-patch-block0`, inside the first block, is where the two agree.
             if name == "binary-patch":
                 continue
             with open(recorded + "/argv.json") as handle:
@@ -68,6 +70,8 @@ class EachActionAsTheOriginalDidIt(unittest.TestCase):
         for one in ("wb.bin",):
             shutil.copy(os.path.join(serve, one), work)
         shutil.copy(os.path.join(serve, "flash.bin"), os.path.join(work, "in.bin"))
+        with open(os.path.join(work, "bp.bin"), "wb") as handle:
+            handle.write(b"PATCHED!" * 4)
         original = os.environ.get("XEBUILD_ORIGINAL_DIR", "")
         if os.path.isdir(original):
             os.symlink(os.path.join(original, "17559"), os.path.join(work, "17559"))
