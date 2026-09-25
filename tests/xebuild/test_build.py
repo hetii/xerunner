@@ -18,8 +18,8 @@ from xebuild.build import Build, Filesystem, Material, layout, security
 from xebuild.chain import Chain, Fields, sealing
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
-from xebuild.crypto import smc as cipher
-from xebuild.crypto.keys import derive
+from xebuild.crypto.formats import decrypt_smc, encrypt_smc
+from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
 from xebuild.image import Directory, Header, Image, Keyvault
 from xebuild.image import dump as dumps
@@ -28,7 +28,7 @@ from xebuild.imagetypes import for_name as type_for
 from xebuild.release import Patches
 from xebuild.release.recipe import Listed
 
-from .test_chain import a_stage
+from .test_chain import a_stage, opened_under_the_1bl_key
 
 
 def a_directory(case, files=None):
@@ -367,7 +367,7 @@ class ADumpThatOnlyAnswersWhatIsAsked:
     """
 
     def __init__(self, smc=AN_SMC, seed=b"\xfb\xd7\x5a\x10", tags=None):
-        self.smc = cipher.sealed(smc, seed)
+        self.smc = encrypt_smc(smc, seed)
         # Sealed for real, under the key the tests hand a build: a keyvault that does
         # not open under its console's key is discarded, as the original discards one.
         self.sealed_keyvault = Keyvault(bytes(range(0x100)) * 0x40).sealed(
@@ -441,11 +441,11 @@ class WhichSmcGoesIn(unittest.TestCase):
         """Under the console's own seed, so the dump is still what says how to seal."""
         plain = AN_SMC
         one = a_build(self, files={"smc.bin": plain}, patchsmc=False)
-        self.assertEqual(one.smc(), cipher.sealed(plain, one.dump.smc[:4]))
+        self.assertEqual(one.smc(), encrypt_smc(plain, one.dump.smc[:4]))
 
     def test_patchsmc_lifts_the_reset_limit_and_moves_nothing_else(self):
         one = a_build(self, patchsmc=True)
-        was, now = cipher.opened(one.dump.smc), cipher.opened(one.smc())
+        was, now = decrypt_smc(one.dump.smc), decrypt_smc(one.smc())
         self.assertEqual(now[0x40:0x42], bytes(2))
         self.assertEqual(
             [at for at in range(4, len(now)) if now[at] != was[at]], [0x40, 0x41]
@@ -791,7 +791,7 @@ class WhatTheUpdateSlotCarries(unittest.TestCase):
         one = WhichStagesTheChainIsMadeOf.a_chain(self, kind=kind, board=board,
                                                   stages=stages)
         run = one.slot(tail_at)
-        return one, sealing.under(Stage(run, 0), sealing.ONE_BL_KEY), run
+        return one, opened_under_the_1bl_key(Stage(run, 0)), run
 
     def test_the_cf_says_where_the_rest_of_cg_is_in_the_flash(self):
         """A count, then block numbers one up from the other, counted in the flash --
@@ -826,8 +826,8 @@ class WhatTheUpdateSlotCarries(unittest.TestCase):
                   ("CG", 0x14000))
         one = WhichStagesTheChainIsMadeOf.a_chain(self, kind="jtag", board="falcon",
                                                   stages=stages)
-        first = sealing.under(Stage(one.slot(0xE4000, 0), 0), sealing.ONE_BL_KEY)
-        last = sealing.under(Stage(one.slot(0xE8000, 1), 0), sealing.ONE_BL_KEY)
+        first = opened_under_the_1bl_key(Stage(one.slot(0xE4000, 0), 0))
+        last = opened_under_the_1bl_key(Stage(one.slot(0xE8000, 1), 0))
         self.assertEqual(first[0x218:0x230], bytes(0x18))
         self.assertEqual(struct.unpack_from(">H", first, 0x32)[0], 0xE4000 // 0x4000)
         self.assertEqual(last[0x21B], 1)
@@ -983,7 +983,7 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
                       cpu_key=key.hex(), no_random=True)
         made = one.security_file("secdata.bin", 0x5A000000)
         self.assertEqual(len(made), 0x400)
-        plain = rc4(derive(key, made[:0x10]), made[0x10:])
+        plain = rc4(hmacsha(key, made[:0x10]), made[0x10:])
         self.assertEqual(plain[:8], security.COMPILED_IN["secdata.bin"])
 
     def test_a_zero_cpu_key_zero_pairs_a_chain_with_a_cb_b(self):

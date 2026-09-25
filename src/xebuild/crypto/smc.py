@@ -1,84 +1,10 @@
-"""The system management controller: the cipher its image is kept under, and the digest
-the bootloaders take of it.
-
-Nothing like the other three. It is a byte-at-a-time stream whose key is four 32-bit
-accumulators, and each byte that comes out feeds the two accumulators after it, so the
-stream depends on everything already written. There is no key material from outside: the
-four accumulators start from the same four bytes in every image, and what makes one
-image's stream differ from another's is the four bytes at its head.
-
-Those four bytes are a seed. They are stored in the clear and they are **not** the
-plaintext's first four bytes: the plaintext's are discarded, and whoever seals an image
-chooses what goes there. That is why an SMC's identity is a checksum from byte four
-on -- the head is not part of the image, it is how the image was locked.
-
-All of it was measured, in both directions, on five cases that agree byte for byte:
-
-- Three images built by the original from a plaintext of this side's choosing, which
-  `smcnocheck` is what lets through. A plaintext of zeros hands back the bare stream.
-- Two real consoles' dumps, whose sealed SMC opens to a plaintext that carries the same
-  twelve bytes from offset four as every plaintext SMC the release ships,
-  `01c641bb01c6212d01c601c6`, and states version 3.1.
-
-The seed is per image and not ours to choose here: the two consoles measured carry
-`fbd75a10` and `4552c477`, and the original under `-norandom` writes `cc7ac1e7` every
-time. Who draws it is a question for whatever builds an image, so it is an argument.
+"""The digest the bootloaders take of a sealed SMC, to say which one they were built
+beside. The SMC's cipher itself is `formats.decrypt_smc` and `formats.encrypt_smc`.
 """
 
 from __future__ import annotations
 
-KEY = (0x42, 0x75, 0x4E, 0x79)
-SEED_LENGTH = 4
 U64 = (1 << 64) - 1
-
-
-def _advanced(keys: list, index: int, cipher: int) -> None:
-    """Feed one sealed byte back into the two accumulators after it."""
-    mask = 0xFFFFFFFF
-    # The byte is multiplied before it is fed in, and the two accumulators take the
-    # two halves of that product: the one after this byte's takes the low half, the one
-    # after that the high half.
-    product = cipher * 0xFB
-    keys[(index + 1) & 3] = (keys[(index + 1) & 3] + product) & mask
-    keys[(index + 2) & 3] = (keys[(index + 2) & 3] + (product >> 8)) & mask
-
-
-def opened(sealed: bytes) -> bytes:
-    """An SMC image as it runs, out of the bytes flash holds.
-
-    The whole buffer comes back, its own length. **Its first four bytes are not
-    plaintext** -- they are what the seed happens to decrypt to, and nothing means
-    anything by them. Everything that identifies or patches an SMC counts from four.
-    """
-    keys, out = list(KEY), bytearray(len(sealed))
-    for index, cipher in enumerate(sealed):
-        out[index] = cipher ^ (keys[index & 3] & 0xFF)
-        _advanced(keys, index, cipher)
-    return bytes(out)
-
-
-def sealed(plain: bytes, seed: bytes) -> bytes:
-    """An SMC image as flash holds it, under a seed of the caller's choosing.
-
-    The plaintext's first four bytes go nowhere: the seed takes their place, and the
-    accumulators advance over the seed before the first real byte is reached. Which is
-    the whole reason two images of the same SMC under different seeds share no bytes.
-    """
-    if len(seed) != SEED_LENGTH:
-        raise ValueError(
-            "an SMC's seed is %d bytes and this is %d" % (SEED_LENGTH, len(seed))
-        )
-    if len(plain) < SEED_LENGTH:
-        raise ValueError("an SMC is longer than its seed; this one is %d" % len(plain))
-    keys, out = list(KEY), bytearray(len(plain))
-    for index in range(SEED_LENGTH):
-        out[index] = seed[index]
-        _advanced(keys, index, seed[index])
-    for index in range(SEED_LENGTH, len(plain)):
-        cipher = plain[index] ^ (keys[index & 3] & 0xFF)
-        out[index] = cipher
-        _advanced(keys, index, cipher)
-    return bytes(out)
 
 
 def _right(value: int, bits: int) -> int:

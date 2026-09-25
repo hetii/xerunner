@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 def rc4(key: bytes, data: bytes) -> bytes:
-    """The keystream over `data`. Encrypting and decrypting are the same operation."""
+    """The keystream over `data`. Encrypting and decrypting are the same operation.
+    XeCrypt's `XeCryptRc4` -- `XeCryptRc4Key` and `XeCryptRc4Ecb` in one."""
     if not key:
         raise ValueError("rc4 needs a key")
     state = list(range(256))

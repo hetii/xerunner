@@ -37,6 +37,8 @@ import struct
 
 from ..chain import sealing
 from ..chain.stage import Stage
+from ..crypto.formats import decrypt_bootloader
+from ..crypto.keys import hmacsha
 
 BLOCK = 0x1000
 DATA_AT = 0xC000
@@ -252,7 +254,9 @@ class Container(Package):
         """
         raw = self.read("xboxupd.bin")
         cf = Stage(raw, 0)
-        opened = sealing.under(cf, sealing.ONE_BL_KEY)
+        opened = cf.head + decrypt_bootloader(
+            cf.body, hmacsha(sealing.ONE_BL_KEY, cf.nonce))
         cg = Stage(raw, cf.length)
         # Sixteen bytes at 0x330 of the opened CF are what the CG is keyed from.
-        return opened, sealing.under(cg, opened[0x330:0x340])
+        return opened, cg.head + decrypt_bootloader(
+            cg.body, hmacsha(opened[0x330:0x340], cg.nonce))

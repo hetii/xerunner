@@ -83,8 +83,9 @@ for _ in range(ROUNDS):
 RCON = tuple(RCON)
 
 
-def expand(key: bytes) -> list[bytes]:
-    """The eleven round keys a 128-bit key becomes."""
+def aeskey(key: bytes) -> list[bytes]:
+    """The eleven round keys a 128-bit key becomes, which both directions use.
+    XeCrypt's `XeCryptAesKey`."""
     if len(key) != KEY_LENGTH:
         raise ValueError("an AES key here is %d bytes, not %d" % (KEY_LENGTH, len(key)))
     words = [list(key[at : at + 4]) for at in range(0, KEY_LENGTH, 4)]
@@ -115,8 +116,9 @@ def _unshifted(state: list[int]) -> list[int]:
     return out
 
 
-def encrypt_block(rounds: list[bytes], block: bytes) -> bytes:
-    """One block enciphered under an expanded key."""
+def encrypt_aesecb(rounds: list[bytes], block: bytes) -> bytes:
+    """One block enciphered under an expanded key. XeCrypt's `XeCryptAesEcb`,
+    encrypting."""
     state = [one ^ two for one, two in zip(block, rounds[0], strict=True)]
     for number in range(1, ROUNDS + 1):
         state = _shifted([SBOX[one] for one in state])
@@ -135,8 +137,9 @@ def encrypt_block(rounds: list[bytes], block: bytes) -> bytes:
     return bytes(state)
 
 
-def decrypt_block(rounds: list[bytes], block: bytes) -> bytes:
-    """One block deciphered under an expanded key."""
+def decrypt_aesecb(rounds: list[bytes], block: bytes) -> bytes:
+    """One block deciphered under an expanded key. XeCrypt's `XeCryptAesEcb`,
+    decrypting."""
     state = [one ^ two for one, two in zip(block, rounds[ROUNDS], strict=True)]
     for number in range(ROUNDS - 1, -1, -1):
         state = [INVERSE_SBOX[one] for one in _unshifted(state)]
@@ -155,25 +158,38 @@ def decrypt_block(rounds: list[bytes], block: bytes) -> bytes:
     return bytes(state)
 
 
-def cbc_encrypt(key: bytes, data: bytes, iv: bytes) -> bytes:
-    """Cipher block chaining: each block exclusive-ored with the one before it."""
-    rounds = expand(key)
+def encrypt_aescbc(key: bytes, data: bytes, iv: bytes) -> bytes:
+    """Cipher block chaining: each block exclusive-ored with the one before it.
+    XeCrypt's `XeCryptAesCbc`, encrypting.
+
+    Data that is not a whole number of blocks comes back as it was. The library under
+    XeCrypt refuses it before touching a byte (`aes_modes.c`, `len & 15` returns
+    EXIT_FAILURE) and `XeCryptAesCbc` does not look at the answer, so a buffer
+    encrypted in place is left as it stands -- measured with an fcrt.bin whose sealed
+    part is not.
+    """
+    if len(data) % BLOCK:
+        return bytes(data)
+    rounds = aeskey(key)
     last, out = bytes(iv), bytearray()
     for at in range(0, len(data) - BLOCK + 1, BLOCK):
         plain = data[at : at + BLOCK]
         block = bytes(one ^ two for one, two in zip(plain, last, strict=True))
-        last = encrypt_block(rounds, block)
+        last = encrypt_aesecb(rounds, block)
         out += last
     return bytes(out)
 
 
-def cbc_decrypt(key: bytes, data: bytes, iv: bytes) -> bytes:
-    """The inverse of `cbc_encrypt`. A trailing part block is left as it is."""
-    rounds = expand(key)
+def decrypt_aescbc(key: bytes, data: bytes, iv: bytes) -> bytes:
+    """The inverse of `encrypt_aescbc`. XeCrypt's `XeCryptAesCbc`, decrypting; data
+    that is not a whole number of blocks comes back as it was, as there."""
+    if len(data) % BLOCK:
+        return bytes(data)
+    rounds = aeskey(key)
     last, out = bytes(iv), bytearray()
     for at in range(0, len(data) - BLOCK + 1, BLOCK):
         block = bytes(data[at : at + BLOCK])
-        plain = decrypt_block(rounds, block)
+        plain = decrypt_aesecb(rounds, block)
         out += bytes(one ^ two for one, two in zip(plain, last, strict=True))
         last = block
-    return bytes(out) + bytes(data[len(out) :])
+    return bytes(out)

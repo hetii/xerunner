@@ -14,8 +14,9 @@ from xebuild.build import Build, Material, layout, security
 from xebuild.chain import Chain
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
-from xebuild.crypto import smc as cipher
-from xebuild.crypto.keys import derive
+from xebuild.crypto import formats
+from xebuild.crypto.formats import decrypt_smc
+from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
 from xebuild.image import Directory, Image
 from xebuild.imagetypes import for_name as type_for
@@ -292,7 +293,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                     os.symlink(os.path.join(self.where, name),
                                os.path.join(where, name))
                 with open(os.path.join(where, "smc.bin"), "wb") as handle:
-                    handle.write(cipher.opened(sealed))
+                    handle.write(decrypt_smc(sealed))
                 one = Build(BuildConfig(image_type=kind, console=board),
                             Material(where), self.release)
                 self.assertEqual(one.smc(), sealed)
@@ -358,8 +359,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                                os.path.join(where, name))
                 sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
                 with open(os.path.join(where, "smc.bin"), "wb") as handle:
-                    handle.write(cipher.opened(sealed))
-                plain, _ = security.opened_crl(image.read("crl.bin"), cpu)
+                    handle.write(decrypt_smc(sealed))
+                plain = formats.decrypt_crl(image.read("crl.bin"), cpu)[0]
                 one = Build(BuildConfig(image_type=kind, console=board),
                             Material(where), self.release)
                 self.assertEqual(one.image(security.when_in(plain)).raw, raw)
@@ -431,8 +432,8 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
         """The build's clock, out of its crl.bin -- or its secdata.bin, where the
         crl.bin was one handed in that no key opens and so went in as it stood."""
         try:
-            plain, _ = security.opened_crl(image.read("crl.bin"), self.cpu)
+            plain = formats.decrypt_crl(image.read("crl.bin"), self.cpu)[0]
         except ValueError:
             sealed = image.read("secdata.bin")
-            plain = rc4(derive(self.cpu, sealed[:0x10]), sealed[0x10:])[0x10:]
+            plain = rc4(hmacsha(self.cpu, sealed[:0x10]), sealed[0x10:])[0x10:]
         return security.when_in(plain)

@@ -16,6 +16,8 @@ on a real console's answer, whose every field the original's report agrees with:
 
 from __future__ import annotations
 
+from ..crypto.keys import hammingweight, uideccencode
+
 # Board names by the original's table at 0x44A6E0, which its index 0 calls Unknown.
 BOARDS = ("Unknown", "Xenon", "Zephyr", "Falcon", "Jasper", "Trinity", "Corona",
           "Winchester")
@@ -31,31 +33,9 @@ def _board(index: int) -> str:
 
 
 def cpu_key_weight(key: bytes) -> int:
-    """How many of the key's 106 key bits are set -- 53 in any real one."""
-    return sum(bin(one).count("1") for one in key[:13]) + (key[13] & 1) + \
-        ((key[13] >> 1) & 1)
-
-
-def cpu_key_ecd(key: bytes) -> bytes:
-    """The key with its 22 check bits recomputed from its 106 key bits: the key
-    itself where the check bits are right. The algorithm is the one J-Runner spells
-    out; it agrees with the original's "ecd: valid" on the console measured."""
-    out, one, parity = bytearray(key), 0, 0
-    for at in range(0x6A):
-        bit = (out[at >> 3] >> (at & 7)) & 1
-        one ^= bit
-        one ^= (one & 1) * 0x360325
-        parity ^= bit
-        one >>= 1
-    for at in range(0x6A, 0x7F):
-        bit = (out[at >> 3] >> (at & 7)) & 1
-        low = one & 1
-        out[at >> 3] ^= ((bit ^ low) & 1) << (at & 7)
-        parity ^= low
-        one >>= 1
-    bit = (out[15] >> 7) & 1
-    out[15] ^= ((bit ^ (parity & 1)) & 1) << 7
-    return bytes(out)
+    """How many of the key's 106 key bits are set -- 53 in any real one; its 22 check
+    bits are not counted."""
+    return hammingweight(key[:13]) + hammingweight(bytes([key[13] & 0x03]))
 
 
 class ConsoleInfo:
@@ -184,7 +164,7 @@ class ConsoleInfo:
         # A key of the wrong weight is called wrong in both, measured: "weight:0x36
         # error; ecd: error".
         out = {"cpu weight": weight,
-               "cpu ecd": weight == 53 and cpu_key_ecd(cpu) == cpu,
+               "cpu ecd": weight == 53 and uideccencode(cpu) == cpu,
                "1bl": sum(self.one_bl_key) == 0x983}
         for name, _file, at, wanted in PUBLIC_KEYS:
             out[name] = sum(self.public_key(at)) == wanted

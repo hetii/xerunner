@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import unittest
 
-from xebuild.crypto import aes, keys, rc4, smc
+from xebuild.crypto import aes, formats, keys, rc4, smc
 
 
 def hexed(text: str) -> bytes:
@@ -48,22 +48,22 @@ class OneBlockOfAes(unittest.TestCase):
     CIPHER = hexed("69c4e0d86a7b0430d8cdb78070b4c55a")
 
     def test_the_standard_s_own_answer(self):
-        self.assertEqual(aes.encrypt_block(aes.expand(self.KEY), self.PLAIN),
+        self.assertEqual(aes.encrypt_aesecb(aes.aeskey(self.KEY), self.PLAIN),
                          self.CIPHER)
 
     def test_and_back_again(self):
-        self.assertEqual(aes.decrypt_block(aes.expand(self.KEY), self.CIPHER),
+        self.assertEqual(aes.decrypt_aesecb(aes.aeskey(self.KEY), self.CIPHER),
                          self.PLAIN)
 
     def test_the_worked_example(self):
         self.assertEqual(
-            aes.encrypt_block(aes.expand(hexed("2b7e151628aed2a6abf7158809cf4f3c")),
+            aes.encrypt_aesecb(aes.aeskey(hexed("2b7e151628aed2a6abf7158809cf4f3c")),
                               hexed("3243f6a8885a308d313198a2e0370734")),
             hexed("3925841d02dc09fbdc118597196a0b32"),
         )
 
     def test_eleven_round_keys_and_the_first_is_the_key(self):
-        rounds = aes.expand(self.KEY)
+        rounds = aes.aeskey(self.KEY)
         self.assertEqual(len(rounds), 11)
         self.assertEqual(rounds[0], self.KEY)
         for one in rounds:
@@ -72,12 +72,12 @@ class OneBlockOfAes(unittest.TestCase):
     def test_only_one_key_width_is_taken(self):
         for wrong in (b"", b"\x00" * 15, b"\x00" * 24, b"\x00" * 32):
             with self.subTest(length=len(wrong)), self.assertRaises(ValueError):
-                aes.expand(wrong)
+                aes.aeskey(wrong)
 
     def test_a_block_that_is_not_a_block_is_refused_rather_than_shortened(self):
-        rounds = aes.expand(self.KEY)
+        rounds = aes.aeskey(self.KEY)
         with self.assertRaises(ValueError):
-            aes.encrypt_block(rounds, b"\x00" * 15)
+            aes.encrypt_aesecb(rounds, b"\x00" * 15)
 
 
 class ChainedBlocks(unittest.TestCase):
@@ -91,23 +91,23 @@ class ChainedBlocks(unittest.TestCase):
                    "5086cb9b507219ee95db113a917678b2")
 
     def test_the_standard_s_own_answer(self):
-        self.assertEqual(aes.cbc_encrypt(self.KEY, self.PLAIN, self.IV), self.CIPHER)
+        self.assertEqual(aes.encrypt_aescbc(self.KEY, self.PLAIN, self.IV), self.CIPHER)
 
     def test_and_back_again(self):
-        self.assertEqual(aes.cbc_decrypt(self.KEY, self.CIPHER, self.IV), self.PLAIN)
+        self.assertEqual(aes.decrypt_aescbc(self.KEY, self.CIPHER, self.IV), self.PLAIN)
 
     def test_each_block_depends_on_the_one_before_it(self):
         """What chaining means: one byte moved changes everything after it."""
         moved = bytearray(self.PLAIN)
         moved[0] ^= 0x01
-        out = aes.cbc_encrypt(self.KEY, bytes(moved), self.IV)
+        out = aes.encrypt_aescbc(self.KEY, bytes(moved), self.IV)
         self.assertNotEqual(out[:16], self.CIPHER[:16])
         self.assertNotEqual(out[16:], self.CIPHER[16:])
 
     def test_a_trailing_part_block_is_left_as_it_is(self):
         """The images here carry them, and the original leaves them alone too."""
         data = self.PLAIN + b"\xa5\xa5\xa5"
-        out = aes.cbc_decrypt(self.KEY, data, self.IV)
+        out = aes.decrypt_aescbc(self.KEY, data, self.IV)
         self.assertEqual(out[-3:], b"\xa5\xa5\xa5")
         self.assertEqual(len(out), len(data))
 
@@ -141,10 +141,10 @@ class TheOneDerivation(unittest.TestCase):
     def test_it_is_hmac_sha1_cut_to_sixteen_bytes(self):
         secret, message = b"k" * 16, b"n" * 16
         self.assertEqual(
-            keys.derive(secret, message),
+            keys.hmacsha(secret, message),
             hmac.new(secret, message, hashlib.sha1).digest()[:16],
         )
-        self.assertEqual(len(keys.derive(secret, message)), 16)
+        self.assertEqual(len(keys.hmacsha(secret, message)), 16)
 
     def test_a_key_longer_than_the_hash_block_is_cut_not_hashed(self):
         """Where the console parts company with the standard, from `xecrypt.c`.
@@ -154,21 +154,45 @@ class TheOneDerivation(unittest.TestCase):
         """
         long_key = b"a" * 70
         self.assertEqual(
-            keys.derive(long_key, b"x"),
+            keys.hmacsha(long_key, b"x"),
             hmac.new(long_key[:64], b"x", hashlib.sha1).digest()[:16],
         )
         self.assertNotEqual(
-            keys.derive(long_key, b"x"),
+            keys.hmacsha(long_key, b"x"),
             hmac.new(long_key, b"x", hashlib.sha1).digest()[:16],
         )
 
     def test_a_different_secret_or_message_gives_a_different_key(self):
-        self.assertNotEqual(keys.derive(b"a" * 16, b"n"), keys.derive(b"b" * 16, b"n"))
-        self.assertNotEqual(keys.derive(b"a" * 16, b"n"), keys.derive(b"a" * 16, b"m"))
+        key = keys.hmacsha(b"a" * 16, b"n")
+        self.assertNotEqual(key, keys.hmacsha(b"b" * 16, b"n"))
+        self.assertNotEqual(key, keys.hmacsha(b"a" * 16, b"m"))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class APartBlock(unittest.TestCase):
+    """What XeCrypt's AES library does with data that is not whole blocks: nothing."""
+
+    def test_cbc_leaves_it_as_it_was_both_ways(self):
+        key, iv, data = bytes(range(16)), bytes(16), bytes(range(21))
+        self.assertEqual(aes.encrypt_aescbc(key, data, iv), data)
+        self.assertEqual(aes.decrypt_aescbc(key, data, iv), data)
+
+
+class WhatXeCryptDoesToAKey(unittest.TestCase):
+    """`XeCryptHammingWeight` and `XeCryptUidEccEncode` over the bench console's key."""
+
+    KEY = bytes.fromhex("7E5068DBB3FD03F04E367028D475EEC2")
+
+    def test_the_weight_counts_every_set_bit(self):
+        self.assertEqual(keys.hammingweight(b"\x00\x01\xff"), 9)
+        self.assertEqual(keys.hammingweight(b""), 0)
+
+    def test_a_real_key_s_check_bits_are_already_its_own(self):
+        self.assertEqual(keys.uideccencode(self.KEY), self.KEY)
+
+    def test_a_key_with_a_bit_changed_comes_back_different(self):
+        spoiled = bytearray(self.KEY)
+        spoiled[0] ^= 1
+        self.assertNotEqual(keys.uideccencode(bytes(spoiled)), bytes(spoiled))
 
 
 class TheSmcSCipher(unittest.TestCase):
@@ -185,33 +209,33 @@ class TheSmcSCipher(unittest.TestCase):
     )
 
     def test_it_reproduces_what_the_original_wrote(self):
-        made = smc.sealed(b"\x00" * len(self.MEASURED), self.MEASURED[:4])
+        made = formats.encrypt_smc(b"\x00" * len(self.MEASURED), self.MEASURED[:4])
         self.assertEqual(made, self.MEASURED)
 
     def test_the_same_bytes_open_back_to_the_plaintext(self):
         """From byte four. The first four are the seed and mean nothing opened."""
         rest = len(self.MEASURED) - 4
-        self.assertEqual(smc.opened(self.MEASURED)[4:], b"\x00" * rest)
+        self.assertEqual(formats.decrypt_smc(self.MEASURED)[4:], b"\x00" * rest)
 
     def test_the_seed_is_carried_in_the_clear(self):
-        made = smc.sealed(bytes(0x40), hexed("deadbeef"))
+        made = formats.encrypt_smc(bytes(0x40), hexed("deadbeef"))
         self.assertEqual(made[:4], hexed("deadbeef"))
 
     def test_the_plaintext_s_first_four_bytes_go_nowhere(self):
         """Measured: a build with a 1 at offset 0 gave the same image as one without."""
         seed = hexed("cc7ac1e7")
         body = bytes(range(0x40))
-        one = smc.sealed(b"\x00" * 4 + body, seed)
-        other = smc.sealed(b"\x01\x02\x03\x04" + body, seed)
+        one = formats.encrypt_smc(b"\x00" * 4 + body, seed)
+        other = formats.encrypt_smc(b"\x01\x02\x03\x04" + body, seed)
         self.assertEqual(one, other)
 
     def test_a_byte_changes_every_byte_after_it_and_none_before(self):
         """Measured: a 1 at offset 4 moved the byte at 4 by one and everything after."""
         seed = hexed("cc7ac1e7")
         plain = bytearray(0x40)
-        was = smc.sealed(bytes(plain), seed)
+        was = formats.encrypt_smc(bytes(plain), seed)
         plain[4] = 0x01
-        now = smc.sealed(bytes(plain), seed)
+        now = formats.encrypt_smc(bytes(plain), seed)
         self.assertEqual(now[:4], was[:4])
         self.assertEqual(now[4], was[4] ^ 0x01)
         self.assertNotEqual(now[5:9], was[5:9])
@@ -223,8 +247,8 @@ class TheSmcSCipher(unittest.TestCase):
         chance. What is asserted is that they agree at chance and not at all.
         """
         plain = bytes(0x200)
-        one = smc.sealed(plain, hexed("cc7ac1e7"))[4:]
-        other = smc.sealed(plain, hexed("fbd75a10"))[4:]
+        one = formats.encrypt_smc(plain, hexed("cc7ac1e7"))[4:]
+        other = formats.encrypt_smc(plain, hexed("fbd75a10"))[4:]
         same = sum(a == b for a, b in zip(one, other, strict=True))
         self.assertNotEqual(one, other)
         self.assertLess(same, len(one) // 20)
@@ -232,11 +256,11 @@ class TheSmcSCipher(unittest.TestCase):
     def test_a_seed_that_is_not_four_bytes_is_refused(self):
         for seed in (b"", b"\x01\x02\x03", b"\x01\x02\x03\x04\x05"):
             with self.subTest(seed=seed), self.assertRaises(ValueError):
-                smc.sealed(bytes(0x40), seed)
+                formats.encrypt_smc(bytes(0x40), seed)
 
     def test_something_shorter_than_its_own_seed_is_refused(self):
         with self.assertRaises(ValueError):
-            smc.sealed(b"\x00\x00", hexed("cc7ac1e7"))
+            formats.encrypt_smc(b"\x00\x00", hexed("cc7ac1e7"))
 
 
 class TheSmcSFingerprint(unittest.TestCase):
@@ -287,3 +311,7 @@ class TheSmcSFingerprint(unittest.TestCase):
             other[at] ^= 0x01
             with self.subTest(at=at):
                 self.assertNotEqual(smc.fingerprint(bytes(other)), was)
+
+
+if __name__ == "__main__":
+    unittest.main()
