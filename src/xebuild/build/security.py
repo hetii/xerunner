@@ -30,8 +30,6 @@ found the hard way: while those were thought to be drawn, every comparison hande
 reference's own bytes in, and a handed-in drawn value looks exactly like a derived one.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 

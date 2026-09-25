@@ -21,8 +21,6 @@ The head says the block's checksum -- `checksum` -- which covers 0x10 to 0x10C o
 the fields past 0x220 never move it.
 """
 
-from __future__ import annotations
-
 import logging
 
 logger = logging.getLogger(__name__)

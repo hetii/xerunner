@@ -6,8 +6,6 @@ in `BaseConfig`. It processes no keys, which is why its own banner warns that mo
 what it says about security will be complaints.
 """
 
-from __future__ import annotations
-
 from .base import BaseConfig
 
 

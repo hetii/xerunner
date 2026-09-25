@@ -77,8 +77,6 @@ original keeps the same arithmetic as static tables inside its builder, for the 
 reason.
 """
 
-from __future__ import annotations
-
 from ..boards.flash import BLOCK, PAGE
 
 # The header is one page, and the rest of the room before the SMC is zeros: measured on

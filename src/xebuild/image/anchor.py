@@ -37,8 +37,6 @@ Only one flash shape has anchors, so the two offsets are stated here rather than
 of the shape; there is nothing yet to tell a rule from a constant.
 """
 
-from __future__ import annotations
-
 import struct
 import hashlib
 

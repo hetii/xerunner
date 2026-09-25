@@ -29,8 +29,6 @@ line and the ini are `config`'s, so putting them in order is the caller's --
 `key_in_file` is the middle step and says plainly when there is nothing in it.
 """
 
-from __future__ import annotations
-
 import os
 import logging
 

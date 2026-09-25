@@ -7,8 +7,6 @@ original against a stand-in server that records the wire -- the 17559 system upd
 order, with the same bytes.
 """
 
-from __future__ import annotations
-
 import os
 import hashlib
 import logging

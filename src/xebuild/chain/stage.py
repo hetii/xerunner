@@ -27,8 +27,6 @@ stage *is* but what is done with it: which secret opens it, which `sealing` answ
 whether it carries values belonging to one console, which `console` reads.
 """
 
-from __future__ import annotations
-
 import struct
 
 LENGTH = 0x20

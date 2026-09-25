@@ -2,8 +2,6 @@
 beside. The SMC's cipher itself is `formats.decrypt_smc` and `formats.encrypt_smc`.
 """
 
-from __future__ import annotations
-
 U64 = (1 << 64) - 1
 
 

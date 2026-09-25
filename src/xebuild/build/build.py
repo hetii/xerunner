@@ -10,8 +10,6 @@ be held against the same region of a reference image on its own -- which is how 
 were measured, and what a mistake in one of them looks like.
 """
 
-from __future__ import annotations
-
 import os
 import time
 import hashlib

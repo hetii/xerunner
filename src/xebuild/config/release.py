@@ -10,8 +10,6 @@ have none, so those two do not inherit this.
 so each keeps a property of its own.
 """
 
-from __future__ import annotations
-
 from .base import BaseConfig
 
 

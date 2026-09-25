@@ -27,8 +27,6 @@ block 0x2E0 and a `jasperbb` from 0xAE0, so one file is one directory number and
 different places in a flash. `Flash.offset_of` is what turns one into the other.
 """
 
-from __future__ import annotations
-
 import logging
 
 from ..boards.flash import BLOCK, PAGE

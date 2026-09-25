@@ -1,7 +1,5 @@
 """What a running console hands over, as a build's material."""
 
-from __future__ import annotations
-
 from ..build.material import Material
 
 

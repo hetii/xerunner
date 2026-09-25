@@ -18,8 +18,6 @@ which is the order `BuildConfig` keeps; with no `-d` that directory is `./data/`
 the original warns.
 """
 
-from __future__ import annotations
-
 import os
 import sys
 import logging

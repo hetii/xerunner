@@ -19,8 +19,6 @@ type in the top byte, allow in the low sixteen bits. The original prints the typ
 line with a name: devkit, retail, testkit, "retail slim".
 """
 
-from __future__ import annotations
-
 # The two bytes that end line 1, by console type.
 TYPES = {0: b"\x0f\x0f", 1: b"\x0f\xf0", 2: b"\xf0\x0f", 3: b"\xf0\xf0"}
 

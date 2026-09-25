@@ -28,8 +28,6 @@ The primitives underneath are XeCrypt's, each named for its XeCrypt function: `a
 `rc4` and `keys`.
 """
 
-from __future__ import annotations
-
 import hashlib
 
 from . import aes

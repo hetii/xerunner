@@ -10,8 +10,6 @@ The numbers it takes are read as hexadecimal whether or not they are written wit
 which its own legend states: "<b> = hexadecimal block number".
 """
 
-from __future__ import annotations
-
 from .network import NetworkConfig
 
 

@@ -12,8 +12,6 @@ names: it is hexadecimal either way, with or without separators.
 Update mode has no `-o`, so this class is inherited only by the modes that do.
 """
 
-from __future__ import annotations
-
 from .base import BaseConfig
 
 # Every power-on reason the original takes, and the byte it writes for each into the

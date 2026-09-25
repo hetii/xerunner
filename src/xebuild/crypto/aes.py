@@ -15,8 +15,6 @@ which is the difference between a build that finishes and one that does not -- t
 largest security file here is over eighteen hundred blocks.
 """
 
-from __future__ import annotations
-
 BLOCK = 16
 KEY_LENGTH = 16
 ROUNDS = 10

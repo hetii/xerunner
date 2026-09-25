@@ -1,7 +1,5 @@
 """Reading one dump the way a build would, and saying what is in it."""
 
-from __future__ import annotations
-
 import os
 import logging
 
