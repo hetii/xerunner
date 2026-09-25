@@ -3,6 +3,7 @@
 import os
 import logging
 
+from .. import boards
 from ..release import Patches
 from ..network.updsrv import PORT
 from ..network.info import PUBLIC_KEYS
@@ -83,6 +84,8 @@ def run_client(config, port: int = PORT) -> None:
                 send_avatars(server, config.directory, info.word(4))
             else:
                 send_compatibility(server, config.directory)
+        elif action == "binary-patch":
+            _binary_patch(server, info, config.file, config.offset)
         elif action == "erase-block":
             logger.info("erasing block %#x...", config.block)
             server.erase_blocks(config.block)
@@ -280,3 +283,62 @@ def _patches(server, info: ConsoleInfo, path: str | None) -> None:
         sent = b"\xff" * 0x10 + last
     server.write_patches(sent)
     logger.info("patches updated OK")
+
+
+def _binary_patch(server, info: ConsoleInfo, path: str, offset: int) -> None:
+    """`-bp`: the file's bytes put into the flash at a logical offset -- one that
+    counts no spare -- by reading the blocks it touches, patching them and writing them
+    back, as the original's 0x407BF0 does.
+
+    Sizes are the console's own, counted logically: its flash length and block length
+    in `GTIN` come with spare, 0x4200 bytes to every 0x4000, and an eMMC console's
+    (0x3000000) have none. A file that would reach the end of the flash is refused.
+    Each page the file lands in has its bytes put into its 0x200 of data and its
+    code recomputed (0x40FBB0, `Spare.with_ecc`); on eMMC the bytes go in as they
+    are.
+
+    **The block it starts at is `offset // block` here, where the original's is
+    always zero**: at 0x407CC9 it divides the remainder instead of the offset, so every
+    `-bp` reads, patches and writes back the first blocks of the flash -- measured,
+    it overwrote a console's flash header. The position inside the block and the
+    number of blocks it computes are right, and this keeps them. A deliberate
+    divergence: the fault destroys a console, and the usage says what was meant.
+    """
+    with open(path, "rb") as handle:
+        body = handle.read()
+    if not body:
+        raise ValueError("Unable to read file %s!" % path)
+    emmc = info.flash_length == 0x3000000
+    if emmc:
+        size, block = info.flash_length, info.block_length
+    else:
+        size = info.flash_length // 0x4200 * 0x4000
+        block = info.block_length // 0x4200 * 0x4000
+    if offset + len(body) >= size:
+        raise ValueError("File %s size patched into offset 0x%x will exceed NAND "
+                         "system area (0x%x)!" % (path, offset, size))
+    first, inside = divmod(offset, block)
+    count = -(-(inside + len(body)) // block)
+    logger.info("Reading 0x%x blocks from console starting at block 0x%x (%d)...",
+                count, first, first)
+    raw = bytearray(server.read_blocks(first, count))
+    if emmc:
+        raw[inside:inside + len(body)] = body
+    else:
+        # Page by page: 0x200 of data, then 0x10 of spare the patch never reaches.
+        spare = next(one.flash.spare for one in boards.ALL
+                     if one.flash.spare is not None)
+        at = 0
+        while at < len(body):
+            page, within = divmod(inside + at, 0x200)
+            take = min(0x200 - within, len(body) - at)
+            start = page * 0x210
+            raw[start + within:start + within + take] = body[at:at + take]
+            data = bytes(raw[start:start + 0x200])
+            raw[start + 0x200:start + 0x210] = spare.with_ecc(
+                data, bytes(raw[start + 0x200:start + 0x210]))
+            at += take
+    logger.info("Writing 0x%x blocks to console starting at block 0x%x...", count,
+                first)
+    server.write_blocks(first, bytes(raw), count)
+    logger.info("Success! Completed patching NAND!")
