@@ -6,13 +6,14 @@ import logging
 import os
 from types import SimpleNamespace
 
-from ..build import Build, layout, security
+from ..build import Build, layout
 from ..build.build import SEAL_ALIGN
 from ..chain import Chain
 from ..client.client import fuses_txt, options_ini
 from ..client.sysdata import send_avatars
 from ..config import BuildConfig
-from ..crypto import smc as cipher
+from ..crypto import formats
+from ..crypto.formats import decrypt_smc
 from ..image import Header, Image, Keyvault
 from ..image.settings import SmcConfig
 from ..network import ConsoleInfo, Server, find
@@ -34,31 +35,31 @@ class BuildUpdate(Build):
     """
 
     @property
-    def console_keyvault(self) -> bytes:
+    def _console_keyvault(self) -> bytes:
         """Out of the bootloaders it handed over; its extended.bin head is this one's,
         measured on an update image, as a dump's is."""
         return self.material.keyvault
 
-    def console_file(self, name: str) -> bytes | None:
+    def _console_file(self, name: str) -> bytes | None:
         """Its copy, read over its update server -- "retrieving USVR\\crl.bin...OK"."""
         return self.material.files.get(name.lower())
 
-    def console_firmware(self, name: str, crc: int) -> bytes | None:
+    def _console_firmware(self, name: str, crc: int) -> bytes | None:
         """Its copy counts with no checksum too, where a dump's does not: the original
         takes the console's (0x42875F) -- measured, `launch.xex` off the console when
         the base directory has none, and the base directory's when it has one."""
-        body = self.console_file(name)
+        body = self._console_file(name)
         return body if self._firmware_fits(body, name, crc) else None
 
     @property
-    def console_statistics(self) -> bytes | None:
+    def _console_statistics(self) -> bytes | None:
         """0x400 bytes, laid at the head of its block. What the original leaves in the
         rest of the block is not 0xFF and not anything it was handed -- repeatable, but
         its source is not found (see update's notes); this leaves it erased."""
         return self.material.statistics or None
 
     @property
-    def console_manufacturing(self) -> bytes | None:
+    def _console_manufacturing(self) -> bytes | None:
         """0x80 bytes, laid the same way."""
         return self.material.manufacturing or None
 
@@ -179,6 +180,27 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
     return kept
 
 
+def decrypt_securityfile(name: str, blob: bytes, cpu_key: bytes) -> bytes:
+    """A console's security file in the clear, headers as they were, as `-d` keeps it
+    for build mode to take up later -- each measured against the original's copy:
+    crl.bin with its file key unwrapped at 0x130, each dae.bin record opened,
+    extended.bin and secdata.bin behind their nonce, fcrt.bin behind its 0x140 bytes of
+    header."""
+    if name == "crl.bin":
+        body, _master, file_key = formats.decrypt_crl(blob, cpu_key)
+        return blob[:formats.WRAPPED_KEY_AT] + file_key + body
+    if name == "dae.bin":
+        return b"".join(header + body
+                        for header, body, _master in formats.decrypt_dae(blob, cpu_key))
+    if name == "extended.bin":
+        return blob[:formats.NONCE_LENGTH] + formats.decrypt_extended(blob, cpu_key)
+    if name == "secdata.bin":
+        return blob[:formats.NONCE_LENGTH] + formats.decrypt_secdata(blob, cpu_key)
+    if name == "fcrt.bin":
+        return blob[:formats.fcrt_body_at(blob)] + formats.decrypt_fcrt(blob, cpu_key)
+    return blob
+
+
 def _keep(where: str, info: ConsoleInfo, material: ConsoleMaterial, flash: bytes,
           image: bytes, name: str) -> None:
     """What `-d` keeps, as the original keeps it: the image, the console's flash and
@@ -188,10 +210,10 @@ def _keep(where: str, info: ConsoleInfo, material: ConsoleMaterial, flash: bytes
     cpu = info.cpu_key
     out = {name: image, "nanddump.bin": flash, "fbldrs.bin": material.bootloaders,
            "kv.bin": Keyvault.opened(material.keyvault, cpu).plain,
-           "smc.bin": cipher.opened(material.smc)}
+           "smc.bin": decrypt_smc(material.smc)}
     for file in SECURITY:
         if file in material.files:
-            out[file] = security.opened_copy(file, material.files[file], cpu)
+            out[file] = decrypt_securityfile(file, material.files[file], cpu)
     out.update(material.mobiles)
     if material.statistics is not None:
         out["Statistics.settings"] = material.statistics

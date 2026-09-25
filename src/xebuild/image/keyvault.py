@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import logging
 
-from ..crypto import keys, rc4
+from ..crypto.formats import decrypt_keyvault, encrypt_keyvault
 
 NONCE = 0x10
 
@@ -75,9 +75,7 @@ class Keyvault:
         Any key opens it to something; only its own opens it to a serial that reads as
         one, which is what `looks_opened` is for.
         """
-        sealed = bytes(sealed)
-        body = rc4.rc4(keys.derive(cpu_key, sealed[:NONCE]), sealed[NONCE:])
-        return cls(sealed[:NONCE] + body)
+        return cls(decrypt_keyvault(sealed, cpu_key))
 
     @classmethod
     def opened_if_own(cls, sealed: bytes, cpu_key: bytes) -> Keyvault | None:
@@ -126,10 +124,7 @@ class Keyvault:
         The nonce is derived rather than drawn, so this is the console's own bytes again
         and not merely a valid keyvault.
         """
-        body = self.plain[NONCE:]
-        # 0x07 0x12 is what the derivation takes beyond the plaintext itself.
-        nonce = keys.derive(cpu_key, body + b"\x07\x12")
-        return nonce + rc4.rc4(keys.derive(cpu_key, nonce), body)
+        return encrypt_keyvault(self.plain, cpu_key)
 
     @property
     def serial(self) -> str:

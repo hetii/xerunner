@@ -35,7 +35,7 @@ check out rather than recomputing it; a retail image does.
 
 from __future__ import annotations
 
-from ..crypto.keys import derive
+from ..crypto.keys import hmacsha
 
 
 class Fields:
@@ -79,7 +79,7 @@ class Fields:
 
     def expected(self, cpu_key: bytes, stage_key: bytes, fingerprint: bytes) -> bytes:
         """What `digest` should hold, from the console's key and the SMC's digest."""
-        return derive(cpu_key, bytes(stage_key) + self.head + bytes(fingerprint))
+        return hmacsha(cpu_key, bytes(stage_key) + self.head + bytes(fingerprint))
 
     def agrees(self, cpu_key: bytes, stage_key: bytes, fingerprint: bytes) -> bool:
         """Whether this stage and that SMC describe each other."""

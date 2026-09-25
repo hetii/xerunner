@@ -43,8 +43,7 @@ import collections
 import math
 import struct
 
-from ..crypto.keys import derive
-from ..crypto.rc4 import rc4
+from ..crypto.keys import hmacsha
 
 ONE_BL_KEY = bytes.fromhex("DD88AD0C9ED669E7B56794FB68563EFA")
 KEY_LENGTH = 0x10
@@ -113,26 +112,17 @@ def keys(stages, cpu_key: bytes = b"", second_pass_at: int = -1) -> tuple:
             message = message_for(stage, cpu_key, stages[0])
         else:
             message = stage.nonce
-        key = derive(secret, message)
+        key = hmacsha(secret, message)
         if index == second_pass_at:
             if not cpu_key:
                 raise ValueError(
                     "the stage at %d takes a second pass under the console's key and "
                     "none was given" % index
                 )
-            key = derive(cpu_key, key)
+            key = hmacsha(cpu_key, key)
         out.append(key)
         secret = key
     return tuple(out)
-
-
-def under(stage, secret: bytes) -> bytes:
-    """A stage opened under a secret, deriving the key from the stage's own nonce.
-
-    The whole of it, header included, because a stage's header is not encrypted and
-    everything that reads one counts from its start.
-    """
-    return stage.head + rc4(derive(secret, stage.nonce), stage.body)
 
 
 def entropy(data: bytes) -> float:

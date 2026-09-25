@@ -56,7 +56,7 @@ import logging
 
 from ..boards import ALL
 from ..boards.spare import PAGE
-from ..crypto import smc as cipher
+from ..crypto.formats import decrypt_smc
 from ..smc import Smc
 from .image import Image
 from .keyvault import Keyvault
@@ -340,7 +340,7 @@ class Dump:
                             keyvault.serial, keyvault.made_on)
             else:
                 logger.info("keyvault did not open with this cpu key")
-        smc = Smc(cipher.opened(self.smc))
+        smc = Smc(decrypt_smc(self.smc))
         logger.info("smc at %#x of size %#x: %s%s", head.smc_at, head.smc_size,
                     smc.named, ", a stock image" if smc.clean else "")
         logger.info("smc config at %#x of size %#x, %s", self.flash.smc_config,

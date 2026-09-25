@@ -24,8 +24,8 @@ from ..chain import Fields, fuses, sealing, update
 from ..chain.stage import LENGTH as STAGE_HEADER
 from ..chain.stage import Stage
 from ..config.options import BUTTONS
-from ..crypto import smc as cipher
-from ..crypto.rc4 import rc4
+from ..crypto.formats import decrypt_smc, encrypt_bootloader, encrypt_smc
+from ..crypto.smc import fingerprint
 from ..image import Dump, Entry, Header, Image, Keyvault, order
 from ..image import anchor as anchors
 from ..image import dump as dumps
@@ -294,14 +294,14 @@ class Build:
                     raise ValueError("smc.bin is neither in the clear nor a valid, "
                                      "decryptable SMC; smcnocheck builds with it all "
                                      "the same")
-                smc = Smc(cipher.opened(given))
+                smc = Smc(decrypt_smc(given))
             plain = smc.plain
         else:
             if self.dump is None:
                 raise ValueError("this build has neither an smc.bin nor a dump to take "
                                  "an SMC from")
             carried = self.dump.smc
-            plain = cipher.opened(carried)
+            plain = decrypt_smc(carried)
         if self.image_type.number in (2, 3, 4, 5):
             for name in ("smcnoeject", "smcnoblink"):
                 if getattr(self.config, name):
@@ -328,7 +328,7 @@ class Build:
             else:
                 own = self.dump.smc[:4] if self.dump is not None else None
                 seed = self._buffer("smc.bin", own)
-        return cipher.sealed(plain, seed)
+        return encrypt_smc(plain, seed)
 
     def _check_smc(self, smc: Smc) -> None:
         """What the original refuses an SMC for, and what `smcnocheck` waives.
@@ -371,14 +371,14 @@ class Build:
         """
         if (self.material.keyvault is None and self.dump is not None
                 and not self.drawing and not self._dvdkey_goes_in
-                and (not self.cpu_key or self._own_keyvault() is not None)):
+                and (not self.cpu_key or self._decrypt_console_keyvault() is not None)):
             return self.dump.sealed_keyvault
         return self.plain_keyvault().sealed(self.cpu_key)
 
-    def _own_keyvault(self) -> Keyvault | None:
+    def _decrypt_console_keyvault(self) -> Keyvault | None:
         """The console's keyvault, or None where this CPU key does not open it --
         which the original discards, and then stops for want of a kv.bin."""
-        sealed = self.console_keyvault
+        sealed = self._console_keyvault
         if sealed is None:
             return None
         own = Keyvault.opened_if_own(sealed, self.cpu_key)
@@ -409,7 +409,7 @@ class Build:
         if not self.cpu_key:
             raise ValueError("a keyvault is sealed under the CPU key, and none was "
                              "given")
-        own = self._own_keyvault()
+        own = self._decrypt_console_keyvault()
         given = self.material.keyvault
         if given is not None:
             vault = Keyvault.handed_in(given, self.cpu_key)
@@ -580,7 +580,7 @@ class Build:
             at = offsets[binds] + STAGE_HEADER
             out[at:at + Fields.LENGTH * 2] = Fields.write(
                 self.pairing, bound_to, keys[binds],
-                cipher.fingerprint(self.smc()),
+                fingerprint(self.smc()),
             )
         for stage, key in zip(stages, keys, strict=True):
             if key is None:
@@ -595,7 +595,7 @@ class Build:
             # the same place were something else entirely.
             padded = stage.length + -stage.length % SEAL_ALIGN
             body = bytes(out[stage.at + len(stage.head):stage.at + padded])
-            out[stage.at:stage.at + padded] = stage.head + rc4(key, body)
+            out[stage.at:stage.at + padded] = stage.head + encrypt_bootloader(body, key)
         return bytes(out)
 
     def _wears_console(self, stages, which: int = 0) -> int:
@@ -859,11 +859,11 @@ class Build:
     # answer them from elsewhere.
 
     @property
-    def console_keyvault(self) -> bytes | None:
+    def _console_keyvault(self) -> bytes | None:
         """The console's own keyvault, sealed, or None with no dump."""
         return self.dump.sealed_keyvault if self.dump is not None else None
 
-    def console_file(self, name: str) -> bytes | None:
+    def _console_file(self, name: str) -> bytes | None:
         """The console's own copy of a file -- crl.bin, ximedic.xex -- or None."""
         if self.dump is None:
             return None
@@ -872,19 +872,19 @@ class Build:
         except ValueError:
             return None
 
-    def console_firmware(self, name: str, crc: int) -> bytes | None:
+    def _console_firmware(self, name: str, crc: int) -> bytes | None:
         """The console's own copy of a `[flashfs]` file where it counts: a dump's only
         against a checksum -- with none it is read and passed over (0x428530)."""
-        body = self.console_file(name)
+        body = self._console_file(name)
         return body if crc and self._firmware_fits(body, name, crc) else None
 
     @property
-    def console_statistics(self) -> bytes | None:
+    def _console_statistics(self) -> bytes | None:
         """The console's Statistics block, or None with no dump."""
         return self.dump.statistics if self.dump is not None else None
 
     @property
-    def console_manufacturing(self) -> bytes | None:
+    def _console_manufacturing(self) -> bytes | None:
         """The console's Manufacturing block, or None where it keeps none."""
         if self.dump is None or not self.dump.manufacturing_written:
             return None
@@ -918,7 +918,7 @@ class Build:
 
         1. the release's directory, as the list spells the name;
         2. the update container;
-        3. the console's own copy -- `console_firmware`;
+        3. the console's own copy -- `_console_firmware`;
         4. `common/`.
 
         A name ending in `p` -- a patch file -- is looked for as itself, then with `1`
@@ -929,7 +929,7 @@ class Build:
         With no checksum -- `..\\launch.xex` and its neighbours -- only the release's
         directory and the console's own copy are asked (0x42ECF0), not the container
         and not `common/`; whether the console's copy then counts is
-        `console_firmware`'s.
+        `_console_firmware`'s.
         """
         if not listed.crc:
             return self._firmware_from(listed.name, 0, container=False, common=False)
@@ -963,7 +963,7 @@ class Build:
             body = self.release.container_file(plain)
             if crc and self._firmware_fits(body, plain, crc):
                 return body
-        body = self.console_firmware(plain, crc)
+        body = self._console_firmware(plain, crc)
         if body is not None:
             return body
         if common:
@@ -996,7 +996,7 @@ class Build:
         config = self.config
         own = None
         if not config.nosecurity:
-            own = self.console_file(name)
+            own = self._console_file(name)
             if own is not None and not security.verifies(name, own, self.cpu_key):
                 logger.warning("%s verify failed! Discarding data.", name)
                 own = None
@@ -1371,10 +1371,10 @@ class Build:
         span = 0x1000
         stats_at = flash.smc_config - flash.round_to
         out = []
-        if self.console_manufacturing is not None:
-            out.append((stats_at - flash.round_to, self.console_manufacturing, span))
-        if self.console_statistics is not None and not self.config.nomobile:
-            out.append((stats_at, self.console_statistics, span))
+        if self._console_manufacturing is not None:
+            out.append((stats_at - flash.round_to, self._console_manufacturing, span))
+        if self._console_statistics is not None and not self.config.nomobile:
+            out.append((stats_at, self._console_statistics, span))
         config = self._given_config()
         if config is None and self.dump is None:
             # With no dump the block has to come from the directory, and the original

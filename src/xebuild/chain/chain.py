@@ -38,7 +38,8 @@ from __future__ import annotations
 
 import logging
 
-from ..crypto.rc4 import rc4
+from ..crypto.formats import decrypt_bootloader
+from ..crypto.keys import hmacsha
 from . import sealing
 from .console import Fields
 from .stage import Stage
@@ -99,7 +100,8 @@ class Chain:
     def _opened_slots(self) -> tuple:
         """Every slot with what it says, since which one counts is in the contents."""
         found = tuple(
-            (one, Fields.in_cf(sealing.under(one, sealing.ONE_BL_KEY)))
+            (one, Fields.in_cf(one.head + decrypt_bootloader(
+                one.body, hmacsha(sealing.ONE_BL_KEY, one.nonce))))
             for one in self.slots
         )
         if not found:
@@ -164,13 +166,14 @@ class Chain:
             return plain
         # No CB_B, so the pass may be in front of the stage behind the single CB.
         stage, key = self.stages[1], plain[1]
-        if key is None or sealing.looks_open(stage.tag, rc4(key, stage.body)):
+        if key is None or sealing.looks_open(stage.tag,
+                                             decrypt_bootloader(stage.body, key)):
             return plain
         return sealing.keys(self.stages, cpu_key, second_pass_at=1)
 
     def opened(self, stage: Stage, key: bytes) -> bytes:
         """One stage's body with the cipher run over it, whatever state it was in."""
-        return rc4(key, stage.body)
+        return decrypt_bootloader(stage.body, key)
 
     def plain(self, stage: Stage, key: bytes) -> bytes:
         """One stage's body in the clear, whichever state this image keeps it in.

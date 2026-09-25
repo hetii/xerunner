@@ -12,7 +12,8 @@ import hashlib
 import unittest
 
 from xebuild.build import security
-from xebuild.crypto.keys import derive
+from xebuild.crypto import formats
+from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
 
 KEY = bytes(range(0x10))
@@ -57,7 +58,7 @@ class TellingOpenFromSealed(unittest.TestCase):
         """0x41D6A0: all zero, or HMAC(cpu, body + 07 12); anything else is sealed."""
         body = bytes(range(256)) * 0x3F + bytes(0xF0)
         zero = bytes(0x10) + body
-        derived = derive(KEY, body + b"\x07\x12") + body
+        derived = hmacsha(KEY, body + b"\x07\x12") + body
         sealed = security.extended(derived, body[:8], KEY, clear=True)
         self.assertTrue(security.in_the_clear("extended.bin", zero, KEY))
         self.assertTrue(security.in_the_clear("extended.bin", derived, KEY))
@@ -80,7 +81,7 @@ class WhatOpens(unittest.TestCase):
     def test_a_dae_opens_record_by_record_and_may_be_mixed(self):
         """0x41E1CA: each record open, or under the console's key or the shipped."""
         sealed, plain = a_dae(), a_dae(clear=True)
-        records = security.records(sealed)
+        records = formats.records(sealed)
         first = records[0][1]
         mixed = plain[:first] + sealed[first:]
         for blob in (sealed, plain, mixed):
@@ -108,7 +109,7 @@ class TheKeyvaultStyleTwo(unittest.TestCase):
         body = bytes(range(256)) * 3 + bytes(0xF0)
         handed = b"\x55" * 0x10 + body
         sealed = security.secdata(handed, KEY, WHEN, 9, b"HEADHEAD", clear=True)
-        plain = rc4(derive(KEY, sealed[:0x10]), sealed[0x10:])
+        plain = rc4(hmacsha(KEY, sealed[:0x10]), sealed[0x10:])
         self.assertEqual(plain[:8], b"HEADHEAD")
         self.assertEqual(plain[8:10], b"\x01\x09")
         # WHEN is odd, and the stamp keeps even seconds.
@@ -119,7 +120,6 @@ class TheKeyvaultStyleTwo(unittest.TestCase):
         sealed = security.extended(None, b"HEADHEAD", OTHER)
         self.assertFalse(security.opens("extended.bin", sealed, KEY))
         self.assertTrue(security.opens("extended.bin", sealed, OTHER))
-
 
 
 class TheStamp(unittest.TestCase):
@@ -161,6 +161,42 @@ class AFileHandedInBesideTheBuild(unittest.TestCase):
                          ("use", True))
         self.assertEqual(security.taken_beside("odd.bin", b"anything", KEY),
                          ("use", False))
+
+
+class TheFcrtFile(unittest.TestCase):
+    """`security.fcrt`, as the original's 0x41E620 goes."""
+
+    KEY = bytes(range(16))
+
+    def clear(self, body_at=0x140, length=0x4000):
+        blob = bytearray(length)
+        blob[0x100:0x110] = bytes(range(0x10, 0x20))
+        blob[0x11C:0x120] = body_at.to_bytes(4, "big")
+        blob[body_at:] = bytes(one & 0xFF for one in range(length - body_at))
+        blob[0x12C:0x140] = hashlib.sha1(bytes(blob[body_at:])).digest()
+        return bytes(blob)
+
+    def test_a_clear_one_is_sealed_from_where_its_header_says(self):
+        for body_at in (0x140, 0x150):
+            with self.subTest(body_at=hex(body_at)):
+                given = self.clear(body_at)
+                sealed = security.fcrt(given, self.KEY)
+                self.assertEqual(sealed[:body_at], given[:body_at])
+                self.assertNotEqual(sealed[body_at:], given[body_at:])
+                self.assertEqual(formats.decrypt_fcrt(sealed, self.KEY),
+                                 given[body_at:])
+
+    def test_a_sealed_one_is_carried(self):
+        sealed = security.fcrt(self.clear(), self.KEY)
+        self.assertEqual(security.fcrt(sealed, self.KEY), sealed)
+
+    def test_the_wrong_length_or_offset_is_left_as_it_is(self):
+        longer = self.clear() + b"\xab" * 5
+        self.assertEqual(security.fcrt(longer, self.KEY), longer)
+        moved = bytearray(self.clear())
+        moved[0x11C:0x120] = (0x4000).to_bytes(4, "big")
+        self.assertEqual(security.fcrt(bytes(moved), self.KEY), bytes(moved))
+
 
 if __name__ == "__main__":
     unittest.main()

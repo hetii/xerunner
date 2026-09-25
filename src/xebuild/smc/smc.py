@@ -48,7 +48,7 @@ from __future__ import annotations
 import binascii
 import re
 
-from ..crypto import smc as cipher
+from ..crypto.formats import decrypt_smc
 
 # The top half of the byte at 0x100, as the original names it. Seven has no name.
 MOTHERBOARDS = {
@@ -106,7 +106,7 @@ class Smc:
         """
         if given[-4:] == bytes(4):
             return cls(given)
-        plain = cipher.opened(given)
+        plain = decrypt_smc(given)
         return cls(plain) if plain[-4:] == bytes(4) else None
 
     @property

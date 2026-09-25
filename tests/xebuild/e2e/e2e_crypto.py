@@ -6,7 +6,7 @@ Needs real material and says which. See `tests/xebuild/e2e/__init__.py`.
 import os
 import unittest
 
-from xebuild.crypto import smc
+from xebuild.crypto import formats, smc
 
 
 def hexed(text: str) -> bytes:
@@ -26,12 +26,12 @@ class AConsoleSOwnSmc(unittest.TestCase):
 
     def test_it_opens_to_something_that_looks_like_an_smc(self):
         """Every plaintext SMC the release ships carries these twelve bytes at four."""
-        opened = smc.opened(self.sealed)
+        opened = formats.decrypt_smc(self.sealed)
         self.assertEqual(opened[4:16], hexed("01c641bb01c6212d01c601c6"))
 
     def test_sealing_it_again_under_its_own_seed_gives_the_same_bytes(self):
-        opened = smc.opened(self.sealed)
-        self.assertEqual(smc.sealed(opened, self.sealed[:4]), self.sealed)
+        opened = formats.decrypt_smc(self.sealed)
+        self.assertEqual(formats.encrypt_smc(opened, self.sealed[:4]), self.sealed)
 
     def test_its_fingerprint_is_taken_over_the_sealed_bytes_and_not_the_open_ones(self):
         """Both give sixteen bytes, so nothing complains if the wrong one is used.
@@ -41,7 +41,8 @@ class AConsoleSOwnSmc(unittest.TestCase):
         which is the part that would go unnoticed.
         """
         over_sealed = smc.fingerprint(self.sealed)
-        self.assertNotEqual(over_sealed, smc.fingerprint(smc.opened(self.sealed)))
+        opened = formats.decrypt_smc(self.sealed)
+        self.assertNotEqual(over_sealed, smc.fingerprint(opened))
         wanted = os.environ.get("XEBUILD_SMC_FINGERPRINT", "")
         if wanted:
             self.assertEqual(over_sealed.hex(), wanted.strip().lower())

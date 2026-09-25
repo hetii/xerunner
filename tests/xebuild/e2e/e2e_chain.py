@@ -9,7 +9,7 @@ import unittest
 from xebuild.boards import for_name
 from xebuild.chain import Chain, Fields, sealing
 from xebuild.crypto import smc
-from xebuild.crypto.keys import derive
+from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
 from xebuild.image import Dump, Image
 
@@ -54,7 +54,7 @@ class AConsoleSOwnChain(unittest.TestCase):
         """It is sealed under the key every console carries, which is why extract
         mode can read a pairing out of a dump it holds no key for."""
         slot = self.chain.slot
-        plain = slot.head + rc4(derive(sealing.ONE_BL_KEY, slot.nonce), slot.body)
+        plain = slot.head + rc4(hmacsha(sealing.ONE_BL_KEY, slot.nonce), slot.body)
         self.assertEqual(Fields.in_cf(plain).pairing, self.chain.console.pairing)
 
     def test_the_field_in_cb_b_ties_the_chain_to_the_smc_beside_it(self):

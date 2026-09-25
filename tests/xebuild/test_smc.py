@@ -9,7 +9,7 @@ given the release's own images, this says exactly what the original said about e
 import binascii
 import unittest
 
-from xebuild.crypto import smc as cipher
+from xebuild.crypto.formats import encrypt_smc
 from xebuild.smc import CLEAN, MOTHERBOARDS, Smc
 
 
@@ -82,7 +82,7 @@ class AnSmcHandedIn(unittest.TestCase):
 
     def test_a_sealed_one_is_opened(self):
         plain = an_smc()
-        opened = Smc.handed_in(cipher.sealed(plain, b"\x12\x34\x56\x78"))
+        opened = Smc.handed_in(encrypt_smc(plain, b"\x12\x34\x56\x78"))
         self.assertEqual(opened.plain[4:], plain[4:])
 
     def test_one_that_does_not_open_to_four_zeros_is_none(self):

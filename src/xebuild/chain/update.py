@@ -17,8 +17,8 @@ carries at 0x330. Update mode lays the same pair over a console that is running.
 
 from __future__ import annotations
 
-from ..crypto.keys import derive
-from ..crypto.rc4 import rc4
+from ..crypto.formats import encrypt_bootloader
+from ..crypto.keys import hmacsha
 from . import sealing
 from .stage import Stage
 
@@ -55,8 +55,8 @@ def with_console(cf: bytearray, slot: int, pairing: bytes, ldv: int,
     cf[0x21C:0x21F] = pairing
     cf[0x21F] = ldv & 0xFF
     message = bytearray(cf[:0x220])
-    message[0x20:0x30] = derive(sealing.ONE_BL_KEY, bytes(cf[0x20:0x30]))
-    cf[0x220:0x230] = derive(cpu_key, bytes(message))
+    message[0x20:0x30] = hmacsha(sealing.ONE_BL_KEY, bytes(cf[0x20:0x30]))
+    cf[0x220:0x230] = hmacsha(cpu_key, bytes(message))
 
 
 def sealed(cf: bytes, cg: bytes, cg_nonce: bytes, align: int) -> bytes:
@@ -65,8 +65,10 @@ def sealed(cf: bytes, cg: bytes, cg_nonce: bytes, align: int) -> bytes:
     CG is sealed over its padding to `align` too, as every stage is: its tail file is
     ten bytes longer than CG says it is, and those ten are the stream carrying on.
     """
-    sealed_cf = sealing.under(Stage(bytes(cf), 0), sealing.ONE_BL_KEY)
+    stage = Stage(bytes(cf), 0)
+    sealed_cf = stage.head + encrypt_bootloader(
+        stage.body, hmacsha(sealing.ONE_BL_KEY, stage.nonce))
     cg = bytes(cg) + bytes(-len(cg) % align)
     head = len(Stage(cg, 0).head)
-    key = derive(bytes(cf[0x330:0x340]), cg_nonce)
-    return sealed_cf + cg[:head] + rc4(key, cg[head:])
+    key = hmacsha(bytes(cf[0x330:0x340]), cg_nonce)
+    return sealed_cf + cg[:head] + encrypt_bootloader(cg[head:], key)

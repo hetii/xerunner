@@ -13,8 +13,15 @@ import unittest
 from xebuild.boards import for_name
 from xebuild.chain import Chain, Fields, fuses, sealing, update
 from xebuild.chain.stage import Stage
-from xebuild.crypto.keys import derive
+from xebuild.crypto.formats import decrypt_bootloader
+from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
+
+
+def opened_under_the_1bl_key(stage):
+    """A CF-sealed stage opened, header and all: the key HMAC(1BL key, its nonce)."""
+    return stage.head + decrypt_bootloader(stage.body,
+                                           hmacsha(sealing.ONE_BL_KEY, stage.nonce))
 
 
 def a_stage(tag: str, length: int, build: int = 0x1000, flags: int = 0,
@@ -176,7 +183,7 @@ class TheSealing(unittest.TestCase):
         ordinary = sealing.keys(stages, cpu)
         asked = sealing.keys(stages, cpu, second_pass_at=1)
         self.assertEqual(ordinary[0], asked[0])
-        self.assertEqual(asked[1], derive(cpu, ordinary[1]))
+        self.assertEqual(asked[1], hmacsha(cpu, ordinary[1]))
         self.assertNotEqual(ordinary[1], asked[1])
 
     def test_the_pass_carries_forward_to_the_stage_behind_it(self):
@@ -184,7 +191,7 @@ class TheSealing(unittest.TestCase):
         stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CD", "CE")]
         cpu = bytes(range(0x10))
         asked = sealing.keys(stages, cpu, second_pass_at=1)
-        self.assertEqual(asked[2], derive(asked[1], stages[2].nonce))
+        self.assertEqual(asked[2], hmacsha(asked[1], stages[2].nonce))
 
     def test_a_second_pass_without_a_console_key_is_refused(self):
         stages = [Stage(a_stage(tag, 0x100), 0) for tag in ("CB", "CD")]
@@ -241,7 +248,7 @@ class AMadeUpChain(unittest.TestCase):
                 plain = bytearray(one)
                 plain[0x21C:0x21F] = bytes([index + 1]) * 3
                 plain[0x21F] = lockdowns[index]
-                key = derive(sealing.ONE_BL_KEY, bytes(plain[0x20:0x30]))
+                key = hmacsha(sealing.ONE_BL_KEY, bytes(plain[0x20:0x30]))
                 one = bytes(plain[:0x30]) + rc4(key, bytes(plain[0x30:]))
             flat[where : where + 0x400] = one
         return Chain(self.Sham(bytes(flat), 0x8000, slots_at), board)
@@ -365,8 +372,8 @@ class WritingAnUpdatePair(unittest.TestCase):
         self.assertEqual(Fields.in_cf(bytes(cf)).pairing, b"\x78\x02\x27")
         self.assertEqual(Fields.in_cf(bytes(cf)).ldv, 14)
         message = bytearray(cf[:0x220])
-        message[0x20:0x30] = derive(sealing.ONE_BL_KEY, bytes(cf[0x20:0x30]))
-        self.assertEqual(bytes(cf[0x220:0x230]), derive(self.KEY, bytes(message)))
+        message[0x20:0x30] = hmacsha(sealing.ONE_BL_KEY, bytes(cf[0x20:0x30]))
+        self.assertEqual(bytes(cf[0x220:0x230]), hmacsha(self.KEY, bytes(message)))
         other = bytearray(a_stage("CF", 0x400))
         update.with_console(other, 1, b"\x78\x02\x27", 14, bytes(0x10))
         self.assertNotEqual(other[0x220:0x230], cf[0x220:0x230])
@@ -378,10 +385,10 @@ class WritingAnUpdatePair(unittest.TestCase):
         cg = a_stage("CG", 0x206, nonce=cg_nonce)
         run = update.sealed(cf, cg, cg_nonce, 0x10)
         self.assertEqual(len(run), 0x400 + 0x210)
-        self.assertEqual(sealing.under(Stage(run, 0), sealing.ONE_BL_KEY)[:0x400],
+        self.assertEqual(opened_under_the_1bl_key(Stage(run, 0))[:0x400],
                          bytes(cf))
         sealed_cg = Stage(run, 0x400)
-        key = derive(b"\x5a" * 0x10, cg_nonce)
+        key = hmacsha(b"\x5a" * 0x10, cg_nonce)
         self.assertEqual(rc4(key, run[0x420:]), cg[0x20:] + bytes(10))
         self.assertEqual(sealed_cg.nonce, cg_nonce)
 
