@@ -44,6 +44,63 @@ DATA_AT = 0xC000
 SPAN, SPAN2 = 0xAA, 0x70E4
 
 
+def intact(raw: bytes, header_hash: bytes = b"") -> bool:
+    """Whether a package holds together the way the original checks one before it
+    sends it anywhere (0x405FA0, 0x405610).
+
+    Its header is hashed from 0x344 to the header's size (0x340, rounded up to a
+    block) against 0x32C, and a hash a manifest lists for it has to be that same
+    0x32C -- unless the manifest's twenty bytes are all zero. Then each data block
+    against its row in the table above it, a table at a time; a table whose first
+    row has a zero word at +0x14 is taken for the table above tables, hashed against
+    0x381 and checked to hold the first table's hash, and every table after it is
+    checked against its next row. A zero row ends a table early, and a package ends
+    where two blocks no longer fit.
+
+    Only two levels are walked, as there: a package past 0x70E4 blocks would need a
+    third, and none sent was that large. The layout is taken as the original takes
+    it, one block to a table, which is not `Package`'s reading of its own tables --
+    a check and a reader, not one thing.
+    """
+    raw = bytes(raw)
+    if len(raw) < 0x344:
+        return False
+    if any(header_hash) and raw[0x32C:0x340] != bytes(header_hash):
+        return False
+    head = (struct.unpack_from(">I", raw, 0x340)[0] + BLOCK - 1) & ~(BLOCK - 1)
+    if hashlib.sha1(raw[0x344:head]).digest() != raw[0x32C:0x340]:
+        return False
+
+    def matches(at: int, wanted: bytes) -> bool:
+        return hashlib.sha1(raw[at:at + BLOCK]).digest() == wanted[:0x14]
+
+    table, data, counted = head, head + BLOCK, 0
+    above, row = None, 0x18
+    while True:
+        end, full = counted + SPAN, False
+        while True:
+            entry = raw[table:table + 0x18]
+            if not any(entry):
+                break
+            if not matches(data, entry):
+                return False
+            counted, table, data = counted + 1, table + 0x18, data + BLOCK
+            if counted == end:
+                full = True
+                break
+        if data + 2 * BLOCK >= len(raw):
+            return True
+        if not any(raw[data + 0x14:data + 0x18]):
+            if not matches(data, raw[0x381:0x395]) or not matches(head, raw[data:]):
+                return False
+            above, data = data, data + BLOCK
+        if above is not None and not matches(data, raw[above + row:]):
+            return False
+        table, data, row = data, data + BLOCK, row + 0x18
+        if not full:
+            return True
+
+
 class Held:
     """One file the package holds: where its blocks are and how long it is."""
 

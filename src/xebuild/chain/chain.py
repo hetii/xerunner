@@ -123,6 +123,18 @@ class Chain:
         in its very last instruction, which is what decides whether a build draws its
         nonces.
         """
+        read, finished = self.positional()
+        if finished:
+            cf = self.slot
+            read["CF"] = cf.nonce
+            read["CG"] = Stage(cf.image, cf.at + cf.length).nonce
+        return read, finished
+
+    def positional(self) -> tuple:
+        """`nonce_walk` short of the slot: the stages' nonces by the buffer they fill,
+        and whether the walk reached a CE -- which is also update mode's test of a
+        console's bootloaders, "bootloaders retrieved from console are inconsistent,
+        cannot proceed!" on an RGH3 chain."""
         read, finished, due = {}, False, 0
         for stage in self.walked:
             if stage.tag == "CB" and due < 2:
@@ -135,10 +147,6 @@ class Chain:
                 break
             else:
                 break
-        if finished:
-            cf = self.slot
-            read["CF"] = cf.nonce
-            read["CG"] = Stage(cf.image, cf.at + cf.length).nonce
         return read, finished
 
     def keys(self, cpu_key: bytes = b"") -> tuple:

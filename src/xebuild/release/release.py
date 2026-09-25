@@ -104,38 +104,31 @@ class Release:
             return None
         return Patches(self._read(self.where, "bin", name))
 
-    def firmware(self, listed) -> bytes | None:
-        """One file the recipe's `[flashfs]` names, or None when the release has none.
+    def listed_file(self, name: str) -> bytes | None:
+        """A `[flashfs]` file relative to the release, as the list spells it, or None.
 
-        The update container first and then the directories a bootloader is looked for
-        in. Measured on 17559: twenty-five of its files are only in the container, and
-        three -- `xenonclatin.xtt`, `xenonjklatin.xtt`, `ximedic.xex` -- only in
-        `common/`, where every release since 1888 keeps them. **The release's own
-        directory comes before `common/`**: 17489 keeps its own `xenonclatin.xtt`
-        beside its list, and the image the original built carries that one.
-
-        A name the list gives as `..\\launch.xex` is outside the release altogether, and
-        when nothing is there the original leaves it out of the image without a word --
-        its file list states a checksum of zero for such a file, which is how it says
-        the file is optional.
+        The first place the original looks for any of them (0x427730, called first
+        from 0x428040): `17559\\xenonclatin.xtt` in the release's own directory,
+        `..\\launch.xex` in the base directory, 1838's `1838-fs\\xam.xex` in a directory
+        of its own. Which source a build then takes is `Build`'s -- see
+        `Build._firmware_file`.
         """
-        name = listed.plain
-        if listed.plain != listed.name:
-            # Relative to the release, as the list spells it -- `..\\launch.xex` is the
-            # base directory's, whatever the release keeps under the same name, and
-            # 1838's `1838-fs\\xam.xex` is in a directory of its own.
-            path = os.path.normpath(os.path.join(self.where,
-                                                 listed.name.replace("\\", "/")))
-            found = self._beside(os.path.dirname(path), os.path.basename(path))
-            return self._read(found) if found else None
-        if self.container is not None and \
-                self.container.firmware_name(name) is not None:
-            return self.container.firmware(name)
-        for where in (self.where, self.common):
-            path = self._beside(where, name)
-            if path:
-                return self._read(path)
-        return None
+        path = os.path.normpath(os.path.join(self.where, name.replace("\\", "/")))
+        found = self._beside(os.path.dirname(path), os.path.basename(path))
+        return self._read(found) if found else None
+
+    def container_file(self, name: str) -> bytes | None:
+        """A firmware file out of the update container, by its plain name, or None."""
+        if self.container is None or self.container.firmware_name(name) is None:
+            return None
+        return self.container.firmware(name)
+
+    def common_file(self, name: str) -> bytes | None:
+        """A firmware file in `common/`, by its plain name, or None -- where every
+        release since 1888 keeps `xenonclatin.xtt`, `xenonjklatin.xtt` and
+        `ximedic.xex` (0x427CC0: "reading ./common/xenonclatin.xtt")."""
+        path = self._beside(self.common, name)
+        return self._read(path) if path else None
 
     def raw_file(self, name: str) -> bytes:
         """A file `-8` names, which the original looks for relative to the release."""

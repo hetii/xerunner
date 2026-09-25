@@ -5,6 +5,7 @@ real one: written, read back, and checked. Where scratch goes is `tests/__init__
 business.
 """
 
+import binascii
 import os
 import shutil
 import struct
@@ -21,6 +22,7 @@ from xebuild.crypto import smc as cipher
 from xebuild.crypto.keys import derive
 from xebuild.crypto.rc4 import rc4
 from xebuild.image import Directory, Header, Image, Keyvault
+from xebuild.image import dump as dumps
 from xebuild.image.directory import CHAIN_END
 from xebuild.imagetypes import for_name as type_for
 from xebuild.release import Patches
@@ -344,6 +346,7 @@ class AChainOfMadeUpStages:
     is the real one."""
 
     nonce_walk = Chain.nonce_walk
+    positional = Chain.positional
 
     def __init__(self, tags=("CB", "CB", "CD", "CE")):
         self.walked = tuple(
@@ -895,8 +898,21 @@ class AListOfFirmware:
 
 
 class AReleaseHoldingEveryFile:
-    def firmware(self, listed):
-        return b"body"
+    """Every file beside its list, holding `BODY`; nothing in a container or common/."""
+
+    def listed_file(self, name):
+        return BODY
+
+    def container_file(self, name):
+        return None
+
+    def common_file(self, name):
+        return None
+
+
+BODY = b"body"
+# The checksum a list states for `BODY`, so the file counts.
+CRC = "%08x" % binascii.crc32(BODY)
 
 
 class TheSmallerRulesOfABuild(unittest.TestCase):
@@ -911,7 +927,7 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
     def test_a_jtag_image_names_its_patch_files_for_two_slots_whatever_it_lists(self):
         """`aac.xexp2` from a JTAG list with its own pair taken out -- measured; and
         any name ending in p that the list vouches for, 17489's `rrbkgnd.bmp` too."""
-        listed = (("aac.xexp", "12345678"), ("rrbkgnd.bmp", "12345678"))
+        listed = (("aac.xexp", CRC), ("rrbkgnd.bmp", CRC))
         self.assertEqual(self.names("jtag", "falcon", *listed),
                          ["aac.xexp2", "rrbkgnd.bmp2"])
         self.assertEqual(self.names("glitch2", "trinity", *listed),
@@ -1004,12 +1020,12 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
 
     def test_a_listed_sysupdate_xexp_is_left_out_in_any_case(self):
         """ "'sysupdate.xexp' is a reserved name!", `_strnicmp` over fourteen."""
-        listed = (("SysUpdate.xexp1", "12345678"), ("aac.xexp", "12345678"))
+        listed = (("SysUpdate.xexp1", CRC), ("aac.xexp", CRC))
         self.assertEqual(self.names("glitch2", "trinity", *listed), ["aac.xexp1"])
 
 
 class HowMuchOfADumpIsRead(unittest.TestCase):
-    """`Build._cut`: the original's loader rule for a dump longer than 48 MB."""
+    """`image.dump.cut`: the original's loader rule for a dump longer than 48 MB."""
 
     SPARE = for_name("trinity")[0].flash.spare
 
@@ -1019,23 +1035,23 @@ class HowMuchOfADumpIsRead(unittest.TestCase):
 
     def test_nothing_up_to_48_mb_is_cut(self):
         raw = bytes(0x3000000)
-        self.assertIs(Build._cut(raw), raw)
+        self.assertIs(dumps.cut(raw), raw)
 
     def test_an_emmc_dump_past_48_mb_is_cut_there(self):
         """Measured both ways: `FATX` at 0x3000000, or no code on the first page."""
         fatx = self.a_nand_start().ljust(0x3000000, b"\0") + b"FATX" + bytes(0x100)
-        self.assertEqual(len(Build._cut(fatx)), 0x3000000)
-        self.assertEqual(len(Build._cut(bytes(0x4000000))), 0x3000000)
+        self.assertEqual(len(dumps.cut(fatx)), 0x3000000)
+        self.assertEqual(len(dumps.cut(bytes(0x4000000))), 0x3000000)
 
     def test_a_big_block_part_read_whole_is_cut_to_64_mb(self):
         raw = self.a_nand_start().ljust(0x4200000 + 0x1000, b"\0")
-        self.assertEqual(len(Build._cut(raw)), 0x4200000)
+        self.assertEqual(len(dumps.cut(raw)), 0x4200000)
         exact = raw[:0x4200000]
-        self.assertIs(Build._cut(exact), exact)
+        self.assertIs(dumps.cut(exact), exact)
 
 
 class WhichDumpsAreThrownAway(unittest.TestCase):
-    """`Build._faulty`, over a made-up run of blocks of a 16 MB part.
+    """`image.dump.faulty`, over a made-up run of blocks of a 16 MB part.
 
     Each rule measured on the bench console's dump with the one fault put in: the
     original discarded it, and with the console's own files beside the build made the
@@ -1073,8 +1089,8 @@ class WhichDumpsAreThrownAway(unittest.TestCase):
                 out += data + fields
         return bytes(out)
 
-    def faulty(self, raw, **settings):
-        return a_build(self, dump=False, **settings)._faulty(raw, self.FLASH)
+    def faulty(self, raw, ecd=True):
+        return dumps.faulty(raw, self.FLASH, ecd=ecd)
 
     def test_a_sound_dump_is_kept(self):
         self.assertEqual(self.faulty(self.a_dump()), "")
@@ -1114,21 +1130,19 @@ class WhichDumpsAreThrownAway(unittest.TestCase):
         head = bytearray(self.a_header())
         head[0x10:0x1E] = b"zeropair image"
         raw = bytes(head).ljust(0x100000, b"\0")
-        one = a_build(self, dump=False)
-        self.assertIn("ZEROPAIR", one._faulty(raw, emmc))
-        self.assertEqual(one._faulty(self.a_header().ljust(0x100000, b"\0"), emmc), "")
+        self.assertIn("ZEROPAIR", dumps.faulty(raw, emmc))
+        self.assertEqual(dumps.faulty(self.a_header().ljust(0x100000, b"\0"), emmc), "")
 
     def test_block_0_marked_bad(self):
         self.assertIn("block 0", self.faulty(self.a_dump(bad=(0,))))
 
     def test_more_than_32_to_remap_whether_marked_or_failing_their_code(self):
-        """32 is kept; 33 is not, and `noremap` does not change that -- measured."""
+        """32 is kept, 33 is not -- measured, `noremap` or not, which is why it is not
+        asked here."""
         self.assertEqual(self.faulty(self.a_dump(bad=range(1, 33))), "")
         self.assertIn("33", self.faulty(self.a_dump(bad=range(1, 34))))
-        self.assertIn("33", self.faulty(self.a_dump(bad=range(1, 34)), noremap=True))
         self.assertIn("33", self.faulty(self.a_dump(failing=range(1, 34))))
 
     def test_noecdremap_takes_the_failing_ones_out_of_the_count(self):
-        self.assertEqual(self.faulty(self.a_dump(failing=range(1, 34)),
-                                     noecdremap=True), "")
+        self.assertEqual(self.faulty(self.a_dump(failing=range(1, 34)), ecd=False), "")
 
