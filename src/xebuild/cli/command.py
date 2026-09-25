@@ -20,17 +20,17 @@ the original warns.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
+import logging
 
 from ..build import build_image
 from ..client import run_client
-from ..config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
-from ..config.options import OptionsConfig
-from ..extract import extract_image
-from ..network import ServerError
 from ..update import run_update
+from ..network import ServerError
+from ..extract import extract_image
+from ..config.options import OptionsConfig
+from ..config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
 
 logger = logging.getLogger(__name__)
 
@@ -461,4 +461,3 @@ def _update(argv) -> int:
     if not config.no_enter and sys.stdin.isatty():
         input("press <enter> to quit...")
     return 0
-

@@ -47,8 +47,8 @@ list is positional and the holes are part of the shape rather than something to 
 
 from __future__ import annotations
 
-import binascii
 import struct
+import binascii
 
 # What a checksum covers, from the readme every release ships beside its file lists:
 # the stage is cut to the size it states at 0x0C, and the fields belonging to this copy

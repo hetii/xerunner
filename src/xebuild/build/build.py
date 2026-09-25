@@ -12,29 +12,27 @@ were measured, and what a mistake in one of them looks like.
 
 from __future__ import annotations
 
-import binascii
-import hashlib
-import logging
 import os
 import time
+import hashlib
+import logging
+import binascii
 
-from .. import boards, jtag
-from ..boards.flash import PAGE
-from ..chain import Fields, fuses, sealing, update
-from ..chain.stage import LENGTH as STAGE_HEADER
-from ..chain.stage import Stage
-from ..config.options import BUTTONS
-from ..crypto.formats import decrypt_smc, encrypt_bootloader, encrypt_smc
-from ..crypto.smc import fingerprint
-from ..image import Dump, Entry, Header, Image, Keyvault, order
-from ..image import anchor as anchors
-from ..image import dump as dumps
-from ..image.settings import TEMPERATURES, SmcConfig
-from ..release import Release
 from ..smc import Smc
+from .. import boards, jtag
+from ..release import Release
 from . import layout, security
-from .filesystem import Filesystem
 from .material import Material
+from ..boards.flash import PAGE
+from .filesystem import Filesystem
+from ..config.options import BUTTONS
+from ..crypto.smc import fingerprint
+from ..image import dump as dumps, order
+from ..chain import Fields, fuses, sealing, update
+from ..image.settings import TEMPERATURES, SmcConfig
+from ..chain.stage import LENGTH as STAGE_HEADER, Stage
+from ..crypto.formats import decrypt_smc, encrypt_bootloader, encrypt_smc
+from ..image import Dump, Entry, Header, Image, Keyvault, anchor as anchors
 
 # The copyright line every image carries, with the year a build replaces. Read off the
 # sixteen reference images, which carry two different years and nothing else different.

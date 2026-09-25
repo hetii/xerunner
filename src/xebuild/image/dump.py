@@ -54,14 +54,14 @@ from __future__ import annotations
 
 import logging
 
-from ..boards import ALL
-from ..boards.spare import PAGE
-from ..crypto.formats import decrypt_smc
 from ..smc import Smc
+from ..boards import ALL
 from .image import Image
 from .keyvault import Keyvault
-from .order import failing, logical, marked_bad
+from ..boards.spare import PAGE
+from ..crypto.formats import decrypt_smc
 from .settings import CONFIG_LENGTH, SmcConfig
+from .order import failing, logical, marked_bad
 
 logger = logging.getLogger(__name__)
 

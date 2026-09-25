@@ -7,8 +7,7 @@ import os
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.image import Anchor, Dump, Image, Keyvault, order
-from xebuild.image import anchor as anchors
+from xebuild.image import Anchor, Dump, Image, Keyvault, anchor as anchors, order
 
 
 class AgainstAConsoleSOwnDump(unittest.TestCase):

@@ -14,5 +14,5 @@ is already valid and the code reading one never checks anything twice.
 
 from .build import BuildConfig
 from .client import ClientConfig
-from .extract import ExtractConfig
 from .update import UpdateConfig
+from .extract import ExtractConfig

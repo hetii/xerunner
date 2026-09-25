@@ -40,8 +40,8 @@ says so and the caller decides.
 
 from __future__ import annotations
 
-import struct
 import time
+import struct
 
 from ..boards.flash import BLOCK, PAGE
 

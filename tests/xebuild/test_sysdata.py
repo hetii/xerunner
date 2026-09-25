@@ -4,18 +4,18 @@ Everything here is made up, so it runs anywhere; `e2e/e2e_client.py` holds the s
 against the original's recordings of the real 17559 system update.
 """
 
-import hashlib
 import os
 import shutil
 import struct
+import hashlib
 import tempfile
 import unittest
 
-from xebuild.cli.command import UsageError, parse_client
-from xebuild.client.sysdata import avatar_items, send_avatars, send_compatibility
 from xebuild.network import ServerError
 from xebuild.release.container import intact
 from xebuild.release.manifest import Manifest
+from xebuild.cli.command import UsageError, parse_client
+from xebuild.client.sysdata import avatar_items, send_avatars, send_compatibility
 
 KERNEL = 0x20449700
 

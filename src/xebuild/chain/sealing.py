@@ -39,9 +39,9 @@ under the later regime it carries CB_A's own head as well, with the flag word bl
 
 from __future__ import annotations
 
-import collections
 import math
 import struct
+import collections
 
 from ..crypto.keys import hmacsha
 

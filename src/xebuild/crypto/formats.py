@@ -33,8 +33,8 @@ from __future__ import annotations
 import hashlib
 
 from . import aes
-from .keys import hmacsha
 from .rc4 import rc4
+from .keys import hmacsha
 
 # The generic key a release ships crl.bin and dae.bin under. Not a secret: the XEX key,
 # which the original prints at startup and keeps beside the CPU key at 0x47A12C.

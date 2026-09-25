@@ -11,10 +11,10 @@ console has. `Anchor` is how an eMMC image says where its own bookkeeping went, 
 no spare bytes to say it in. `settings` is the SMC's settings block both keep.
 """
 
-from .anchor import Anchor
-from .directory import Directory, Entry
 from .dump import Dump
-from .header import Header
 from .image import Image
-from .keyvault import Keyvault
+from .anchor import Anchor
+from .header import Header
 from .order import logical
+from .keyvault import Keyvault
+from .directory import Directory, Entry

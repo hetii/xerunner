@@ -5,30 +5,28 @@ real one: written, read back, and checked. Where scratch goes is `tests/__init__
 business.
 """
 
-import binascii
 import os
 import shutil
 import struct
+import binascii
 import tempfile
 import unittest
 
+from xebuild.crypto.rc4 import rc4
 from xebuild.boards import for_name
+from xebuild.release import Patches
 from xebuild.boards.flash import PAGE
-from xebuild.build import Build, Filesystem, Material, layout, security
-from xebuild.chain import Chain, Fields, sealing
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
-from xebuild.crypto.formats import decrypt_smc, encrypt_smc
 from xebuild.crypto.keys import hmacsha
-from xebuild.crypto.rc4 import rc4
-from xebuild.image import Directory, Header, Image, Keyvault
-from xebuild.image import dump as dumps
-from xebuild.image.directory import CHAIN_END
-from xebuild.imagetypes import for_name as type_for
-from xebuild.release import Patches
 from xebuild.release.recipe import Listed
-
+from xebuild.image.directory import CHAIN_END
+from xebuild.chain import Chain, Fields, sealing
+from xebuild.imagetypes import for_name as type_for
 from .test_chain import a_stage, opened_under_the_1bl_key
+from xebuild.crypto.formats import decrypt_smc, encrypt_smc
+from xebuild.build import Build, Filesystem, Material, layout, security
+from xebuild.image import Directory, Header, Image, Keyvault, dump as dumps
 
 
 def a_directory(case, files=None):
@@ -1145,4 +1143,3 @@ class WhichDumpsAreThrownAway(unittest.TestCase):
 
     def test_noecdremap_takes_the_failing_ones_out_of_the_count(self):
         self.assertEqual(self.faulty(self.a_dump(failing=range(1, 34)), ecd=False), "")
-

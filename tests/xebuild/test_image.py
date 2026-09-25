@@ -11,24 +11,15 @@ The tiny flash is a class of its own rather than a real one, because a real 16 M
 is thirty-two thousand pages and every one of them wants its code computed.
 """
 
-import calendar
-import struct
 import types
+import struct
+import calendar
 import unittest
 
 from xebuild.boards import for_name
 from xebuild.boards.flash import SmallNand
-from xebuild.image import (
-    Anchor,
-    Directory,
-    Dump,
-    Header,
-    Image,
-    Keyvault,
-    order,
-    settings,
-)
-from xebuild.image import anchor as anchors
+from xebuild.image import anchor as anchors, order, settings
+from xebuild.image import Anchor, Directory, Dump, Header, Image, Keyvault
 from xebuild.image.directory import CHAIN_END, FREE, POOL, RESERVED, TABLE, Entry
 
 PAGE = 512

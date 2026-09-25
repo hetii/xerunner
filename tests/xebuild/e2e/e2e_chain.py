@@ -6,12 +6,12 @@ Needs real material and says which. See `tests/xebuild/e2e/__init__.py`.
 import os
 import unittest
 
-from xebuild.boards import for_name
-from xebuild.chain import Chain, Fields, sealing
 from xebuild.crypto import smc
-from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
+from xebuild.boards import for_name
 from xebuild.image import Dump, Image
+from xebuild.crypto.keys import hmacsha
+from xebuild.chain import Chain, Fields, sealing
 
 
 class AConsoleSOwnChain(unittest.TestCase):

@@ -24,7 +24,11 @@ line-length = 88
 # writes `%` throughout. `TRY003` objects to messages that say what went wrong, which
 # every refusal here does on purpose, and `TRY004` wants a TypeError where an option was
 # named with no value after it, which is a missing value and not a wrong type.
-select = ["E", "W", "F", "I", "B", "C4", "SIM", "RUF"]
+# `I` (isort) is left out because the project orders its imports its own way:
+# `from __future__` first, then the `import` lines shortest first, then the `from` lines
+# shortest first, with one module's names packed into as few lines as fit, and no
+# parentheses.
+select = ["E", "W", "F", "B", "C4", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 # A package's `__init__.py` re-exports on purpose, so every name in it reads as unused.

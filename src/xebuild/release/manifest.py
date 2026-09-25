@@ -27,8 +27,8 @@ A row, as the walk at 0x432190 reads it:
 
 from __future__ import annotations
 
-import hashlib
 import struct
+import hashlib
 
 BODY = 0x138
 

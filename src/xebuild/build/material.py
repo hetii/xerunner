@@ -31,8 +31,8 @@ line and the ini are `config`'s, so putting them in order is the caller's --
 
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
 logger = logging.getLogger(__name__)
 

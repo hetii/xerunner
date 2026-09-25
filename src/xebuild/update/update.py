@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-import logging
 import os
-from types import SimpleNamespace
+import logging
 
-from ..build import Build, layout
-from ..build.build import SEAL_ALIGN
 from ..chain import Chain
-from ..client.client import fuses_txt, options_ini
-from ..client.sysdata import send_avatars
-from ..config import BuildConfig
 from ..crypto import formats
-from ..crypto.formats import decrypt_smc
-from ..image import Header, Image, Keyvault
-from ..image.settings import SmcConfig
-from ..network import ConsoleInfo, Server, find
-from ..network.info import PUBLIC_KEYS
-from ..network.updsrv import PORT
 from ..release import Release
+from ..config import BuildConfig
+from ..build import Build, layout
+from ..network.updsrv import PORT
+from types import SimpleNamespace
+from ..build.build import SEAL_ALIGN
 from .material import ConsoleMaterial
+from ..image.settings import SmcConfig
+from ..network.info import PUBLIC_KEYS
+from ..crypto.formats import decrypt_smc
+from ..client.sysdata import send_avatars
+from ..image import Header, Image, Keyvault
+from ..network import ConsoleInfo, Server, find
+from ..client.client import fuses_txt, options_ini
 
 logger = logging.getLogger(__name__)
 

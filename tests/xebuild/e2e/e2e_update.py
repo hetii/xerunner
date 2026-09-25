@@ -21,19 +21,18 @@ original fills them with bytes it was handed nowhere, the same on every run; thi
 leaves them erased. An open question.
 """
 
-import hashlib
-import json
 import os
+import json
 import shutil
+import hashlib
 import tempfile
 import unittest
 
-from xebuild.boards import for_name
-from xebuild.config import UpdateConfig
-from xebuild.image import Image
-from xebuild.update import run_update
-
 from .standin import StandIn
+from xebuild.image import Image
+from xebuild.boards import for_name
+from xebuild.update import run_update
+from xebuild.config import UpdateConfig
 
 RUNS = {
     "nowrite-d": ({"dump_to": "dump", "no_write": True}, 0x5A123457),

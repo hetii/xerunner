@@ -7,13 +7,13 @@ release directory, and it checks every bootloader the release names against the 
 the release states for it, which is a proof that needs no other tool.
 """
 
-import hashlib
 import struct
+import hashlib
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.release import Container, Patches, Recipe
 from xebuild.release.recipe import canonical
+from xebuild.release import Container, Patches, Recipe
 
 A_LIST = """\
 [version]

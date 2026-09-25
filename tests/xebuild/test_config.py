@@ -15,11 +15,11 @@ import shutil
 import tempfile
 import unittest
 
-from xebuild.config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
 from xebuild.config.base import BaseConfig
 from xebuild.config.network import NetworkConfig
 from xebuild.config.options import OptionsConfig
 from xebuild.config.release import ReleaseConfig
+from xebuild.config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
 
 OPTIONS = sorted(set(OptionsConfig()) - set(BaseConfig()))
 SWITCHES = ("nodvd", "olddvd", "cygnos", "demon", "nomobile", "smcnocheck", "noremap",

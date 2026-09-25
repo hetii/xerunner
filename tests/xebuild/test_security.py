@@ -13,8 +13,8 @@ import unittest
 
 from xebuild.build import security
 from xebuild.crypto import formats
-from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
+from xebuild.crypto.keys import hmacsha
 
 KEY = bytes(range(0x10))
 OTHER = bytes(range(0x10, 0x20))

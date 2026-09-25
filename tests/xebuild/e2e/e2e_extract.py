@@ -7,14 +7,13 @@ are numbers, never wording: where each blob, file and stage is and how long, wha
 remapped where, and how much of the dump is read.
 """
 
-import json
 import os
 import re
+import json
 import unittest
 
 from xebuild import boards
-from xebuild.image import Dump, order
-from xebuild.image import dump as dumps
+from xebuild.image import Dump, dump as dumps, order
 
 HEX = r"0x([0-9a-fA-F]+)"
 

@@ -39,8 +39,8 @@ of the shape; there is nothing yet to tell a rule from a constant.
 
 from __future__ import annotations
 
-import hashlib
 import struct
+import hashlib
 
 AT = (0x2FE8000, 0x2FEC000)
 LENGTH = 0x200

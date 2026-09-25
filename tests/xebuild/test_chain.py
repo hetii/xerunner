@@ -10,12 +10,12 @@ chain to the SMC beside it. Skipped unless `XEBUILD_DUMP` says where a dump is.
 import struct
 import unittest
 
-from xebuild.boards import for_name
-from xebuild.chain import Chain, Fields, fuses, sealing, update
-from xebuild.chain.stage import Stage
-from xebuild.crypto.formats import decrypt_bootloader
-from xebuild.crypto.keys import hmacsha
 from xebuild.crypto.rc4 import rc4
+from xebuild.boards import for_name
+from xebuild.chain.stage import Stage
+from xebuild.crypto.keys import hmacsha
+from xebuild.crypto.formats import decrypt_bootloader
+from xebuild.chain import Chain, Fields, fuses, sealing, update
 
 
 def opened_under_the_1bl_key(stage):

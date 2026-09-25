@@ -11,8 +11,8 @@ first two tests are about the table itself: get it wrong and every other test st
 passes, because the mistake would be consistent in both directions.
 """
 
-import hashlib
 import hmac
+import hashlib
 import unittest
 
 from xebuild.crypto import aes, formats, keys, rc4, smc

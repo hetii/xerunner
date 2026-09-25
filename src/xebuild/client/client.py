@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
-from ..network import ConsoleInfo, Server, find
-from ..network.info import PUBLIC_KEYS
-from ..network.updsrv import PORT
 from ..release import Patches
+from ..network.updsrv import PORT
+from ..network.info import PUBLIC_KEYS
+from ..network import ConsoleInfo, Server, find
 from .sysdata import found, send_avatars, send_compatibility
 
 logger = logging.getLogger(__name__)
@@ -282,4 +282,3 @@ def _patches(server, info: ConsoleInfo, path: str | None) -> None:
         sent = b"\xff" * 0x10 + last
     server.write_patches(sent)
     logger.info("patches updated OK")
-
