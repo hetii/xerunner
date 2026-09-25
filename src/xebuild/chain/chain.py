@@ -38,11 +38,11 @@ from __future__ import annotations
 
 import logging
 
-from ..crypto.formats import decrypt_bootloader
-from ..crypto.keys import hmacsha
 from . import sealing
-from .console import Fields
 from .stage import Stage
+from .console import Fields
+from ..crypto.keys import hmacsha
+from ..crypto.formats import decrypt_bootloader
 
 logger = logging.getLogger(__name__)
 

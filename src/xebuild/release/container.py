@@ -32,13 +32,13 @@ well, twenty-two of twenty-two.
 
 from __future__ import annotations
 
-import hashlib
 import struct
+import hashlib
 
 from ..chain import sealing
 from ..chain.stage import Stage
-from ..crypto.formats import decrypt_bootloader
 from ..crypto.keys import hmacsha
+from ..crypto.formats import decrypt_bootloader
 
 BLOCK = 0x1000
 DATA_AT = 0xC000

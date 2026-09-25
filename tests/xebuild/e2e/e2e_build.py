@@ -3,24 +3,24 @@
 Needs images the original built. See `tests/xebuild/e2e/__init__.py`.
 """
 
-import json
 import os
+import json
 import shutil
 import tempfile
 import unittest
 
-from xebuild.boards import for_name
-from xebuild.build import Build, Material, layout, security
 from xebuild.chain import Chain
+from xebuild.crypto import formats
+from xebuild.crypto.rc4 import rc4
+from xebuild.boards import for_name
+from xebuild.release import Release
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
-from xebuild.crypto import formats
-from xebuild.crypto.formats import decrypt_smc
 from xebuild.crypto.keys import hmacsha
-from xebuild.crypto.rc4 import rc4
 from xebuild.image import Directory, Image
+from xebuild.crypto.formats import decrypt_smc
 from xebuild.imagetypes import for_name as type_for
-from xebuild.release import Release
+from xebuild.build import Build, Material, layout, security
 
 
 def references() -> tuple:

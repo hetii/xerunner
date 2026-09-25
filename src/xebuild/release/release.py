@@ -10,12 +10,12 @@ This is the only thing here that touches the disk. Everything under it takes byt
 
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
-from .container import Container, intact
-from .patches import Patches
 from .recipe import Recipe
+from .patches import Patches
+from .container import Container, intact
 
 logger = logging.getLogger(__name__)
 

@@ -6,8 +6,8 @@ to every write, and a log of what it was sent in the recordings' own format -- e
 command on a line, each payload as "  <- payload payloadNN.bin 0x... bytes".
 """
 
-import json
 import os
+import json
 import socket
 import struct
 import threading

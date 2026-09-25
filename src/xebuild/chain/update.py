@@ -17,10 +17,10 @@ carries at 0x330. Update mode lays the same pair over a console that is running.
 
 from __future__ import annotations
 
-from ..crypto.formats import encrypt_bootloader
-from ..crypto.keys import hmacsha
 from . import sealing
 from .stage import Stage
+from ..crypto.keys import hmacsha
+from ..crypto.formats import encrypt_bootloader
 
 # Where the block list starts and ends in a CF's plaintext.
 BLOCKS_AT, BLOCKS_END = 0x30, 0x68

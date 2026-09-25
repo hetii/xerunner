@@ -15,8 +15,8 @@ that only shows on input nobody has passed yet is exactly the kind that surfaces
 
 from __future__ import annotations
 
-import hashlib
 import hmac
+import hashlib
 
 
 def hmacsha(secret: bytes, message: bytes) -> bytes:

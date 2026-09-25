@@ -20,20 +20,19 @@ and each payload's SHA-1 rather than the payload. A recording that sent the syst
 update keeps its SHA-1s too (`avatar/payloads.sha1.json`).
 """
 
-import hashlib
-import json
 import os
+import json
 import shutil
+import hashlib
 import tempfile
 import unittest
 
-from xebuild.cli.command import parse_client
+from .standin import StandIn
 from xebuild.client import run_client
-from xebuild.client.client import options_ini, reason
 from xebuild.config import ClientConfig
 from xebuild.network import ConsoleInfo
-
-from .standin import StandIn
+from xebuild.cli.command import parse_client
+from xebuild.client.client import options_ini, reason
 
 
 class EachActionAsTheOriginalDidIt(unittest.TestCase):
@@ -146,7 +145,6 @@ class EachActionAsTheOriginalDidIt(unittest.TestCase):
                 for key, path in theirs.items():
                     with open(path, "rb") as a, open(made[key], "rb") as b:
                         self.assertEqual(b.read(), a.read(), key)
-
 
 
 class ThePatchUpdateOnEachMadeUpConsole(EachActionAsTheOriginalDidIt):

@@ -8,22 +8,21 @@ in the image show which copy it followed: the dump's in build mode, the one hand
 over by cable in update mode, or the disk's.
 """
 
-import hashlib
-import json
 import os
+import json
+import zlib
 import shutil
+import hashlib
 import tempfile
 import unittest
-import zlib
-
-from xebuild.boards import for_name
-from xebuild.build import Build, Material
-from xebuild.config import BuildConfig, UpdateConfig
-from xebuild.image import Image
-from xebuild.release import Release
-from xebuild.update import run_update
 
 from .standin import StandIn
+from xebuild.image import Image
+from xebuild.boards import for_name
+from xebuild.release import Release
+from xebuild.update import run_update
+from xebuild.build import Build, Material
+from xebuild.config import BuildConfig, UpdateConfig
 
 NAMES = ("xenonclatin.xtt", "xenonjklatin.xtt", "ximedic.xex")
 LAUNCH = b"L" * 0x1000

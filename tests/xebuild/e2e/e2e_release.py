@@ -9,9 +9,8 @@ import tempfile
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.imagetypes import ALL as TYPES
-from xebuild.imagetypes import for_name as type_for
 from xebuild.release import Release
+from xebuild.imagetypes import ALL as TYPES, for_name as type_for
 
 
 class AgainstTheRealRelease(unittest.TestCase):

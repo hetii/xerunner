@@ -64,8 +64,8 @@ revisit once every mode works.
 
 from __future__ import annotations
 
-import functools
 import logging
+import functools
 
 from ..boards.flash import PAGE
 

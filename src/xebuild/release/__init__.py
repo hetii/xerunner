@@ -11,7 +11,7 @@ out and `Release.bootloader` takes one back. `Record` and `Held` are only ever r
 they stay inside.
 """
 
-from .container import Container
 from .patches import Patches
-from .recipe import Listed, Recipe
 from .release import Release
+from .container import Container
+from .recipe import Listed, Recipe

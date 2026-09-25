@@ -19,9 +19,9 @@ wine against a stand-in server that records every byte, and this sends the same.
 
 from __future__ import annotations
 
-import logging
 import socket
 import struct
+import logging
 
 logger = logging.getLogger(__name__)
 

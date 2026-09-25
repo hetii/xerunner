@@ -45,8 +45,8 @@ with them.
 
 from __future__ import annotations
 
-import binascii
 import re
+import binascii
 
 from ..crypto.formats import decrypt_smc
 

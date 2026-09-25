@@ -36,25 +36,11 @@ import hashlib
 import logging
 
 from ..crypto import aes
-from ..crypto.formats import (
-    BODY_AT,
-    IV_AT,
-    NONCE_LENGTH,
-    decrypt_crl,
-    decrypt_dae,
-    decrypt_extended,
-    decrypt_fcrt,
-    decrypt_secdata,
-    encrypt_crl,
-    encrypt_dae,
-    encrypt_extended,
-    encrypt_fcrt,
-    encrypt_secdata,
-    fcrt_body_at,
-    records,
-    vouched,
-)
 from ..crypto.keys import hmacsha
+from ..crypto.formats import decrypt_extended, decrypt_fcrt, decrypt_secdata
+from ..crypto.formats import encrypt_secdata, fcrt_body_at, records, vouched
+from ..crypto.formats import BODY_AT, IV_AT, NONCE_LENGTH, decrypt_crl, decrypt_dae
+from ..crypto.formats import encrypt_crl, encrypt_dae, encrypt_extended, encrypt_fcrt
 
 logger = logging.getLogger(__name__)
 

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
 from .. import boards
-from ..image import Dump, order
-from ..image import dump as dumps
+from ..image import Dump, dump as dumps, order
 
 logger = logging.getLogger(__name__)
 

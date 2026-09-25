@@ -5,8 +5,8 @@ Needs real material and says which. See `tests/xebuild/e2e/__init__.py`.
 
 import os
 import re
-import subprocess
 import unittest
+import subprocess
 
 from xebuild import boards
 

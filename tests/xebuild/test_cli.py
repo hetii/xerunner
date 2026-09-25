@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import contextlib
 import io
 import os
 import shutil
 import tempfile
 import unittest
+import contextlib
 
 from xebuild.cli import main, parse
-from xebuild.cli.command import UsageError
 from xebuild.config import BuildConfig
+from xebuild.cli.command import UsageError
 
 
 class ReadingACommandLine(unittest.TestCase):
@@ -79,7 +79,6 @@ class ReadingACommandLine(unittest.TestCase):
         for argv in ([], ["-t"], ["-x"], ["-o", "nonsense=1"], ["-o", "cpu_key=00"]):
             with self.subTest(argv=argv), self.assertRaises(UsageError):
                 parse(argv)
-
 
 
 class ExtractModeSLine(unittest.TestCase):

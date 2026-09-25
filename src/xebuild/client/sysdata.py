@@ -9,10 +9,10 @@ order, with the same bytes.
 
 from __future__ import annotations
 
-import contextlib
+import os
 import hashlib
 import logging
-import os
+import contextlib
 
 from ..network import ServerError
 from ..release.container import intact

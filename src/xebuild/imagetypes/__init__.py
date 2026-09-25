@@ -10,13 +10,13 @@ Four of the eleven have never been built here, because no release carries a `_de
 reaches for, since that much was measured by asking it.
 """
 
-from .devgl import Devgl, Devgl16
-from .devkit import Devkit, Devkit16
-from .glitch import Glitch, Glitch2, Glitch2Mfg
-from .imagetype import ImageType
 from .jtag import Jtag
 from .retail import Retail
+from .imagetype import ImageType
+from .devgl import Devgl, Devgl16
+from .devkit import Devkit, Devkit16
 from .testkit import Testkit, Testkit16
+from .glitch import Glitch, Glitch2, Glitch2Mfg
 
 ALL = (
     Retail(),

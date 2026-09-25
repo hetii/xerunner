@@ -45,10 +45,10 @@ current one.
 
 from __future__ import annotations
 
-from ..boards.flash import BLOCK, PAGE
 from .anchor import Anchor
-from .directory import Directory
 from .header import Header
+from .directory import Directory
+from ..boards.flash import BLOCK, PAGE
 
 
 class Image:

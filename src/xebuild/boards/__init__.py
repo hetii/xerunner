@@ -13,13 +13,13 @@ each one built with to see what it does. Its usage text lists sixteen of them.
 """
 
 from .board import Board
-from .corona import Corona4G, Corona16, CoronaBigBlock
-from .falcon import Falcon
-from .jasper import Jasper16, JasperBigBlock, JasperXsb
-from .trinity import Trinity16, TrinityBigBlock
-from .winchester import Winchester4G, Winchester16, WinchesterBigBlock
 from .xenon import Xenon
+from .falcon import Falcon
 from .zephyr import Zephyr
+from .trinity import Trinity16, TrinityBigBlock
+from .corona import Corona16, Corona4G, CoronaBigBlock
+from .jasper import Jasper16, JasperBigBlock, JasperXsb
+from .winchester import Winchester16, Winchester4G, WinchesterBigBlock
 
 ALL = (
     Xenon(),
