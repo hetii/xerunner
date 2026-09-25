@@ -48,6 +48,18 @@ Reading by position is what this does, and it is what the console must do as wel
 that console runs, and a machine that looked for its keyvault and its bootloaders by
 those announced numbers would find neither.
 
+**A number written in the other controller's layout is the same case, and a
+deliberate divergence.** A block whose spare states its own position the way the other
+controller writes it -- "nanddump.bin has a mixed controller LBA at block 0x38d ...
+block ignored ... likely caused by previously using jaspersb on a jasper type console"
+(the test is at 0x415C7B) -- is dropped by the original, and whatever was in it is lost
+to the build: measured with the bench console's crl.bin block rewritten that way, the
+original's verify failed and it laid the release's crl.bin instead, 2262 bytes apart
+from this. The data is the console's own and only the number's encoding differs, and
+everything taken out of a dump is verified before use -- a security file against its
+hash or key, the keyvault against the CPU key, the settings block against its sum -- so
+this reads the block where it lies and keeps the console's data. Kept as a decision to
+revisit once every mode works.
 """
 
 from __future__ import annotations
