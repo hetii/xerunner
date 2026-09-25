@@ -166,6 +166,9 @@ class Build:
         other than 2, a settings block address at 0x74 other than 0, a keyvault version
         at 0x6A other than 0x0712.
 
+        **An eMMC dump the original built as a XeLL image** -- "nanddump.bin is a
+        ZEROPAIR/XELL image, discarding".
+
         **Block 0 marked bad** -- "NAND dump does not appear to have a good block at
         block 0, discarding dump!".
 
@@ -206,6 +209,13 @@ class Build:
         if word(0x7C) > whole:
             return "flash header SmcBootAddr is too large"
         if flash.spare is None:
+            # "zeropair image" where the copyright line goes, which the original
+            # calls a ZEROPAIR/XELL image -- measured on an eMMC dump. It checks an
+            # eMMC dump only in effect: the same test on a NAND dump (0x4167AA) reads
+            # a buffer block 0 has not been copied into yet, and a NAND dump marked
+            # the same way was used.
+            if head[0x10:0x1E] == b"zeropair image":
+                return "the dump is a ZEROPAIR/XELL image"
             return ""
         per = flash.spare.pages_a_block * (PAGE + flash.spare.length)
         if order.marked_bad(raw[:per], flash):
@@ -335,7 +345,11 @@ class Build:
         to 0x780227". With none, `-norandom` leaves the three bytes the original stores
         one at a time at 0x41BA43, "initializing static pairing value", and otherwise
         they are drawn with everything else.
+
+        Zeros for a zero-paired build -- see `zero_paired` -- whatever the dump says.
         """
+        if self.zero_paired:
+            return bytes(3)
         if self.dump is not None:
             return self.dump.pairing
         if self.config.no_random:
@@ -343,6 +357,27 @@ class Build:
         if "pairing" not in self._drawn:
             self._drawn["pairing"] = os.urandom(3)
         return self._drawn["pairing"]
+
+    @property
+    def zero_key(self) -> bool:
+        """Whether the CPU key is all zeros, which the original builds as an image for
+        no console in particular. The lockdown value is then 0 whatever else says --
+        see `ldv` -- and a chain with a CB_B is zero-paired -- see `zero_paired`."""
+        return self.cpu_key == bytes(16)
+
+    @property
+    def zero_paired(self) -> bool:
+        """Whether this chain's CB_B is bound to no console: a zero CPU key and a CB_B.
+
+        "CPU key is all zeros, zeropairing CB_B": the pairing is zeros, in CB_B and in
+        the CF, and CB_B carries no binding to the SMC -- sixteen zeros, as under the
+        manufacturing regime. Measured under `-p 000...0` on glitch2, glitch2m and
+        retail images from a console's own files, with its dump and without, byte for
+        byte. Only a CB_B: a JTAG image's lone CB keeps the pairing and its binding,
+        measured too.
+        """
+        return self.zero_key and self._wears_console(
+            [one.kind for one in self._chain_files()]) == 1
 
     def smc(self, seed: bytes = b"") -> bytes:
         """The SMC as the image carries it: sealed, and patched if the options ask.
@@ -652,7 +687,8 @@ class Build:
             # CB_B of an image it built that way carries sixteen zeros where the digest
             # would be. The switch is a bit in CB_A rather than the image type or the
             # file's name, which `Stage.manufacturing` reads.
-            bound_to = None if stages[0].manufacturing else self.cpu_key
+            bound_to = None if stages[0].manufacturing or self.zero_paired \
+                else self.cpu_key
             at = offsets[binds] + STAGE_HEADER
             out[at:at + Fields.LENGTH * 2] = Fields.write(
                 self.pairing, bound_to, keys[binds],
@@ -1026,6 +1062,12 @@ class Build:
             # it as it reads the stage's magic (0x42AD51). Measured on 1838 with and
             # without `-o cfldv=10`, and on 17559's list with its own pair taken out,
             # which keeps the console's 14: it is the SE and not the missing pair.
+            return 0
+        if self.zero_key:
+            # The original writes 0 into the byte `cfldv` fills (0x479F15) as it
+            # zeropairs, after the dump and `cfldv` have had their say -- measured with
+            # a dump stating 14 and with `-o cfldv=5`, both coming out 0 -- and on a
+            # JTAG image as well, with no warning either way.
             return 0
         if self.config.cfldv is not None:
             return self.config.cfldv

@@ -970,6 +970,25 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
         plain = rc4(derive(key, made[:0x10]), made[0x10:])
         self.assertEqual(plain[:8], security.COMPILED_IN["secdata.bin"])
 
+    def test_a_zero_cpu_key_zero_pairs_a_chain_with_a_cb_b(self):
+        """"CPU key is all zeros, zeropairing CB_B": no pairing, no binding, LDV 0 --
+        the dump's 14 and `cfldv` notwithstanding."""
+        one = a_build(self, cpu_key="0" * 32, cfldv=5)
+        one._chain_files = lambda which=0: [Listed("cba_1.bin", "0"),
+                                            Listed("cbb_1.bin", "0")]
+        self.assertTrue(one.zero_paired)
+        self.assertEqual(one.pairing, bytes(3))
+        self.assertEqual(one.ldv, 0)
+
+    def test_a_lone_cb_keeps_its_pairing_under_a_zero_key(self):
+        """A JTAG image's, measured: the LDV is 0 all the same."""
+        one = a_build(self, kind="jtag", board="falcon", cpu_key="0" * 32)
+        one._chain_files = lambda which=0: [Listed("cb_1.bin", "0")]
+        self.assertTrue(one.zero_key)
+        self.assertFalse(one.zero_paired)
+        self.assertEqual(one.pairing, one.dump.pairing)
+        self.assertEqual(one.ldv, 0)
+
     def test_with_no_dump_a_settings_block_has_to_be_given(self):
         """ "could not read smc_config.bin", "critical bootloader files are missing"."""
         with self.assertRaises(ValueError) as caught:
@@ -1088,6 +1107,16 @@ class WhichDumpsAreThrownAway(unittest.TestCase):
             with self.subTest(fields):
                 raw = self.a_dump(header=self.a_header(fields))
                 self.assertEqual(self.faulty(raw), "")
+
+    def test_an_emmc_image_the_original_built_for_xell(self):
+        """ "is a ZEROPAIR/XELL image, discarding" -- on an eMMC dump only."""
+        emmc = for_name("corona4g")[0].flash
+        head = bytearray(self.a_header())
+        head[0x10:0x1E] = b"zeropair image"
+        raw = bytes(head).ljust(0x100000, b"\0")
+        one = a_build(self, dump=False)
+        self.assertIn("ZEROPAIR", one._faulty(raw, emmc))
+        self.assertEqual(one._faulty(self.a_header().ljust(0x100000, b"\0"), emmc), "")
 
     def test_block_0_marked_bad(self):
         self.assertIn("block 0", self.faulty(self.a_dump(bad=(0,))))
