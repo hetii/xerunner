@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import os
+import shutil
+import tempfile
 import unittest
 
-from xebuild.cli import parse
+from xebuild.cli import main, parse
 from xebuild.cli.command import UsageError
 from xebuild.config import BuildConfig
 
@@ -75,6 +80,38 @@ class ReadingACommandLine(unittest.TestCase):
             with self.subTest(argv=argv), self.assertRaises(UsageError):
                 parse(argv)
 
+
+
+class ExtractModeSLine(unittest.TestCase):
+    """`xeBuild extract <switch> <input NAND image>`, and nothing of build mode's."""
+
+    def run_main(self, argv):
+        with (contextlib.redirect_stdout(io.StringIO()) as out,
+              contextlib.redirect_stderr(io.StringIO()) as err):
+            code = main(argv)
+        return code, out.getvalue() + err.getvalue()
+
+    def test_its_usage_is_its_own(self):
+        code, said = self.run_main(["extract", "-?"])
+        self.assertEqual(code, 0)
+        self.assertIn("extract <switch> <input NAND image>", said)
+
+    def test_a_build_switch_or_no_image_is_refused_with_that_usage(self):
+        for argv in (["extract", "-t", "retail", "x.bin"], ["extract", "-v"]):
+            with self.subTest(argv=argv):
+                code, said = self.run_main(argv)
+                self.assertEqual(code, 2)
+                self.assertIn("extract <switch>", said)
+
+    def test_a_file_of_no_flash_s_length_is_not_a_dump(self):
+        where = tempfile.mkdtemp(prefix="xebuild-cli-")
+        self.addCleanup(shutil.rmtree, where, ignore_errors=True)
+        path = os.path.join(where, "nanddump.bin")
+        with open(path, "wb") as handle:
+            handle.write(bytes(0x1000))
+        code, said = self.run_main(["extract", "-noenter", path])
+        self.assertEqual(code, 1)
+        self.assertIn("Loading dump failed", said)
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,15 +65,18 @@ NONCE_LENGTH = 0x10
 def stamp(when: int) -> bytes:
     """The eight bytes of clock the original writes: a FILETIME, big-endian.
 
-    Measured against a frozen clock: `(time() + 2) * 10_000_000 + the FILETIME epoch`,
-    with nothing below the second. The two seconds are the original's and are reproduced
-    rather than explained.
+    `time() + 2`, and then down to an even second -- the directory's FAT time, which
+    counts seconds in twos, turned back into a FILETIME. Measured against a frozen
+    clock both ways: at 0x5A123456 the stamp says 0x5A123458, and at 0x5A123457 the
+    same, in build mode and in update mode. The two seconds are the original's and are
+    reproduced rather than explained.
     """
-    return ((when + 2 + 11644473600) * 10_000_000).to_bytes(8, "big")
+    return ((((when + 2) & ~1) + 11644473600) * 10_000_000).to_bytes(8, "big")
 
 
 def when_in(plain: bytes) -> int:
-    """The build time a plaintext's stamp says, which is `stamp` the other way round."""
+    """The build time a plaintext's stamp says, which is `stamp` the other way round --
+    to the even second the stamp keeps."""
     return int.from_bytes(plain[:8], "big") // 10_000_000 - 11644473600 - 2
 
 
@@ -425,3 +428,26 @@ def taken_beside(name: str, blob: bytes, cpu_key: bytes) -> tuple:
             not opens(name, blob, cpu_key):
         return ("clean" if name == "extended.bin" else "as is"), False
     return "use", clear
+
+
+def opened_copy(name: str, blob: bytes, cpu_key: bytes) -> bytes:
+    """A console's security file in the clear, headers as they were, as update mode's
+    `-d` keeps it for build mode to take up later -- each measured against the
+    original's copy: crl.bin with its wrapped key unwrapped at 0x130, each dae.bin
+    record opened, extended.bin and secdata.bin behind their nonce, fcrt.bin behind its
+    0x140 bytes of header."""
+    if name == "crl.bin":
+        plain, master = opened_crl(blob, cpu_key)
+        return blob[:WRAPPED_KEY_AT] + _unwrapped(blob, master) + plain
+    if name == "dae.bin":
+        out = b""
+        for at, length in records(blob):
+            record = blob[at:at + length]
+            plain, _master = _dae_record(record, cpu_key)
+            out += record[:DAE_BODY_AT] + plain
+        return out
+    if name in ("extended.bin", "secdata.bin"):
+        return blob[:NONCE_LENGTH] + _opened_like_a_keyvault(blob, cpu_key)
+    if name == "fcrt.bin":
+        return blob[:0x140] + aes.cbc_decrypt(cpu_key, blob[0x140:], blob[0x100:0x110])
+    return blob

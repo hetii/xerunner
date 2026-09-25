@@ -12,6 +12,7 @@ were measured, and what a mistake in one of them looks like.
 
 from __future__ import annotations
 
+import binascii
 import hashlib
 import logging
 import os
@@ -27,6 +28,7 @@ from ..crypto import smc as cipher
 from ..crypto.rc4 import rc4
 from ..image import Dump, Entry, Header, Image, Keyvault, order
 from ..image import anchor as anchors
+from ..image import dump as dumps
 from ..image.settings import TEMPERATURES, SmcConfig
 from ..release import Release
 from ..smc import Smc
@@ -137,7 +139,8 @@ class Build:
                                "(%#x bytes), ignoring", len(raw))
                 self._dump = False
                 return None
-            why = self._faulty(raw, own.flash)
+            whole = len(self.material.dump)
+            why = dumps.faulty(raw, own.flash, whole, ecd=not self.config.noecdremap)
             if why:
                 logger.warning("%s, discarding nanddump.bin", why)
                 self._dump = False
@@ -147,128 +150,12 @@ class Build:
                               ecd=not self.config.noecdremap)
         return self._dump or None
 
-    def _faulty(self, raw: bytes, flash) -> str:
-        """Why the original would throw this dump away, or nothing.
-
-        Thrown away, not refused: the build goes on as it does with no dump at all,
-        which without a `smc.bin`, a `kv.bin` and a `smc_config.bin` beside it ends in
-        "critical bootloader files are missing". Each cause below was measured on the
-        bench console's dump with that one fault put in: the original discarded it, and
-        with the console's own files beside the build made the image this makes.
-
-        **The header, as its loader checks it at 0x416D1D**, every address against the
-        length of the file as it was handed over: the magic; the entry point and the
-        slot offset at 0x08 and 0x0C; a keyvault length over 0x8000 at 0x60; the update
-        slot at 0x64 below the offset at 0x0C or past the file -- "SysUpdateAddr is
-        malformed"; the keyvault, the filesystem and the SMC past the file at 0x6C,
-        0x70 and 0x7C; an SMC length at 0x78 other than 0x3000 or 0x3800. Three more
-        fields it only complains about and goes on, measured too: a slot count at 0x68
-        other than 2, a settings block address at 0x74 other than 0, a keyvault version
-        at 0x6A other than 0x0712.
-
-        **An eMMC dump the original built as a XeLL image** -- "nanddump.bin is a
-        ZEROPAIR/XELL image, discarding".
-
-        **Block 0 marked bad** -- "NAND dump does not appear to have a good block at
-        block 0, discarding dump!".
-
-        **More than 32 blocks to move** -- "MAX REMAPS of 32 exceeded, remapping
-        disabled and image rejected as faulty!". Its table holds 32 (0x479F78); a block
-        failing its code takes a place in it as a block marked bad does, unless
-        `noecdremap` leaves such blocks alone, and `noremap` changes nothing here --
-        all three measured.
-        """
-        head = bytes(raw[:0x80])
-        whole = len(self.material.dump) if self.material.dump is not None else len(raw)
-
-        def word(at: int) -> int:
-            return int.from_bytes(head[at:at + 4], "big")
-
-        # The original's own words for each, which name the fields its way.
-        if head[:2] != b"\xff\x4f":
-            return "flash header magic is incorrect"
-        for name, at in (("Entry", 0x08), ("Size", 0x0C)):
-            if word(at) > whole:
-                return "flash header %s is too large" % name
-        if word(0x60) > 0x8000:
-            return "flash header KeyVaultSize is too large"
-        if word(0x64) > whole or word(0x0C) > word(0x64):
-            return "flash header SysUpdateAddr is malformed"
-        if int.from_bytes(head[0x68:0x6A], "big") != 2:
-            logger.warning("flash header SysUpdateCount is not 2, continuing anyway")
-        if int.from_bytes(head[0x6A:0x6C], "big") != 0x0712:
-            logger.warning("flash header KeyVaultVersion is not 0x0712, continuing "
-                           "anyway")
-        for name, at in (("KeyVaultAddr", 0x6C), ("FileSystemAddr", 0x70)):
-            if word(at) > whole:
-                return "flash header %s is too large" % name
-        if word(0x74):
-            logger.warning("flash header SmcConfigAddr is not 0, continuing anyway")
-        if word(0x78) & ~0x800 != 0x3000:
-            return "flash header SmcBootSize is not 0x3000 or 0x3800"
-        if word(0x7C) > whole:
-            return "flash header SmcBootAddr is too large"
-        if flash.spare is None:
-            # "zeropair image" where the copyright line goes, which the original
-            # calls a ZEROPAIR/XELL image -- measured on an eMMC dump. It checks an
-            # eMMC dump only in effect: the same test on a NAND dump (0x4167AA) reads
-            # a buffer block 0 has not been copied into yet, and a NAND dump marked
-            # the same way was used.
-            if head[0x10:0x1E] == b"zeropair image":
-                return "the dump is a ZEROPAIR/XELL image"
-            return ""
-        per = flash.spare.pages_a_block * (PAGE + flash.spare.length)
-        if order.marked_bad(raw[:per], flash):
-            return "NAND dump does not appear to have a good block at block 0"
-        moved = set(order.marked_bad(raw, flash))
-        if not self.config.noecdremap:
-            moved |= set(order.failing(raw, flash))
-        if len(moved) > 32:
-            return ("MAX REMAPS of 32 exceeded (%d), remapping disabled and image "
-                    "rejected as faulty" % len(moved))
-        return ""
-
     @property
     def dump_raw(self) -> bytes | None:
-        """The dump's bytes as the build reads them: anything past a flash's length cut.
-
-        The original's rule, read out of its loader at 0x417171 and measured on each
-        branch. A dump longer than 48 MB is an eMMC one cut to 48 MB when it holds
-        `FATX` right there -- "FATX magic found, truncating load size to 0x3000000
-        bytes for mmc consoles" -- or when its first page carries no valid code, which
-        a NAND dump's always does: "First page does not contain a valid ECC, assuming
-        this is an mmc dump". Otherwise it is a big block part read whole, 256 or 512
-        MB, cut to its first 64 MB -- "assuming this is a big block flash overdump and
-        truncating load size to 0x4200000 bytes". Measured: an eMMC image padded to
-        64 MB with and without `FATX`, and a 256 MB dump, each building the image its
-        first part does.
-        """
-        if self._raw is not None:
-            return self._raw or None
-        self._raw = self._cut(self.material.dump) or b""
+        """The dump's bytes as the build reads them -- see `image.dump.cut`."""
+        if self._raw is None:
+            self._raw = dumps.cut(self.material.dump) or b""
         return self._raw or None
-
-    @staticmethod
-    def _cut(raw: bytes | None) -> bytes | None:
-        """`dump_raw`'s rule, applied once."""
-        if raw is None or len(raw) <= 0x3000000:
-            return raw
-        # The code sits in the same place in every spare layout.
-        spare = next(one.flash.spare for one in boards.ALL
-                     if one.flash.spare is not None)
-        if raw[0x3000000:0x3000004] == b"FATX":
-            logger.info("FATX magic found, truncating load size to 0x3000000 bytes for "
-                        "mmc consoles")
-            return raw[:0x3000000]
-        if not spare.ecc_ok(raw[:PAGE + spare.length]):
-            logger.info("First page does not contain a valid ECC, assuming this is an "
-                        "mmc dump and truncating load size to 0x3000000 bytes")
-            return raw[:0x3000000]
-        if len(raw) > 0x4200000:
-            logger.info("First page contains a valid ECC, assuming this is a big block "
-                        "flash overdump and truncating load size to 0x4200000 bytes")
-            return raw[:0x4200000]
-        return raw
 
     @property
     def cpu_key(self) -> bytes | None:
@@ -489,11 +376,12 @@ class Build:
         return self.plain_keyvault().sealed(self.cpu_key)
 
     def _own_keyvault(self) -> Keyvault | None:
-        """The dump's keyvault, or None where this CPU key does not open it -- which
-        the original discards, and then stops for want of a kv.bin."""
-        if self.dump is None:
+        """The console's keyvault, or None where this CPU key does not open it --
+        which the original discards, and then stops for want of a kv.bin."""
+        sealed = self.console_keyvault
+        if sealed is None:
             return None
-        own = Keyvault.opened_if_own(self.dump.sealed_keyvault, self.cpu_key)
+        own = Keyvault.opened_if_own(sealed, self.cpu_key)
         if own is None:
             logger.warning("keyvault decrypt failed, discarding")
         return own
@@ -942,7 +830,7 @@ class Build:
                 logger.warning("firmware file %s ignored, 'sysupdate.xexp' is a "
                                "reserved name!", listed.name)
                 continue
-            body = self.release.firmware(listed)
+            body = self._firmware_file(listed)
             if body is None:
                 # A file the list vouches for with no checksum, or with zero, is one
                 # the original goes without: "could not read file '..\\launch.xex',
@@ -965,6 +853,124 @@ class Build:
             if body is not None:
                 out.append((listed.plain, body))
         return out
+
+    # --- what the console itself holds -------------------------------------------
+    # Off its dump. Nothing else here asks where they came from, so a subclass can
+    # answer them from elsewhere.
+
+    @property
+    def console_keyvault(self) -> bytes | None:
+        """The console's own keyvault, sealed, or None with no dump."""
+        return self.dump.sealed_keyvault if self.dump is not None else None
+
+    def console_file(self, name: str) -> bytes | None:
+        """The console's own copy of a file -- crl.bin, ximedic.xex -- or None."""
+        if self.dump is None:
+            return None
+        try:
+            return self.dump.image.read(name)
+        except ValueError:
+            return None
+
+    def console_firmware(self, name: str, crc: int) -> bytes | None:
+        """The console's own copy of a `[flashfs]` file where it counts: a dump's only
+        against a checksum -- with none it is read and passed over (0x428530)."""
+        body = self.console_file(name)
+        return body if crc and self._firmware_fits(body, name, crc) else None
+
+    @property
+    def console_statistics(self) -> bytes | None:
+        """The console's Statistics block, or None with no dump."""
+        return self.dump.statistics if self.dump is not None else None
+
+    @property
+    def console_manufacturing(self) -> bytes | None:
+        """The console's Manufacturing block, or None where it keeps none."""
+        if self.dump is None or not self.dump.manufacturing_written:
+            return None
+        return self.dump.manufacturing
+
+    @staticmethod
+    def _firmware_fits(body: bytes | None, where: str, crc: int) -> bool:
+        """Whether a copy counts against a list's checksum; with none, any copy does.
+        One that does not is passed over with the original's warning."""
+        if body is None:
+            return False
+        if not crc:
+            return True
+        found = binascii.crc32(body) & 0xFFFFFFFF
+        if found != crc:
+            logger.warning("'%s' crc32: %#010x expected: %#010x", where, found, crc)
+        return found == crc
+
+    def _firmware_file(self, listed) -> bytes | None:
+        """One `[flashfs]` file, from the first source the original would take it from,
+        or None.
+
+        Read out of 0x428040 and its callers at 0x42EB9F, 0x42ECF0, 0x42EDB0 and
+        0x42EE40, and measured on the original with the copies made to differ -- the
+        disk's forged to the same CRC32 as the dump's -- so which copy went in could be
+        seen: the dump's own copy is taken over the one in `common/`.
+
+        With a checksum the list states, a copy counts only where its CRC32 is that
+        one; one that is not is passed over with "'%s' crc32: ... expected: ...". The
+        sources, in order:
+
+        1. the release's directory, as the list spells the name;
+        2. the update container;
+        3. the console's own copy -- `console_firmware`;
+        4. `common/`.
+
+        A name ending in `p` -- a patch file -- is looked for as itself, then with `1`
+        and with `2` behind it, the latter two without the container (0x42EDB0,
+        0x42EE40): a dump keeps `aac.xexp1`, and that is the copy taken when nothing
+        else has `aac.xexp`.
+
+        With no checksum -- `..\\launch.xex` and its neighbours -- only the release's
+        directory and the console's own copy are asked (0x42ECF0), not the container
+        and not `common/`; whether the console's copy then counts is
+        `console_firmware`'s.
+        """
+        if not listed.crc:
+            return self._firmware_from(listed.name, 0, container=False, common=False)
+        names = [listed.name]
+        if listed.name.lower().endswith("p"):
+            names += [listed.name + "1", listed.name + "2"]
+        for number, name in enumerate(names):
+            body = self._firmware_from(name, listed.crc, container=number == 0,
+                                       common=True)
+            if body is not None:
+                return body
+        return None
+
+    def _firmware_from(self, name: str, crc: int, container: bool,
+                       common: bool) -> bytes | None:
+        """One pass of `_firmware_file` over its sources for one spelling of a name."""
+        plain = name.replace("\\", "/").rsplit("/", 1)[-1]
+
+        def read(body: bytes | None, where: str) -> bytes | None:
+            # A file on disk of no length is not taken: "'%s' is a 0 byte file,
+            # loading skipped!" (0x42790C).
+            if body is not None and not body:
+                logger.warning("'%s' is a 0 byte file, loading skipped!", where)
+                return None
+            return body
+
+        body = read(self.release.listed_file(name), name)
+        if self._firmware_fits(body, name, crc):
+            return body
+        if container:
+            body = self.release.container_file(plain)
+            if crc and self._firmware_fits(body, plain, crc):
+                return body
+        body = self.console_firmware(plain, crc)
+        if body is not None:
+            return body
+        if common:
+            body = read(self.release.common_file(plain), plain)
+            if self._firmware_fits(body, plain, crc):
+                return body
+        return None
 
     def security_file(self, name: str, when: int) -> bytes | None:
         """One of the five security files sealed for this console, or None to leave out.
@@ -989,11 +995,8 @@ class Build:
                              "and none was given")
         config = self.config
         own = None
-        if self.dump is not None and not config.nosecurity:
-            try:
-                own = self.dump.image.read(name)
-            except ValueError:
-                own = None
+        if not config.nosecurity:
+            own = self.console_file(name)
             if own is not None and not security.verifies(name, own, self.cpu_key):
                 logger.warning("%s verify failed! Discarding data.", name)
                 own = None
@@ -1105,37 +1108,11 @@ class Build:
         patch slot and JTAG loaders. Returns `layout.for_type`'s regions and the CG
         tails that spill into the filesystem."""
         flash, bigffs = self.flash, self.bigffs
-        chain = self.chain()
-        chain_end = layout.CHAIN_AT + len(chain)
-        second = self.chain(1) if self._chain_files(1) else b""
-        plain_end = layout.CHAIN_AT + sum(
-            -(-len(self.release.bootloader(one)) // SEAL_ALIGN) * SEAL_ALIGN
-            for one in self._chain_files()
-        )
+        chain, chain_end, second, plain_end = self._head_extent()
         where = layout.for_type(self.image_type, flash, chain_end, bigffs, len(second),
                                 plain_end)
         slots, tail_at = where["slot"][0], where["tail"][0]
-        smc = self.smc()
-        smc_at = layout.smc_at(len(smc))
-        page = self.header(slots, self.stated_version, len(smc))
-        # Zeros from the page to the SMC, on every reference image.
-        out.put(0, page + bytes(smc_at - len(page)))
-        net_kd = self.dump.net_kd if self.dump is not None else None
-        if net_kd:
-            # "Inserting netKd data from dump into header": as many bytes as the block
-            # states, at 0x80 -- see `Dump.net_kd`. Only a block inside the first page
-            # was measured, so a longer one is left out rather than laid over whatever
-            # follows it.
-            if 0x80 + len(net_kd) <= PAGE:
-                logger.info("Inserting netKd data from dump into header")
-                out.put(0x80, net_kd)
-            else:
-                logger.warning("the dump's netKd block states %#x bytes, more than the "
-                               "header's page holds; left out", len(net_kd))
-        out.put(smc_at, smc)
-        out.put(layout.KEYVAULT_AT, self.keyvault())
-        # The chain's last block is filled out with zeros, as a file's is.
-        out.put(layout.CHAIN_AT, chain + bytes(-chain_end % layout.BLOCK))
+        self._head_lay(out, slots, chain, chain_end)
         xell = self.xell() if "xell" in where else None
         if xell is not None:
             out.put(where["xell"][0], xell)
@@ -1161,6 +1138,43 @@ class Build:
             words = len(jtag.builtin("freeboot.bin")) // 4
             out.mark(where["payload"][0], PAGE, extra=words.to_bytes(4, "big"))
         return where, spills
+
+    def _head_extent(self) -> tuple:
+        """The image's head -- header, SMC, keyvault and the chain -- and where it
+        ends, which is where everything after it is laid from: `(chain, chain end,
+        second chain, end of the chain's plain stages)`."""
+        chain = self.chain()
+        chain_end = layout.CHAIN_AT + len(chain)
+        second = self.chain(1) if self._chain_files(1) else b""
+        plain_end = layout.CHAIN_AT + sum(
+            -(-len(self.release.bootloader(one)) // SEAL_ALIGN) * SEAL_ALIGN
+            for one in self._chain_files()
+        )
+        return chain, chain_end, second, plain_end
+
+    def _head_lay(self, out: Image, slots: int, chain: bytes, chain_end: int) -> None:
+        """The head laid: the header's page, the SMC, the keyvault and the chain."""
+        smc = self.smc()
+        smc_at = layout.smc_at(len(smc))
+        page = self.header(slots, self.stated_version, len(smc))
+        # Zeros from the page to the SMC, on every reference image.
+        out.put(0, page + bytes(smc_at - len(page)))
+        net_kd = self.dump.net_kd if self.dump is not None else None
+        if net_kd:
+            # "Inserting netKd data from dump into header": as many bytes as the block
+            # states, at 0x80 -- see `Dump.net_kd`. Only a block inside the first page
+            # was measured, so a longer one is left out rather than laid over whatever
+            # follows it.
+            if 0x80 + len(net_kd) <= PAGE:
+                logger.info("Inserting netKd data from dump into header")
+                out.put(0x80, net_kd)
+            else:
+                logger.warning("the dump's netKd block states %#x bytes, more than the "
+                               "header's page holds; left out", len(net_kd))
+        out.put(smc_at, smc)
+        out.put(layout.KEYVAULT_AT, self.keyvault())
+        # The chain's last block is filled out with zeros, as a file's is.
+        out.put(layout.CHAIN_AT, chain + bytes(-chain_end % layout.BLOCK))
 
     def _filesystem(self, out: Image, where: dict, spills: list, when: int) -> tuple:
         """The files, the settings blobs and the table -- see `Filesystem`. Returns the
@@ -1357,11 +1371,10 @@ class Build:
         span = 0x1000
         stats_at = flash.smc_config - flash.round_to
         out = []
-        if self.dump is not None:
-            if self.dump.manufacturing_written:
-                out.append((stats_at - flash.round_to, self.dump.manufacturing, span))
-            if not self.config.nomobile:
-                out.append((stats_at, self.dump.statistics, span))
+        if self.console_manufacturing is not None:
+            out.append((stats_at - flash.round_to, self.console_manufacturing, span))
+        if self.console_statistics is not None and not self.config.nomobile:
+            out.append((stats_at, self.console_statistics, span))
         config = self._given_config()
         if config is None and self.dump is None:
             # With no dump the block has to come from the directory, and the original

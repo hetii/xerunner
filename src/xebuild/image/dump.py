@@ -54,13 +54,135 @@ from __future__ import annotations
 
 import logging
 
+from ..boards import ALL
 from ..boards.spare import PAGE
+from ..crypto import smc as cipher
+from ..smc import Smc
 from .image import Image
 from .keyvault import Keyvault
-from .order import logical
+from .order import failing, logical, marked_bad
 from .settings import CONFIG_LENGTH, SmcConfig
 
 logger = logging.getLogger(__name__)
+
+
+def cut(raw: bytes | None) -> bytes | None:
+    """A dump as the original reads it: anything past a flash's length cut off.
+
+    The original's rule, read out of its loader at 0x417171 and measured on each
+    branch. A dump longer than 48 MB is an eMMC one cut to 48 MB when it holds `FATX`
+    right there -- "FATX magic found, truncating load size to 0x3000000 bytes for mmc
+    consoles" -- or when its first page carries no valid code, which a NAND dump's
+    always does: "First page does not contain a valid ECC, assuming this is an mmc
+    dump". Otherwise it is a big block part read whole, 256 or 512 MB, cut to its
+    first 64 MB -- "assuming this is a big block flash overdump and truncating load
+    size to 0x4200000 bytes". Measured: an eMMC image padded to 64 MB with and without
+    `FATX`, and a 256 MB dump, each building the image its first part does.
+    """
+    if raw is None or len(raw) <= 0x3000000:
+        return raw
+    # The code sits in the same place in every spare layout.
+    spare = next(one.flash.spare for one in ALL
+                 if one.flash.spare is not None)
+    if raw[0x3000000:0x3000004] == b"FATX":
+        logger.info("FATX magic found, truncating load size to 0x3000000 bytes for "
+                    "mmc consoles")
+        return raw[:0x3000000]
+    if not spare.ecc_ok(raw[:PAGE + spare.length]):
+        logger.info("First page does not contain a valid ECC, assuming this is an "
+                    "mmc dump and truncating load size to 0x3000000 bytes")
+        return raw[:0x3000000]
+    if len(raw) > 0x4200000:
+        logger.info("First page contains a valid ECC, assuming this is a big block "
+                    "flash overdump and truncating load size to 0x4200000 bytes")
+        return raw[:0x4200000]
+    return raw
+
+
+def faulty(raw: bytes, flash, whole: int | None = None, ecd: bool = True) -> str:
+    """Why the original would throw this dump away, or nothing.
+
+    `whole` is the length of the file as it was handed over, which every address in the
+    header is held against; `ecd` is false under `noecdremap`.
+
+    Thrown away, not refused: the build goes on as it does with no dump at all,
+    which without a `smc.bin`, a `kv.bin` and a `smc_config.bin` beside it ends in
+    "critical bootloader files are missing". Each cause below was measured on the
+    bench console's dump with that one fault put in: the original discarded it, and
+    with the console's own files beside the build made the image this makes.
+
+    **The header, as its loader checks it at 0x416D1D**, every address against the
+    length of the file as it was handed over: the magic; the entry point and the
+    slot offset at 0x08 and 0x0C; a keyvault length over 0x8000 at 0x60; the update
+    slot at 0x64 below the offset at 0x0C or past the file -- "SysUpdateAddr is
+    malformed"; the keyvault, the filesystem and the SMC past the file at 0x6C,
+    0x70 and 0x7C; an SMC length at 0x78 other than 0x3000 or 0x3800. Three more
+    fields it only complains about and goes on, measured too: a slot count at 0x68
+    other than 2, a settings block address at 0x74 other than 0, a keyvault version
+    at 0x6A other than 0x0712.
+
+    **An eMMC dump the original built as a XeLL image** -- "nanddump.bin is a
+    ZEROPAIR/XELL image, discarding".
+
+    **Block 0 marked bad** -- "NAND dump does not appear to have a good block at
+    block 0, discarding dump!".
+
+    **More than 32 blocks to move** -- "MAX REMAPS of 32 exceeded, remapping
+    disabled and image rejected as faulty!". Its table holds 32 (0x479F78); a block
+    failing its code takes a place in it as a block marked bad does, unless
+    `noecdremap` leaves such blocks alone, and `noremap` changes nothing here --
+    all three measured.
+    """
+    head = bytes(raw[:0x80])
+    whole = len(raw) if whole is None else whole
+
+    def word(at: int) -> int:
+        return int.from_bytes(head[at:at + 4], "big")
+
+    # The original's own words for each, which name the fields its way.
+    if head[:2] != b"\xff\x4f":
+        return "flash header magic is incorrect"
+    for name, at in (("Entry", 0x08), ("Size", 0x0C)):
+        if word(at) > whole:
+            return "flash header %s is too large" % name
+    if word(0x60) > 0x8000:
+        return "flash header KeyVaultSize is too large"
+    if word(0x64) > whole or word(0x0C) > word(0x64):
+        return "flash header SysUpdateAddr is malformed"
+    if int.from_bytes(head[0x68:0x6A], "big") != 2:
+        logger.warning("flash header SysUpdateCount is not 2, continuing anyway")
+    if int.from_bytes(head[0x6A:0x6C], "big") != 0x0712:
+        logger.warning("flash header KeyVaultVersion is not 0x0712, continuing "
+                       "anyway")
+    for name, at in (("KeyVaultAddr", 0x6C), ("FileSystemAddr", 0x70)):
+        if word(at) > whole:
+            return "flash header %s is too large" % name
+    if word(0x74):
+        logger.warning("flash header SmcConfigAddr is not 0, continuing anyway")
+    if word(0x78) & ~0x800 != 0x3000:
+        return "flash header SmcBootSize is not 0x3000 or 0x3800"
+    if word(0x7C) > whole:
+        return "flash header SmcBootAddr is too large"
+    if flash.spare is None:
+        # "zeropair image" where the copyright line goes, which the original
+        # calls a ZEROPAIR/XELL image -- measured on an eMMC dump. It checks an
+        # eMMC dump only in effect: the same test on a NAND dump (0x4167AA) reads
+        # a buffer block 0 has not been copied into yet, and a NAND dump marked
+        # the same way was used.
+        if head[0x10:0x1E] == b"zeropair image":
+            return "the dump is a ZEROPAIR/XELL image"
+        return ""
+    per = flash.spare.pages_a_block * (PAGE + flash.spare.length)
+    if marked_bad(raw[:per], flash):
+        return "NAND dump does not appear to have a good block at block 0"
+    moved = set(marked_bad(raw, flash))
+    if ecd:
+        moved |= set(failing(raw, flash))
+    if len(moved) > 32:
+        return ("MAX REMAPS of 32 exceeded (%d), remapping disabled and image "
+                "rejected as faulty" % len(moved))
+    return ""
+
 
 class Dump:
     """One console's flash, with its blocks in the order the console reads them."""
@@ -203,10 +325,12 @@ class Dump:
 
         The original narrates the same things as it loads a dump, and it goes on when
         one of them does not work out: without a CPU key it reports "keyvault decrypt
-        failed, discarding" and carries on to everything else. So does this.
+        failed, discarding" and carries on to everything else. So does this. Every
+        number said here is held against what the original's extract mode reports for
+        the same dump -- see `tests/xebuild/e2e/e2e_extract.py`.
         """
         head = self.header
-        logger.info("keyvault at %#x of size %#x", head.keyvault_at, head.keyvault_size)
+        logger.info("keyvault at %#x of size 0x4000", head.keyvault_at)
         if cpu_key is None:
             logger.info("no cpu key given, so the keyvault stays sealed")
         else:
@@ -216,7 +340,9 @@ class Dump:
                             keyvault.serial, keyvault.made_on)
             else:
                 logger.info("keyvault did not open with this cpu key")
-        logger.info("smc at %#x of size %#x, sealed", head.smc_at, head.smc_size)
+        smc = Smc(cipher.opened(self.smc))
+        logger.info("smc at %#x of size %#x: %s%s", head.smc_at, head.smc_size,
+                    smc.named, ", a stock image" if smc.clean else "")
         logger.info("smc config at %#x of size %#x, %s", self.flash.smc_config,
                     CONFIG_LENGTH, "sound" if self.smc_config_ok else "not sound")
         logger.info("statistics at %#x of size %#x",
@@ -225,13 +351,50 @@ class Dump:
                     self.flash.smc_config - 2 * self.flash.round_to,
                     "kept" if self.manufacturing_written
                     else "none, the block is erased")
-        found = self.chain
-        logger.info("chain of %d stages%s, pairing %s, lockdown %d",
-                    len(found.stages),
-                    " with an inserted bootloader" if found.converted else "",
-                    found.console.pairing.hex(), found.console.ldv)
+        for name, found in sorted(self.image.blobs.items()):
+            logger.info("%s version %d at %#x, %#x bytes, page %#x", name,
+                        found["version"], found["offset"], found["length"],
+                        found["offset"] // PAGE)
+        self._survey_files()
+        self._survey_chain()
+
+    def _survey_files(self) -> None:
+        """The filesystem's files, in the order its table lists them, and the security
+        files among them."""
+        for entry in self.image.directory.entries:
+            logger.info("%-22s block %#06x at %#010x, %#x bytes, stamp %#010x",
+                        entry.name, entry.sector,
+                        self.flash.offset_of(entry.sector, self.image.bigffs),
+                        entry.size, entry.stamp)
         for name, body in self.security.items():
             logger.info("%s in the filesystem, %#x bytes", name, len(body))
+
+    def _survey_chain(self) -> None:
+        """The bootloader chain, stage by stage, and what the CF says of the console.
+
+        The original's extract mode checks the chain as its update mode would and names
+        each stage by its place -- "CB v9188 at 0x9ac0 size 0x7800 (dual CB)" -- which
+        is how it calls an RGH3 console's third CB its CD. This names each stage by its
+        own magic and says which is an inserted one.
+        """
+        found = self.chain
+        for stage in found.walked:
+            logger.info("%s v%d at %#x, %#x bytes%s", stage.tag, stage.build, stage.at,
+                        stage.length, " (inserted by an exploit)" if stage.payload
+                        else "")
+        last = found.walked[-1] if found.walked else None
+        if last is not None and last.tag in ("CE", "SE"):
+            # "final truncated bootloader size 0x6c5c0": where the last stage ends,
+            # counted from the start of the flash and rounded up to 0x10.
+            end = last.at + last.length
+            logger.info("the bootloaders end at %#x", end + -end % 0x10)
+        try:
+            console = found.console
+        except ValueError as why:
+            logger.info("no console block read off the CF: %s", why)
+            return
+        logger.info("pairing %s, lockdown %d, from the CF", console.pairing.hex(),
+                    console.ldv)
 
     def __repr__(self) -> str:
         return "Dump(%s, %r)" % (self.board.name, self.flash)

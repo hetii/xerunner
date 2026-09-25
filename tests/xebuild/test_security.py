@@ -111,7 +111,8 @@ class TheKeyvaultStyleTwo(unittest.TestCase):
         plain = rc4(derive(KEY, sealed[:0x10]), sealed[0x10:])
         self.assertEqual(plain[:8], b"HEADHEAD")
         self.assertEqual(plain[8:10], b"\x01\x09")
-        self.assertEqual(security.when_in(plain[0x10:]), WHEN)
+        # WHEN is odd, and the stamp keeps even seconds.
+        self.assertEqual(security.when_in(plain[0x10:]), WHEN - 1)
         self.assertEqual(plain[0x18:], body[0x18:])
 
     def test_an_extended_that_does_not_verify_is_not_opened(self):
@@ -119,6 +120,17 @@ class TheKeyvaultStyleTwo(unittest.TestCase):
         self.assertFalse(security.opens("extended.bin", sealed, KEY))
         self.assertTrue(security.opens("extended.bin", sealed, OTHER))
 
+
+
+class TheStamp(unittest.TestCase):
+
+    def test_two_seconds_on_and_down_to_an_even_second(self):
+        """Measured on a frozen original: 0x5A123456 and 0x5A123457 both stamp the
+        FILETIME of 0x5A123458."""
+        for when in (0x5A123456, 0x5A123457):
+            with self.subTest(when=hex(when)):
+                self.assertEqual(security.stamp(when), security.stamp(0x5A123456))
+                self.assertEqual(security.when_in(security.stamp(when)), 0x5A123456)
 
 
 class AFileHandedInBesideTheBuild(unittest.TestCase):
