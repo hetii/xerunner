@@ -33,8 +33,6 @@ A glitched console does not need that field to be right, because the exploit pat
 check out rather than recomputing it; a retail image does.
 """
 
-from __future__ import annotations
-
 from ..crypto.keys import hmacsha
 
 

@@ -16,8 +16,6 @@ Everything here was measured by running the original for each of the eleven and 
 what it reached for.
 """
 
-from __future__ import annotations
-
 from ..boards.flash import FlatBigNand
 
 

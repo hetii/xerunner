@@ -18,8 +18,6 @@ the built-in one is zeros: a core of 0xD3C bytes is, since the built-in one ends
 zeros, and is patched -- measured on 17559.
 """
 
-from __future__ import annotations
-
 import os
 
 

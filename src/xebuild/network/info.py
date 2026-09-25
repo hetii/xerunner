@@ -14,8 +14,6 @@ on a real console's answer, whose every field the original's report agrees with:
     0x100 1BL key, 0x110 1BL, 0x220 PIRS and 0x330 MASTER public keys, 0x110 each
 """
 
-from __future__ import annotations
-
 from ..crypto.keys import hammingweight, uideccencode
 
 # Board names by the original's table at 0x44A6E0, which its index 0 calls Unknown.

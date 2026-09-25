@@ -24,8 +24,6 @@ A setting that may be absent says so at its own site: `None if given is None els
 so a value that is really missing is never quietly turned into one that is not.
 """
 
-from __future__ import annotations
-
 import os
 
 

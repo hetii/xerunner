@@ -17,8 +17,6 @@ wine against a stand-in server that records every byte, and this sends the same.
   anything else a failure -- measured: two zeros made it say "Failed to erase block".
 """
 
-from __future__ import annotations
-
 import socket
 import struct
 import logging

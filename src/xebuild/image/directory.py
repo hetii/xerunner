@@ -38,8 +38,6 @@ lists them anyway, without checking, so nothing here filters them either; `relea
 says so and the caller decides.
 """
 
-from __future__ import annotations
-
 import time
 import struct
 

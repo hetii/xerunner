@@ -27,8 +27,6 @@ An eMMC console has none of these: there is no spare area at all, so its flash a
 `None` and its image is written flat.
 """
 
-from __future__ import annotations
-
 # The data bytes of one page, whatever the part; the spare area follows each one. It is
 # defined here rather than in `flash.py` only because of the direction of the import:
 # `flash` reads the layouts from here, so this is the lower of the two.

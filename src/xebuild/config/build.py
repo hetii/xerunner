@@ -13,8 +13,6 @@ twenty-one. The thirty-one `-o` settings come from a third table and are declare
 `options.py`, which this class inherits, so a build's configuration is one object.
 """
 
-from __future__ import annotations
-
 import logging
 
 from .. import boards, imagetypes

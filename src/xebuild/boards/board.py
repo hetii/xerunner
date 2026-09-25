@@ -14,8 +14,6 @@ about it that was measured. What a build chooses -- the hack, the release, the l
 filesystem -- is passed to the method that needs it and is never stored.
 """
 
-from __future__ import annotations
-
 
 class Board:
     """One console: a motherboard, and the flash fitted to it."""

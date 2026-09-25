@@ -13,8 +13,6 @@ the two agree on everything real; the truncation is done anyway, because a diffe
 that only shows on input nobody has passed yet is exactly the kind that surfaces later.
 """
 
-from __future__ import annotations
-
 import hmac
 import hashlib
 

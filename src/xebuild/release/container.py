@@ -30,8 +30,6 @@ release's own readme describes, the two reproduce the checksums the recipe state
 well, twenty-two of twenty-two.
 """
 
-from __future__ import annotations
-
 import struct
 import hashlib
 

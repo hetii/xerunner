@@ -43,8 +43,6 @@ whether a complaint stops it or is only printed -- is a rule about builds, and l
 with them.
 """
 
-from __future__ import annotations
-
 import re
 import binascii
 

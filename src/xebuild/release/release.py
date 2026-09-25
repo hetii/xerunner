@@ -8,8 +8,6 @@ found next door.
 This is the only thing here that touches the disk. Everything under it takes bytes.
 """
 
-from __future__ import annotations
-
 import os
 import logging
 

@@ -1,7 +1,5 @@
 """Each client action, from the connection to the files it leaves behind."""
 
-from __future__ import annotations
-
 import os
 import logging
 

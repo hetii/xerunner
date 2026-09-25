@@ -1,7 +1,5 @@
 """Collecting a console's own things over its update server, and the update itself."""
 
-from __future__ import annotations
-
 import os
 import logging
 

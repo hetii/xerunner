@@ -6,8 +6,6 @@ the address is used. Build mode writes a file and never reaches a console, so it
 not inherit this.
 """
 
-from __future__ import annotations
-
 from .base import BaseConfig
 
 

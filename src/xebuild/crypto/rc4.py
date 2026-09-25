@@ -5,8 +5,6 @@ and then walked, exclusive-oring the stream over the data. It is its own inverse
 function serves both directions and the caller says which by what it passes in.
 """
 
-from __future__ import annotations
-
 
 def rc4(key: bytes, data: bytes) -> bytes:
     """The keystream over `data`. Encrypting and decrypting are the same operation.

@@ -43,8 +43,6 @@ where the original says 169, because copies of an older version were written aft
 current one.
 """
 
-from __future__ import annotations
-
 from .anchor import Anchor
 from .header import Header
 from .directory import Directory

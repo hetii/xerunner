@@ -6,8 +6,6 @@ stand in for real ones: what matters is the shape -- a header whose hash at 0x0C
 for everything from 0x150 on -- not any console's content.
 """
 
-from __future__ import annotations
-
 import hashlib
 import unittest
 

@@ -1,7 +1,5 @@
 """The original's command line, read into the settings a build takes."""
 
-from __future__ import annotations
-
 import io
 import os
 import shutil

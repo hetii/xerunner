@@ -50,8 +50,6 @@ over is the sealed SMC exactly as the console holds it, and reading it is a sepa
 from taking it.
 """
 
-from __future__ import annotations
-
 import logging
 
 from ..smc import Smc

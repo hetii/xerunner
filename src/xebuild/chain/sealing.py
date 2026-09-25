@@ -37,8 +37,6 @@ console's key would go -- this is the "zeropair" the original's log talks about 
 under the later regime it carries CB_A's own head as well, with the flag word blanked.
 """
 
-from __future__ import annotations
-
 import math
 import struct
 import collections

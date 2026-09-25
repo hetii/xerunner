@@ -45,8 +45,6 @@ nothing goes where a CB_B would. It appears 194 times across the releases here, 
 list is positional and the holes are part of the shape rather than something to skip.
 """
 
-from __future__ import annotations
-
 import struct
 import binascii
 

@@ -62,8 +62,6 @@ this reads the block where it lies and keeps the console's data. Kept as a decis
 revisit once every mode works.
 """
 
-from __future__ import annotations
-
 import logging
 import functools
 

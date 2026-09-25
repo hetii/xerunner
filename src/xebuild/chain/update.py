@@ -15,8 +15,6 @@ The CF is sealed under the 1BL key every console has, and the CG under the key t
 carries at 0x330. Update mode lays the same pair over a console that is running.
 """
 
-from __future__ import annotations
-
 from . import sealing
 from .stage import Stage
 from ..crypto.keys import hmacsha

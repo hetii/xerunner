@@ -23,8 +23,6 @@ build's business: measured, a release's own file holds three, the first two patc
 bootloaders and the third is what goes into the image's patch slot.
 """
 
-from __future__ import annotations
-
 import struct
 
 

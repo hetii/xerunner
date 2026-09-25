@@ -8,8 +8,6 @@ has `-ip`, which `NetworkConfig` holds and client mode has too. `-d` it shares w
 build mode only in spelling: there it is where a console's own files are read from, here
 it is where the console's dump is written before anything is flashed. """
 
-from __future__ import annotations
-
 import os
 
 from .network import NetworkConfig

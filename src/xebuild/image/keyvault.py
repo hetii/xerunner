@@ -51,8 +51,6 @@ on both consoles. So a rebuilt image's keyvault is the console's own bytes exact
 nothing about it has to be carried from the dump.
 """
 
-from __future__ import annotations
-
 import logging
 
 from ..crypto.formats import decrypt_keyvault, encrypt_keyvault

@@ -17,8 +17,6 @@ them is read by anything that decides anything, and none is in `__repr__`: they 
 to be looked at and measured, not to be built on.
 """
 
-from __future__ import annotations
-
 import struct
 
 from ..boards.flash import PAGE

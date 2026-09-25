@@ -25,8 +25,6 @@ A row, as the walk at 0x432190 reads it:
                                               +0x50  a container's title
 """
 
-from __future__ import annotations
-
 import struct
 import hashlib
 

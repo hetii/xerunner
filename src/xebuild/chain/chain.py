@@ -34,8 +34,6 @@ original will not read such a dump at all -- "**** Warning: error getting CB/CBA
 aborting!" -- so this names the condition rather than pretending to have walked it.
 """
 
-from __future__ import annotations
-
 import logging
 
 from . import sealing

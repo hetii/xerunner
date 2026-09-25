@@ -33,8 +33,6 @@ it from the bytes the CG tail ends in finds the CG's own body instead, because t
 share bytes.
 """
 
-from __future__ import annotations
-
 from .spare import PAGE, BigBlockChip, BigBlockController, SmallBlock
 
 # One erase block of the filesystem's own reckoning: what a directory entry counts in,
