@@ -4,6 +4,8 @@ Needs real material and says which. See `tests/xebuild/e2e/__init__.py`.
 """
 
 import os
+import shutil
+import tempfile
 import unittest
 
 from xebuild.boards import for_name
@@ -86,3 +88,25 @@ class AgainstTheRealRelease(unittest.TestCase):
 
     def test_an_option_that_is_a_patch_file(self):
         self.assertTrue(self.release.option("nofcrt").records)
+
+    def test_a_container_damaged_anywhere_is_not_loaded_at_all(self):
+        """Measured on the original: a byte changed in a file's data, or in the
+        padding behind xboxupd.bin that no file's checksum covers -- "checks failed!
+        Container corrupt!", and nothing is taken from it."""
+        name = next(one for one in sorted(os.listdir(self.release.where))
+                    if one.lower().startswith("su") and "_" in one)
+        with open(os.path.join(self.release.where, name), "rb") as handle:
+            raw = handle.read()
+        container = self.release.container
+        held = container.held["xboxupd.bin"]
+        padding = container._at(held.first + held.blocks - 1) + held.length % 0x1000
+        data = container._at(container.held["$flash_dash.xex"].first)
+        for at in (data + 0x100, padding + 4):
+            with self.subTest(at=hex(at)):
+                work = tempfile.mkdtemp(prefix="xebuild-release-")
+                self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+                spoiled = bytearray(raw)
+                spoiled[at] ^= 1
+                with open(os.path.join(work, name), "wb") as handle:
+                    handle.write(spoiled)
+                self.assertIsNone(Release(work).container)

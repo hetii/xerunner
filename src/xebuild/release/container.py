@@ -44,7 +44,8 @@ DATA_AT = 0xC000
 SPAN, SPAN2 = 0xAA, 0x70E4
 
 
-def intact(raw: bytes, header_hash: bytes = b"") -> bool:
+def intact(raw: bytes, header_hash: bytes = b"", content_type: int = 0, title: int = 0,
+           magic: bytes = b"") -> bool:
     """Whether a package holds together the way the original checks one before it
     sends it anywhere (0x405FA0, 0x405610).
 
@@ -61,9 +62,21 @@ def intact(raw: bytes, header_hash: bytes = b"") -> bool:
     third, and none sent was that large. The layout is taken as the original takes
     it, one block to a table, which is not `Package`'s reading of its own tables --
     a check and a reader, not one thing.
+
+    Three fields are asked for first where the caller names them, as the update
+    container is loaded (0x40CB2C): the content type at 0x344 (`0x000B0000`), the
+    title at 0x360 (`0xFFFE07D1`) and four bytes at 0x971A (`SUPD`). The avatar
+    containers are sent with none of them asked.
     """
     raw = bytes(raw)
     if len(raw) < 0x344:
+        return False
+    if content_type and struct.unpack_from(">I", raw, 0x344)[0] != content_type:
+        return False
+    if title and (len(raw) < 0x364
+                  or struct.unpack_from(">I", raw, 0x360)[0] != title):
+        return False
+    if magic and raw[0x971A:0x971A + len(magic)] != magic:
         return False
     if any(header_hash) and raw[0x32C:0x340] != bytes(header_hash):
         return False

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 
-from .container import Container
+from .container import Container, intact
 from .patches import Patches
 from .recipe import Recipe
 
@@ -165,7 +165,18 @@ class Release:
             for name in sorted(os.listdir(self.where)):
                 if name.lower().startswith("su") and "_" in name:
                     logger.info("reading %s", os.path.join(self.where, name))
-                    self._container = Container(self._read(self.where, name))
+                    raw = self._read(self.where, name)
+                    # Checked whole before anything is taken from it, and not loaded
+                    # at all where any of it fails (0x40CB2C): measured with one byte
+                    # changed in a file's data and with one in the padding behind
+                    # xboxupd.bin that no file's checksum covers -- both "checks
+                    # failed! Container corrupt!", and the build then stops for want
+                    # of its CF.
+                    if intact(raw, content_type=0x000B0000, title=0xFFFE07D1,
+                              magic=b"SUPD"):
+                        self._container = Container(raw)
+                    else:
+                        logger.warning("checks failed! Container corrupt!")
                     break
             else:
                 logger.info("system update container not found in %s, skipping load",

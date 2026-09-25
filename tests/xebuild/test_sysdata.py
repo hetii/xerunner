@@ -123,6 +123,19 @@ class APackageHoldingTogether(unittest.TestCase):
             spoiled[at] ^= 1
             self.assertFalse(intact(bytes(spoiled)), hex(at))
 
+    def test_the_update_container_s_three_fields_are_asked_only_when_named(self):
+        """0x40CB2C asks for the content type, the title and `SUPD`; an avatar
+        container is sent with none of them asked."""
+        raw = bytearray(package())
+        struct.pack_into(">I", raw, 0x344, 0x000B0000)
+        struct.pack_into(">I", raw, 0x360, 0xFFFE07D1)
+        raw[0x32C:0x340] = hashlib.sha1(bytes(raw[0x344:0xA000])).digest()
+        self.assertTrue(intact(bytes(raw), content_type=0x000B0000, title=0xFFFE07D1))
+        self.assertFalse(intact(bytes(raw), content_type=0x000C0000))
+        self.assertFalse(intact(bytes(raw), title=0xFFFE07D2))
+        self.assertFalse(intact(bytes(raw), magic=b"SUPD"))
+        self.assertTrue(intact(bytes(raw)))
+
     def test_the_signature_before_0x344_is_not_checked(self):
         spoiled = bytearray(package())
         spoiled[0x10] ^= 1
