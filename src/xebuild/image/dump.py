@@ -59,7 +59,7 @@ from .keyvault import Keyvault
 from ..boards.spare import PAGE
 from ..crypto.formats import decrypt_smc
 from .settings import CONFIG_LENGTH, SmcConfig
-from .order import failing, logical, marked_bad
+from .order import failing, logical, marked_bad, mixed_controller
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +189,14 @@ class Dump:
                  remap: bool = True, ecd: bool = True):
         self.board = board
         self.flash = board.flash
+        # The original drops these blocks and this keeps them -- see `image.order`.
+        step = PAGE + board.flash.spare.length if board.flash.spare is not None else 0
+        for block in mixed_controller(raw, board.flash, ecd):
+            logger.warning("nanddump.bin has a mixed controller LBA at block %#x (raw "
+                           "offset %#x), block kept where it lies", block,
+                           block * step * board.flash.spare.pages_a_block)
+            logger.warning("this is likely caused by previously using jaspersb on a "
+                           "jasper type console!")
         self.image = Image(logical(raw, board.flash, remap, ecd), board.flash, bigffs)
 
     @property
