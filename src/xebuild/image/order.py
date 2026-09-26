@@ -48,18 +48,43 @@ Reading by position is what this does, and it is what the console must do as wel
 that console runs, and a machine that looked for its keyvault and its bootloaders by
 those announced numbers would find neither.
 
-**A number written in the other controller's layout is the same case, and a
-deliberate divergence.** A block whose spare states its own position the way the other
-controller writes it -- "nanddump.bin has a mixed controller LBA at block 0x38d ...
-block ignored ... likely caused by previously using jaspersb on a jasper type console"
-(the test is at 0x415C7B) -- is dropped by the original, and whatever was in it is lost
-to the build: measured with the bench console's crl.bin block rewritten that way, the
-original's verify failed and it laid the release's crl.bin instead, 2262 bytes apart
-from this. The data is the console's own and only the number's encoding differs, and
-everything taken out of a dump is verified before use -- a security file against its
-hash or key, the keyvault against the CPU key, the settings block against its sum -- so
-this reads the block where it lies and keeps the console's data. Kept as a decision to
-revisit once every mode works.
+**A number written in the other controller's layout is kept where it lies -- a
+deliberate divergence, agreed on 2026-09-26.** On a small-block flash a block's number
+sits in page 0's spare either at bytes 0-1 (the older controller) or at bytes 1-2 (the
+newer), 12 bits each. The original works out which one this dump's controller uses from
+the first block, counting from 1, whose number matches its position one way or the
+other (0x416AA0: "NAND dump uses big block controller"). It then calls a block "mixed
+controller" when the number read the **other** way equals the block's own position
+(0x415B00, at 0x415C7B and 0x415CE8). Excluded are block 0, a block that is erased
+throughout, and one marked bad at page 0 or page 16; a block whose pages fail their
+code goes down the ECD path instead ("ECD error ... will be remapped"). eMMC and big-
+block flash have no such case. Such a block it does not copy at all (0x416212 to
+0x416579): its place stays erased, whatever was in it is lost, and every later reader
+falls back as it would for a missing file -- measured with the block holding crl.bin
+rewritten so, where the console's own copy then "verify failed" and crl.bin was sealed
+under other parameters than the console's, 2262 bytes apart from this.
+
+Why this keeps it:
+
+* The original's own test is what says the block is where it belongs -- its number, read
+  the other way, is its position -- so the data is the console's own, in its place, and
+  its code is sound, or the ECD path would have taken it.
+* The rule also hits blocks that are not mixed at all: a block at 0x101, 0x202 or 0x303
+  whose sequence byte happens to equal the low byte of its number reads right both ways,
+  and the original drops it -- measured with block 0x101's sequence set to 1, "mixed
+  controller LBA at block 0x101 ... likely caused by previously using jaspersb".
+* What the original leaves in the block's place is not safer, only emptier. Most of what
+  a dump gives is verified before use -- a security file against its hash or key, the
+  keyvault against the CPU key, a firmware file against its checksum -- and those fall
+  back the same way either way. What is not verified -- the statistics, the
+  manufacturing data, the settings blobs, the settings block, the filesystem's table --
+  the original would take as erased, and this takes as the console has it. The one
+  thing kept data could be is older than the console's current state, if the console
+  itself never reads such a block; that is not known.
+
+No dump this project holds, 260 of them, has such a block. The original's warning is
+given for exactly the blocks it would have dropped -- see `mixed_controller` -- worded
+for what happens here.
 """
 
 import logging
@@ -107,6 +132,50 @@ def _failing(raw: bytes, flash) -> tuple:
             if not flash.spare.ecc_ok(raw[at : at + step]):
                 out.append(block)
                 break
+    return tuple(out)
+
+
+def mixed_controller(raw: bytes, flash, ecd: bool = True) -> tuple:
+    """The blocks the original calls "mixed controller LBA" -- see the module's notes
+    -- in order, by the original's own tests (0x416AA0, 0x415B00).
+
+    A small-block flash only. The dump's own layout comes from the first block after 0
+    whose number matches its position. Then every block after 0 that is not erased
+    throughout, not marked bad at page 0 or page 16, whose number read the other
+    layout's way is its position, and -- with `ecd`, as the original's ECD test comes
+    after -- whose pages all carry their code.
+    """
+    spare = flash.spare
+    if spare is None or spare.pages_a_block != 32:
+        return ()
+    step = PAGE + spare.length
+    span = step * spare.pages_a_block
+
+    def read(block):
+        fields = raw[block * span + PAGE:block * span + step]
+        older_way = (fields[1] & 0xF) << 8 | fields[0]
+        newer_way = (fields[2] & 0xF) << 8 | fields[1]
+        return fields, older_way, newer_way
+
+    newer = False
+    for block in range(1, len(raw) // span):
+        fields, older_way, newer_way = read(block)
+        if fields[5] != 0xFF or fields[1] == 0xFF:
+            continue
+        if newer_way == block or older_way == block:
+            newer = newer_way == block
+            break
+    failed = set(failing(raw, flash)) if ecd else set()
+    out = []
+    for block in range(1, len(raw) // span):
+        at = block * span
+        fields, older_way, newer_way = read(block)
+        if raw[at:at + span] == b"\xff" * span:
+            continue
+        if fields[5] != 0xFF or raw[at + 16 * step + PAGE + 5] != 0xFF:
+            continue
+        if (older_way if newer else newer_way) == block and block not in failed:
+            out.append(block)
     return tuple(out)
 
 

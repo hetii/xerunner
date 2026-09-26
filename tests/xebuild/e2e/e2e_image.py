@@ -157,6 +157,60 @@ class AConsoleSOwnMaterial(unittest.TestCase):
         self.assertFalse(Dump(spoilt, self.dump.board).smc_config_ok)
 
 
+class TheOriginalSMixedControllerBlocks(unittest.TestCase):
+    """`order.mixed_controller` against the blocks the original warned of, on the bench
+    console's dump with blocks made so -- the original's warnings measured on
+    2026-09-26. Skipped without `XEBUILD_DUMP`."""
+
+    @classmethod
+    def setUpClass(cls):
+        where = os.environ.get("XEBUILD_DUMP", "")
+        if not os.path.isfile(where):
+            raise unittest.SkipTest("XEBUILD_DUMP does not name a dump")
+        with open(where, "rb") as handle:
+            cls.raw = handle.read()
+        cls.flash = for_name("trinity")[0].flash
+
+    def spare_rewritten(self, image, block, change):
+        spare, step = self.flash.spare, 0x210
+        for page in range(32):
+            at = block * 0x4200 + page * step
+            fields = bytearray(image[at + 0x200:at + step])
+            change(fields)
+            image[at + 0x200:at + step] = spare.with_ecc(bytes(image[at:at + 0x200]),
+                                                         bytes(fields))
+
+    def as_the_older_controller(self, block):
+        def change(fields):
+            fields[0], fields[1], fields[2] = block & 0xFF, block >> 8, 0x00
+        return change
+
+    def test_each_block_the_original_warned_of_and_no_other(self):
+        raw = self.raw
+        normal = bytearray(raw)
+        self.spare_rewritten(normal, 0x38D, self.as_the_older_controller(0x38D))
+        # The same block with a page whose code is stale: the original takes the ECD
+        # path instead ("ECD error at block 0x38d ... will be remapped").
+        failing = bytearray(normal)
+        failing[0x38D * 0x4200 + 5 * 0x210 + 0x10] ^= 1
+        pool = bytearray(raw)
+        pool[0x3F0 * 0x4200:0x3F1 * 0x4200] = raw[0x38D * 0x4200:0x38E * 0x4200]
+        self.spare_rewritten(pool, 0x3F0, self.as_the_older_controller(0x3F0))
+        # A block that is right, whose sequence byte happens to read it right both ways.
+        coincidence = bytearray(raw)
+
+        def sequence_one(fields):
+            fields[0] = 0x01
+        self.spare_rewritten(coincidence, 0x101, sequence_one)
+        cases = (("untouched", raw, ()), ("normal", normal, (0x38D,)),
+                 ("failing", failing, ()), ("pool", pool, (0x3F0,)),
+                 ("coincidence", coincidence, (0x101,)))
+        for name, image, warned in cases:
+            with self.subTest(name):
+                self.assertEqual(order.mixed_controller(bytes(image), self.flash),
+                                 warned)
+
+
 class AnEmmcImageTheOriginalBuilt(unittest.TestCase):
     """Skipped unless `XEBUILD_EMMC` names one."""
 
