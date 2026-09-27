@@ -393,11 +393,23 @@ class Build:
 
         Otherwise it is `plain_keyvault` sealed again. See there.
         """
-        if (self.material.keyvault is None and self.dump is not None
+        if (self._handed_keyvault is None and self.dump is not None
                 and not self.drawing and not self._dvdkey_goes_in
                 and (not self.cpu_key or self._decrypt_console_keyvault() is not None)):
             return self.dump.sealed_keyvault
         return self.plain_keyvault().sealed(self.cpu_key)
+
+    @property
+    def _handed_keyvault(self) -> bytes | None:
+        """A keyvault beside the build: `kv.bin`, then `keyvault.bin`, then
+        `KV_dec.bin` -- the original's order (0x42A791), each tried only where the one
+        before is missing, measured with each alone and with two together."""
+        given = self.material.keyvault
+        for name in ("keyvault.bin", "KV_dec.bin"):
+            if given is not None:
+                break
+            given = self.material.bytes_in(name)
+        return given
 
     def _decrypt_console_keyvault(self) -> Keyvault | None:
         """The console's keyvault, or None where this CPU key does not open it --
@@ -434,7 +446,7 @@ class Build:
             raise ValueError("a keyvault is sealed under the CPU key, and none was "
                              "given")
         own = self._decrypt_console_keyvault()
-        given = self.material.keyvault
+        given = self._handed_keyvault
         if given is not None:
             vault = Keyvault.handed_in(given, self.cpu_key)
         elif own is not None:

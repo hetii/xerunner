@@ -53,3 +53,12 @@ the code makes the decision:
   a buffer nothing was written to; its own raw branch refuses the same shortfall with
   "extracting config did not work, not enough data to copy!", and so does this.
   -- `image/settings.py`, `SmcConfig.found_in`
+- **A number outside its range, or not a number, is refused.** The original leaves a fan
+  speed or temperature outside its range unused ("out of range ... not using"), clamps
+  `cfldv` to 32 -- `cfldv=288` passes silently as 32 -- and writes `-o cputemp=abc`
+  through as whatever it makes of it. A value nobody asked for is a fault nobody can see
+  afterwards. -- `config/base.py`, `check_number`
+- **A kv.bin that is neither 0x4000 nor 0x3FF0 bytes is refused.** The original says
+  "kv.bin is not the correct size! Skipping verification and encryption!" and writes the
+  file into the image unsealed, which gives the console a keyvault it cannot open.
+  -- `image/keyvault.py`, `Keyvault.handed_in`
