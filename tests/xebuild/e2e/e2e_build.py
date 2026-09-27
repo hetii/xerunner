@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import unittest
 
+from typing import ClassVar
 from xebuild.chain import Chain
 from xebuild.crypto import formats
 from xebuild.crypto.rc4 import rc4
@@ -182,6 +183,9 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
             )
         self.where = tempfile.mkdtemp(prefix="xebuild-e2e-material-")
         self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        # Links to the shared material rather than copies of it. Every file a test adds
+        # beside them is opened "xb": a name that is already a link then fails the
+        # test instead of writing through it into the material every run reads.
         os.symlink(dump, os.path.join(self.where, "nanddump.bin"))
         key = os.environ.get("XEBUILD_CPUKEY", "")
         if key:
@@ -294,7 +298,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 for name in os.listdir(self.where):
                     os.symlink(os.path.join(self.where, name),
                                os.path.join(where, name))
-                with open(os.path.join(where, "smc.bin"), "wb") as handle:
+                with open(os.path.join(where, "smc.bin"), "xb") as handle:
                     handle.write(decrypt_smc(sealed))
                 one = Build(BuildConfig(image_type=kind, console=board),
                             Material(where), self.release)
@@ -344,7 +348,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         self.addCleanup(shutil.rmtree, where, ignore_errors=True)
         for name in os.listdir(self.where):
             os.symlink(os.path.join(self.where, name), os.path.join(where, name))
-        with open(os.path.join(where, "smc.bin"), "wb") as handle:
+        with open(os.path.join(where, "smc.bin"), "xb") as handle:
             handle.write(given)
         return where
 
@@ -411,10 +415,10 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         for name in os.listdir(self.where):
             if name != "nanddump.bin":
                 os.symlink(os.path.join(self.where, name), os.path.join(where, name))
-        with open(os.path.join(where, "nanddump.bin"), "wb") as handle:
+        with open(os.path.join(where, "nanddump.bin"), "xb") as handle:
             handle.write(raw)
         for name, body in (files or {}).items():
-            with open(os.path.join(where, name), "wb") as handle:
+            with open(os.path.join(where, name), "xb") as handle:
                 handle.write(body)
         return where
 
@@ -576,7 +580,28 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
         self.assertEqual(decrypt_smc(sealed)[4:], bytes(0x3000 - 4))
 
-    def test_the_whole_file_is_the_original_s(self):
+    # The references by type, one test each so that they run side by side; every type
+    # among them has to be in one -- `test_no_reference_is_left_out`.
+    KINDS: ClassVar[tuple] = (("glitch2",), ("glitch2m",), ("glitch",),
+                              ("retail", "jtag"))
+
+    def test_no_reference_is_left_out(self):
+        laid = {kind for _path, kind, _board in self._laid()}
+        self.assertLessEqual(laid, {kind for group in self.KINDS for kind in group})
+
+    def test_the_whole_file_is_the_original_s_glitch2(self):
+        self._whole_files(self.KINDS[0])
+
+    def test_the_whole_file_is_the_original_s_glitch2m(self):
+        self._whole_files(self.KINDS[1])
+
+    def test_the_whole_file_is_the_original_s_glitch(self):
+        self._whole_files(self.KINDS[2])
+
+    def test_the_whole_file_is_the_original_s_retail_and_jtag(self):
+        self._whole_files(self.KINDS[3])
+
+    def _whole_files(self, kinds: tuple):
         """Every byte of the file a programmer writes, spare and codes included.
 
         The build time comes out of the reference's own crl.bin, whose stamp is the
@@ -587,6 +612,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
             raise unittest.SkipTest("XEBUILD_CPUKEY is what an image is sealed for")
         cpu = bytes.fromhex(os.environ["XEBUILD_CPUKEY"])
         for path, kind, board in self._laid():
+            if kind not in kinds:
+                continue
             with self.subTest(os.path.basename(path)):
                 with open(path, "rb") as handle:
                     raw = handle.read()
@@ -598,7 +625,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                     os.symlink(os.path.join(self.where, name),
                                os.path.join(where, name))
                 sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
-                with open(os.path.join(where, "smc.bin"), "wb") as handle:
+                with open(os.path.join(where, "smc.bin"), "xb") as handle:
                     handle.write(decrypt_smc(sealed))
                 plain = formats.decrypt_crl(image.read("crl.bin"), cpu)[0]
                 one = Build(BuildConfig(image_type=kind, console=board),
@@ -646,8 +673,61 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
         self.release = Release(release, os.path.join(os.path.dirname(release),
                                                      "common"))
 
-    def test_the_whole_file_is_the_original_s(self):
-        for cell in sorted(os.listdir(self.where)):
+    # The cells by what they ask, one test each so that they run side by side; every
+    # cell has to be in one of them -- `test_no_cell_is_left_out`.
+    GROUPS: ClassVar[dict] = {
+        "bad_blocks": ("badblocks-",),
+        "devkit": ("devkit-",),
+        "donor": ("donor-",),
+        "full_flash": ("fullflash-",),
+        "loaders": ("loader-",),
+        "security_files": ("material-crl", "material-dae", "material-mixed-dae",
+                           "material-own-", "material-ext", "material-plainz-",
+                           "material-sec", "material-short-", "material-fcrt"),
+        "kv_blobs_and_settings": ("material-kv-", "material-mobile",
+                                  "material-smc_config"),
+        "memory_units": ("mu64-", "mu256-"),
+        "one_of_a_kind": ("jtag-", "patchname-", "rgh3-"),
+    }
+
+    def _cells(self, group: str) -> list:
+        return [cell for cell in sorted(os.listdir(self.where))
+                if cell.startswith(self.GROUPS[group])]
+
+    def test_no_cell_is_left_out(self):
+        grouped = [cell for group in self.GROUPS for cell in self._cells(group)]
+        self.assertEqual(sorted(grouped), sorted(os.listdir(self.where)))
+
+    def test_bad_blocks(self):
+        self._each_whole_file("bad_blocks")
+
+    def test_devkit(self):
+        self._each_whole_file("devkit")
+
+    def test_donor(self):
+        self._each_whole_file("donor")
+
+    def test_full_flash(self):
+        self._each_whole_file("full_flash")
+
+    def test_loaders(self):
+        self._each_whole_file("loaders")
+
+    def test_security_files(self):
+        self._each_whole_file("security_files")
+
+    def test_kv_blobs_and_settings(self):
+        self._each_whole_file("kv_blobs_and_settings")
+
+    def test_memory_units(self):
+        self._each_whole_file("memory_units")
+
+    def test_one_of_a_kind(self):
+        self._each_whole_file("one_of_a_kind")
+
+    def _each_whole_file(self, group: str):
+        """Every byte of each cell's file against what the original built."""
+        for cell in self._cells(group):
             here = os.path.join(self.where, cell)
             with self.subTest(cell):
                 with open(os.path.join(here, "cell.json")) as handle:
