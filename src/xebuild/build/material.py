@@ -69,6 +69,11 @@ class Material:
         Read once and kept. A dump here is seventeen megabytes and the things above this
         ask for it more than once, so a property that went to the disk every time would
         be a cost nobody asked for and would say so in the log each time as well.
+
+        An empty file is one this directory does not hold: the original skips it in
+        every one of its loaders -- "'data/crl.bin' is a 0 byte file, loading skipped!"
+        -- and goes on to the next place, measured with crl.bin, dae.bin and
+        extended.bin.
         """
         if name in self._read:
             return self._read[name]
@@ -77,7 +82,11 @@ class Material:
         if path is not None:
             with open(path, "rb") as handle:
                 body = handle.read()
-            logger.info("reading %s (%#x bytes)", path, len(body))
+            if body:
+                logger.info("reading %s (%#x bytes)", path, len(body))
+            else:
+                logger.warning("'%s' is a 0 byte file, loading skipped!", path)
+                body = None
         self._read[name] = body
         return body
 

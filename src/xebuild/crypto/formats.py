@@ -184,9 +184,15 @@ def _decrypt_dae_record(record: bytes, cpu_key: bytes) -> tuple:
 def decrypt_dae(blob: bytes, cpu_key: bytes) -> list:
     """Every record of a dae.bin in the clear, in order: `(header, body, master key)`,
     the header being the record's first 0x130 bytes. Record by record, because each
-    has its own zero vector; ValueError where any one does not open."""
+    has its own zero vector; ValueError where any one does not open, and where the
+    records do not cover the whole file -- the original stops at the first header that
+    is not a record's, "dae segment does not have the expected header!" (0x41E1D9),
+    and takes the file for one it cannot open."""
+    found = records(blob)
+    if not found or sum(length for _at, length in found) != len(blob):
+        raise ValueError("dae segment does not have the expected header")
     out = []
-    for at, length in records(blob):
+    for at, length in found:
         record = blob[at:at + length]
         body, master = _decrypt_dae_record(record, cpu_key)
         out.append((record[:DAE_BODY_AT], body, master))
