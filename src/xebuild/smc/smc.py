@@ -111,7 +111,9 @@ class Smc:
     def blank(self) -> bool:
         """Whether this is nothing but 0x00 or 0xFF: no SMC at all.
 
-        Every test the original makes passes such a buffer; refusing it is ours.
+        The original has no such test: zeros get past it on a glitch image, where a
+        missing reset limit reads as "glitch hack found". Refusing it is ours -- see
+        `Build._check_smc`.
         """
         return set(self.plain) <= {0x00} or set(self.plain) <= {0xFF}
 

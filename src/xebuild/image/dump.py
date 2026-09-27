@@ -58,7 +58,7 @@ from .image import Image
 from .keyvault import Keyvault
 from ..boards.spare import PAGE
 from ..crypto.formats import decrypt_smc
-from .settings import CONFIG_LENGTH, SmcConfig
+from .settings import CONFIG_LENGTH, sums
 from .order import failing, logical, marked_bad, mixed_controller
 
 logger = logging.getLogger(__name__)
@@ -198,6 +198,9 @@ class Dump:
             logger.warning("this is likely caused by previously using jaspersb on a "
                            "jasper type console!")
         self.image = Image(logical(raw, board.flash, remap, ecd), board.flash, bigffs)
+        if self.header.smc_at not in (0x800, 0x1000):
+            logger.warning("smc.bin should not be at %#x, trying 0x1000",
+                           self.header.smc_at)
 
     @property
     def header(self) -> object:
@@ -219,21 +222,45 @@ class Dump:
 
     @property
     def smc(self) -> bytes:
-        """The SMC as the console holds it, sealed, where the header says it is."""
+        """The SMC as the console holds it, sealed, where the header says it is.
+
+        At 0x800 or 0x1000, the only two places an SMC is ever laid; a header stating
+        anything else is read at 0x1000 all the same -- "smc.bin should not be at 0x%x,
+        trying 0x1000" (0x413B4B), measured with 0x2000 and with 0. The length is
+        always one of the two the header check lets through, 0x3000 or 0x3800.
+        """
         head = self.header
-        at, length = head.smc_at, head.smc_size
-        return self.image.flat[at : at + length]
+        at = head.smc_at if head.smc_at in (0x800, 0x1000) else 0x1000
+        return self.image.flat[at : at + head.smc_size]
 
     @property
-    def smc_config(self) -> bytes:
-        """The console's settings block: fan curves, temperatures, MAC, regions."""
-        at = self.flash.smc_config
-        return self.image.flat[at : at + CONFIG_LENGTH]
+    def smc_opens(self) -> bool:
+        """Whether the SMC opens to the four zeros every SMC ends with, the one test
+        the original makes of it as the dump is read (0x413C7E). One that does not is
+        discarded there -- "SMC did not decrypt, discarding it" -- which a build
+        answers for: see `Build.smc`."""
+        return decrypt_smc(self.smc)[-4:] == bytes(4)
+
+    @property
+    def smc_config(self) -> bytes | None:
+        """The console's settings block -- fan curves, temperatures, MAC, regions --
+        or None where the dump holds no sound one.
+
+        The first sound block from where the shape keeps it to the end of the flash,
+        0x200 at a time (0x4159AE): the original searches upward whatever it prints,
+        measured with the block spoilt and a sound copy 0x200 and 0x400 above it. Below
+        that place it does not look, measured by x360mcp with a copy one block lower.
+        """
+        flat = self.image.flat
+        for at in range(self.flash.smc_config, len(flat) - 0x200 + 1, 0x200):
+            if sums(flat[at:at + 0x10C]):
+                return bytes(flat[at:at + CONFIG_LENGTH])
+        return None
 
     @property
     def smc_config_ok(self) -> bool:
-        """Whether the settings block is one the original would use."""
-        return SmcConfig(self.smc_config).sound
+        """Whether the dump holds a settings block the original would use."""
+        return self.smc_config is not None
 
     @property
     def statistics(self) -> bytes:

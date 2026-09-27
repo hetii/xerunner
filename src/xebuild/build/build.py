@@ -277,25 +277,45 @@ class Build:
         retail". A retail or devkit image keeps its SMC untouched, measured.
 
         **The seal takes the console's own seed**, the first four bytes of the SMC the
-        dump carries, so an unchanged SMC comes out as the dump's bytes; with no dump it
-        is a staging buffer's -- see `_buffer` -- and under `-norandom` with no dump,
-        four the original holds elsewhere.
+        dump carries, so an unchanged SMC comes out as the dump's bytes; with no dump,
+        or one whose SMC did not open, it is the staging buffer's -- drawn, or its
+        compiled-in 8E0375CC -- see `_buffer`.
         """
         given = self.material.smc
         carried = None
         if given is not None:
+            # 0x3800 is the most room below the keyvault the original will give it --
+            # "SMC size 0x3900 not supported!!!", measured -- and any length up to
+            # that goes in, 0x100 at 0x3F00 and 0x2FFF at 0x1001 measured too.
+            if len(given) > 0x3800:
+                raise ValueError("SMC size %#x not supported" % len(given))
             smc = Smc.handed_in(given)
             if smc is None:
                 if not self.config.smcnocheck:
                     raise ValueError("smc.bin is neither in the clear nor a valid, "
                                      "decryptable SMC; smcnocheck builds with it all "
                                      "the same")
-                smc = Smc(decrypt_smc(given))
+                # What the decryption left is not an SMC, so it is not what goes in:
+                # the original restores its copy from the bytes handed in (0x41BDC0)
+                # and goes straight to the checksum, with no classifying, no patch
+                # and no sealing. Measured: an smc.bin of 0x3000 bytes of 0xFF comes
+                # out as those same bytes, on glitch2, glitch, retail and JTAG alike.
+                logger.warning("smc.bin did not decrypt; smcnocheck carries it as it "
+                               "was handed in")
+                return given
             plain = smc.plain
         else:
             if self.dump is None:
                 raise ValueError("this build has neither an smc.bin nor a dump to take "
                                  "an SMC from")
+            # The dump's SMC is discarded as the dump is read where it does not open
+            # -- `Dump.smc_opens` -- which leaves the build with none, and that is
+            # fatal with or without `smcnocheck`: "could not read smc.bin", "critical
+            # bootloader files are missing". Measured on random bytes, 0xFF and a
+            # sealed SMC with its tail broken.
+            if not self.dump.smc_opens:
+                raise ValueError("the dump's SMC does not decrypt and there is no "
+                                 "smc.bin to use instead")
             carried = self.dump.smc
             plain = decrypt_smc(carried)
         if self.image_type.number in (2, 3, 4, 5):
@@ -315,14 +335,18 @@ class Build:
         if carried is not None and not self.drawing:
             return carried
         if not seed:
-            if self.dump is None and not self.drawing:
-                # Not the staging buffer's 8E0375CC: with no dump under `-norandom`
-                # the original seals every SMC under these four, measured on a
-                # trinity, a falcon JTAG and a corona build with three different
-                # SMCs, twice over. Where they come from is not read out.
+            # The console's own four only where its SMC opened: the original takes
+            # them as it reads the dump (0x41ADD0) and a discarded SMC leaves them
+            # alone -- measured with the dump's SMC spoilt and a good smc.bin given.
+            own = None
+            if self.dump is not None and self.dump.smc_opens:
+                own = self.dump.smc[:4]
+            if own is None and not self.drawing:
+                # The staging buffer's 8E0375CC (0x44A640) as it comes out sealed:
+                # measured on a trinity, a falcon JTAG and a corona build with three
+                # different SMCs, twice over.
                 seed = bytes.fromhex("cc7ac1e7")
             else:
-                own = self.dump.smc[:4] if self.dump is not None else None
                 seed = self._buffer("smc.bin", own)
         return encrypt_smc(plain, seed)
 
@@ -334,9 +358,13 @@ class Build:
         -- and an SMC that would not decrypt, which `smc` asks. A glitch image over a
         clean SMC only draws a complaint.
 
-        One more refusal is ours: a blank SMC passes every test the original makes and
-        is written, which gives a console none. A deliberate divergence agreed in
-        x360mcp, and waived by `smcnocheck` like the rest.
+        One more refusal is ours: a blank SMC, nothing but 0x00 or 0xFF, which gives
+        a console none. The original has no such test and stops most of them only by
+        chance -- 0xFF does not decrypt, and zeros are "unknown" to a retail image and
+        "clean" to a JTAG one -- but a glitch image over zeros finds no reset limit,
+        reads that as "glitch hack found" and is built, measured on glitch and glitch2.
+        Refusing it is a divergence from the original, waived by `smcnocheck` like the
+        rest.
         """
         if self.config.smcnocheck:
             return
@@ -1168,6 +1196,9 @@ class Build:
                 logger.warning("the dump's netKd block states %#x bytes, more than the "
                                "header's page holds; left out", len(net_kd))
         out.put(smc_at, smc)
+        # Marked by its span, not its bytes: an smc.bin of 0xFF carried under
+        # `smcnocheck` still gets its pages' spare in the original's image, measured.
+        out.mark(smc_at, len(smc))
         out.put(layout.KEYVAULT_AT, self.keyvault())
         # The chain's last block is filled out with zeros, as a file's is.
         out.put(layout.CHAIN_AT, chain + bytes(-chain_end % layout.BLOCK))
@@ -1371,45 +1402,42 @@ class Build:
             out.append((stats_at - flash.round_to, self._console_manufacturing, span))
         if self._console_statistics is not None and not self.config.nomobile:
             out.append((stats_at, self._console_statistics, span))
-        config = self._given_config()
-        if config is None and self.dump is None:
-            # With no dump the block has to come from the directory, and the original
-            # stops without it -- "could not read smc_config.bin", then "critical
-            # bootloader files are missing, cannot proceed!" -- measured with a kv.bin
-            # and an smc.bin beside the build and nothing else.
-            raise ValueError("could not read smc_config.bin, and there is no dump to "
-                             "take the settings block from: critical bootloader files "
-                             "are missing")
-        if config is None and self.dump is not None:
-            # Where the dump keeps it is the dump's own flash's business, not the one
-            # being built for: a 16 MB dump builds a 64 MB image.
-            own = self.dump.flash.smc_config
-            config = bytes(self.dump.image.flat[own:own + span])
-        if config is not None:
-            out.append((flash.smc_config, self._configured(config), span))
+        out.append((flash.smc_config, self._configured(self._config_block()), span))
         return out
 
-    def _given_config(self) -> bytes | None:
-        """The settings block handed over as `smc_config.bin` -- `SmcConfig.found_in`.
+    def _config_block(self) -> bytes:
+        """The settings block, as the 0x1000 it is laid in: the block and 0xFF after.
 
-        The original writes that block and leaves the rest of the 0x1000 erased, its
-        pages marked written all the same: measured on donor builds from `Trinity.bin`,
-        whose next 0xC00 are erased anyway, and `Falcon.bin`, whose are zeros and still
-        come out 0xFF.
+        **Where it comes from** is the original's order (0x42A3D0): `smc_config.bin`,
+        then `config.bin`, then `config_raw.bin` -- measured, the second used where the
+        first is missing -- and only then the dump's, `Dump.smc_config`. Whichever it
+        is goes through the one search, `SmcConfig.found_in`, the dump's too, and
+        none at all stops the build with or without `smcnocheck`: "could not read
+        smc_config.bin", then "critical bootloader files are missing, cannot
+        proceed!" -- measured with no dump, with the dump's block spoilt and with it
+        erased. A file that holds no sound block does not fall back on the dump
+        either, measured with 0x400 zeros beside a build with a dump and without.
 
-        One handed over that holds no sound block stops the build, dump or not: the
-        original says "unable to find SMC config data!", then "critical bootloader
-        files are missing, cannot proceed!", and does not fall back on the dump's --
-        measured with 0x400 zeros beside a build with the bench console's dump and
-        beside one without.
+        **Only the block goes in**, 0x400 of it, and the rest of the 0x1000 is erased,
+        its pages marked written all the same (0x411600): measured with a sound copy
+        above a spoilt one in a dump, and on donor builds from `Trinity.bin`, whose
+        next 0xC00 are erased anyway, and `Falcon.bin`, whose are zeros and still come
+        out 0xFF.
         """
-        given = self.material.smc_config
+        given, name = self.material.smc_config, "smc_config.bin"
+        for other in ("config.bin", "config_raw.bin"):
+            if given is not None:
+                break
+            given, name = self.material.bytes_in(other), other
+        if given is None and self.dump is not None:
+            given, name = self.dump.smc_config, "the dump"
         if given is None:
-            return None
+            raise ValueError("could not read smc_config.bin, and the dump holds no "
+                             "settings block: critical bootloader files are missing")
         found = SmcConfig.found_in(given)
         if found is None:
-            raise ValueError("unable to find SMC config data in smc_config.bin: "
-                             "critical bootloader files are missing")
+            raise ValueError("unable to find SMC config data in %s: critical "
+                             "bootloader files are missing" % name)
         return found.sealed().ljust(0x1000, b"\xff")
 
     def _configured(self, block: bytes) -> bytes:

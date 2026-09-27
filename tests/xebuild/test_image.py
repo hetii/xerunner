@@ -791,12 +791,54 @@ class TheSettingsBlockItself(unittest.TestCase):
         block[:2] = settings.checksum(block).to_bytes(2, "little")
         return bytes(block)
 
-    def test_the_first_sound_block_is_found_a_0x400_step_at_a_time(self):
-        """As J-Runner hands it over: 0x10000 of copies, the good one at 0xC000."""
+    def test_the_first_sound_block_is_found_a_0x200_step_at_a_time(self):
+        """As J-Runner hands it over: 0x10000 of copies, the good one at 0xC000; and
+        one at 0x200, which the original finds as well, measured."""
         region = b"\xff" * 0xC000 + self.a_block() + b"\xff" * 0x3C00
         found = settings.SmcConfig.found_in(region)
         self.assertEqual(found.block, self.a_block())
+        region = b"\xff" * 0x200 + self.a_block() + b"\xff" * 0x200
+        self.assertEqual(settings.SmcConfig.found_in(region).block, self.a_block())
         self.assertIsNone(settings.SmcConfig.found_in(b"\xff" * 0x10000))
+
+    def a_raw_block(self) -> bytes:
+        """The block as a raw flash holds it: a spare after each 0x200, which puts
+        non-zero bytes where a plain block has zeros at 0x20C."""
+        data = self.a_block() + b"\xff" * 0x3C00
+        return b"".join(data[at:at + 0x200] + b"\x5a" * 0x10
+                        for at in range(0, 0x4000, 0x200))
+
+    def test_a_raw_block_is_taken_out_of_its_pages(self):
+        self.assertEqual(settings.SmcConfig.found_in(self.a_raw_block()).block,
+                         self.a_block())
+
+    def test_a_raw_block_needs_a_whole_raw_block_behind_it(self):
+        """Measured: 0x1080 of raw, eight pages, is refused."""
+        with self.assertRaisesRegex(ValueError, "not enough data"):
+            settings.SmcConfig.found_in(self.a_raw_block()[:0x1080])
+
+    def test_a_plain_block_with_0x20c_set_is_read_as_raw_and_refused(self):
+        """Measured: the original takes those four bytes to be a spare's."""
+        odd = bytearray(self.a_block())
+        odd[0x20C:0x210] = b"\x01\x02\x03\x04"
+        with self.assertRaisesRegex(ValueError, "not enough data"):
+            settings.SmcConfig.found_in(bytes(odd))
+
+    def test_a_plain_block_cut_short_is_refused(self):
+        """Where the original goes on with a buffer nothing was written to."""
+        with self.assertRaisesRegex(ValueError, "not enough data"):
+            settings.SmcConfig.found_in(b"\xff" * 0x200 + self.a_block()[:0x300])
+
+    def test_a_changed_block_s_head_is_the_word_and_two_zeros(self):
+        """Measured: 12 34 at 0x02 come back 00 00 once an option changes the block,
+        and stay where nothing does."""
+        marked = bytearray(self.a_block())
+        marked[2:4] = b"\x12\x34"
+        one = settings.SmcConfig(bytes(marked))
+        self.assertEqual(one.sealed()[2:4], b"\x12\x34")
+        one.set_temperature("cputemp", 70)
+        self.assertEqual(one.sealed()[2:4], bytes(2))
+        self.assertTrue(settings.SmcConfig(one.sealed()).sound)
 
     def test_nothing_changed_goes_back_as_it_came_head_and_all(self):
         """Even a head that does not sum: the original leaves such a block alone."""

@@ -5,6 +5,7 @@ Needs images the original built. See `tests/xebuild/e2e/__init__.py`.
 
 import os
 import json
+import random
 import shutil
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto.keys import hmacsha
 from xebuild.image import Directory, Image
+from xebuild.image.settings import checksum
 from xebuild.crypto.formats import decrypt_smc
 from xebuild.imagetypes import for_name as type_for
 from xebuild.build import Build, Material, layout, security
@@ -335,6 +337,193 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                     spill = len(run) - span
                     self.assertEqual(run[span:], bytes(image.flat[tail:tail + spill]))
                     tail += spill + -spill % layout.BLOCK
+
+    def _with_smc(self, given) -> str:
+        """A copy of the material with `given` as its smc.bin."""
+        where = tempfile.mkdtemp(prefix="xebuild-e2e-smc-")
+        self.addCleanup(shutil.rmtree, where, ignore_errors=True)
+        for name in os.listdir(self.where):
+            os.symlink(os.path.join(self.where, name), os.path.join(where, name))
+        with open(os.path.join(where, "smc.bin"), "wb") as handle:
+            handle.write(given)
+        return where
+
+    def _smcs_that_do_not_decrypt(self) -> dict:
+        """Five ways an smc.bin fails the original's test, the console's own SMC the
+        ground for two of them."""
+        with open(os.environ["XEBUILD_DUMP"], "rb") as handle:
+            dump = Image(handle.read(), for_name("trinity")[0].flash)
+        head = dump.header
+        sealed = bytes(dump.flat[head.smc_at:head.smc_at + head.smc_size])
+        plain = decrypt_smc(sealed)
+        noise = random.Random(20260926).randbytes(0x3000)
+        return {
+            "0xFF": b"\xff" * 0x3000,
+            "random bytes": noise,
+            "sealed, last byte changed": sealed[:-1] + bytes([sealed[-1] ^ 1]),
+            "in the clear, last byte not zero": plain[:-1] + b"\x01",
+            "random bytes with a page of 0xFF": noise[:0x1000] + b"\xff" * 0x200
+                                                + noise[0x1200:],
+        }
+
+    def test_an_smc_that_does_not_decrypt_goes_in_as_it_was_handed_in(self):
+        """Under `smcnocheck`, as the original does: no patch and no sealing again.
+
+        Measured on the original with each of these on glitch2, glitch, retail and
+        JTAG: the same bytes where the smc sits, and a spare on every page of them,
+        a page of 0xFF included.
+        """
+        for label, given in self._smcs_that_do_not_decrypt().items():
+            where = self._with_smc(given)
+            for kind, board in (("glitch2", "trinity"), ("jtag", "falcon"),
+                                ("retail", "trinity")):
+                with self.subTest(smc=label, kind=kind):
+                    refused = Build(BuildConfig(image_type=kind, console=board),
+                                    Material(where), self.release)
+                    with self.assertRaisesRegex(ValueError, "decryptable"):
+                        refused.image()
+                    config = BuildConfig(image_type=kind, console=board,
+                                         smcnocheck=True)
+                    image = Build(config, Material(where), self.release).image()
+                    head = image.header
+                    self.assertEqual(
+                        bytes(image.flat[head.smc_at:head.smc_at + head.smc_size]),
+                        given)
+                    erased = b"\xff" * len(image.spares[0])
+                    for page in range(head.smc_at // 0x200,
+                                      (head.smc_at + head.smc_size) // 0x200):
+                        self.assertNotEqual(image.spares[page], erased, hex(page))
+
+    def _spoilt(self, changes: dict, files: dict | None = None) -> str:
+        """A copy of the material whose dump has `changes` -- flat offset to bytes --
+        written in with their codes put right, and `files` beside it."""
+        with open(os.environ["XEBUILD_DUMP"], "rb") as handle:
+            raw = bytearray(handle.read())
+        flash = for_name("trinity")[0].flash
+        for at, body in changes.items():
+            for page in range(at // 0x200, (at + len(body)) // 0x200):
+                data = body[page * 0x200 - at:(page + 1) * 0x200 - at]
+                spare = bytes(raw[page * 0x210 + 0x200:(page + 1) * 0x210])
+                raw[page * 0x210:(page + 1) * 0x210] = (
+                    data + flash.spare.with_ecc(data, spare))
+        where = tempfile.mkdtemp(prefix="xebuild-e2e-spoilt-")
+        self.addCleanup(shutil.rmtree, where, ignore_errors=True)
+        for name in os.listdir(self.where):
+            if name != "nanddump.bin":
+                os.symlink(os.path.join(self.where, name), os.path.join(where, name))
+        with open(os.path.join(where, "nanddump.bin"), "wb") as handle:
+            handle.write(raw)
+        for name, body in (files or {}).items():
+            with open(os.path.join(where, name), "wb") as handle:
+                handle.write(body)
+        return where
+
+    def _own(self, at: int, length: int) -> bytes:
+        """The dump's own flat bytes."""
+        with open(os.environ["XEBUILD_DUMP"], "rb") as handle:
+            dump = Image(handle.read(), for_name("trinity")[0].flash)
+        return bytes(dump.flat[at:at + length])
+
+    def test_a_dump_whose_smc_does_not_decrypt_is_refused_even_when_waived(self):
+        """No smc.bin, and the dump's own SMC fails the test: the original discards it
+        as the dump is read and then has none, which `smcnocheck` does not waive --
+        measured on these three, on glitch2, retail and JTAG."""
+        own = self._own(0x1000, 0x3000)
+        for label, body in (
+                ("random bytes", random.Random(20260926).randbytes(0x3000)),
+                ("0xFF", b"\xff" * 0x3000),
+                ("sealed, last byte changed", own[:-1] + bytes([own[-1] ^ 1]))):
+            where = self._spoilt({0x1000: body})
+            for kind, board in (("glitch2", "trinity"), ("jtag", "falcon"),
+                                ("retail", "trinity")):
+                for waived in (False, True):
+                    with self.subTest(smc=label, kind=kind, smcnocheck=waived):
+                        config = BuildConfig(image_type=kind, console=board,
+                                             smcnocheck=waived)
+                        one = Build(config, Material(where), self.release)
+                        with self.assertRaisesRegex(ValueError, "does not decrypt"):
+                            one.image()
+
+    def test_a_discarded_smc_leaves_the_seal_to_the_compiled_in_seed(self):
+        """The dump's SMC spoilt and a good smc.bin given: sealed as with no dump at
+        all, the compiled-in 8E0375CC, whatever the spoilt bytes were -- measured."""
+        plain = decrypt_smc(self._own(0x1000, 0x3000))
+        for label, body in (("random bytes", random.Random(1).randbytes(0x3000)),
+                            ("0xFF", b"\xff" * 0x3000)):
+            with self.subTest(label):
+                where = self._spoilt({0x1000: body}, {"smc.bin": plain})
+                config = BuildConfig(image_type="glitch2", console="trinity")
+                image = Build(config, Material(where), self.release).image()
+                sealed = bytes(image.flat[0x1000:0x4000])
+                self.assertEqual(decrypt_smc(sealed)[:4], bytes.fromhex("8e0375cc"))
+
+    def test_a_header_stating_the_smc_elsewhere_is_read_at_0x1000(self):
+        """ "smc.bin should not be at 0x2000, trying 0x1000", measured with 0x2000 and
+        0: the SMC is found all the same and carried as the console holds it."""
+        page = bytearray(self._own(0, 0x200))
+        for stated in (0x2000, 0):
+            with self.subTest(hex(stated)):
+                page[0x7C:0x80] = stated.to_bytes(4, "big")
+                where = self._spoilt({0: bytes(page)})
+                config = BuildConfig(image_type="glitch2", console="trinity")
+                image = Build(config, Material(where), self.release).image()
+                self.assertEqual(bytes(image.flat[0x1000:0x4000]),
+                                 self._own(0x1000, 0x3000))
+
+    def test_an_smc_bin_longer_than_0x3800_is_refused(self):
+        """ "SMC size 0x3900 not supported!!!", smcnocheck or not."""
+        where = self._with_smc(random.Random(2).randbytes(0x3900))
+        config = BuildConfig(image_type="glitch2", console="trinity", smcnocheck=True)
+        with self.assertRaisesRegex(ValueError, "not supported"):
+            Build(config, Material(where), self.release).image()
+
+    def test_the_dump_s_settings_block_is_searched_for_upward(self):
+        """A spoilt block at the shape's place and a sound copy 0x200 or 0x400 above
+        it: the copy is used, and only its 0x400 go in with 0xFF after -- measured.
+        With no sound one the build stops, `smcnocheck` or not."""
+        block = self._own(0xF7C000, 0x400)
+        spoilt = bytearray(block)
+        spoilt[0x10B] ^= 1
+        for above in (0x200, 0x400):
+            with self.subTest(above=hex(above)):
+                where = self._spoilt({0xF7C000: bytes(spoilt), 0xF7C000 + above: block})
+                config = BuildConfig(image_type="glitch2", console="trinity")
+                image = Build(config, Material(where), self.release).image()
+                self.assertEqual(bytes(image.flat[0xF7C000:0xF7C400]), block)
+                self.assertEqual(bytes(image.flat[0xF7C400:0xF7D000]),
+                                 b"\xff" * 0xC00)
+        for label, body in (("spoilt", bytes(spoilt)), ("erased", b"\xff" * 0x400)):
+            for waived in (False, True):
+                with self.subTest(label, smcnocheck=waived):
+                    where = self._spoilt({0xF7C000: body})
+                    config = BuildConfig(image_type="glitch2", console="trinity",
+                                         smcnocheck=waived)
+                    with self.assertRaisesRegex(ValueError, "no settings block"):
+                        Build(config, Material(where), self.release).image()
+
+    def test_config_bin_stands_in_for_smc_config_bin(self):
+        """Measured: with no smc_config.bin a config.bin is used, before the dump."""
+        block = bytearray(self._own(0xF7C000, 0x400))
+        block[0x220:0x226] = bytes.fromhex("0022481234ab")
+        block[0:2] = checksum(block).to_bytes(2, "little")
+        where = self._spoilt({}, {"config.bin": bytes(block)})
+        config = BuildConfig(image_type="glitch2", console="trinity")
+        image = Build(config, Material(where), self.release).image()
+        self.assertEqual(bytes(image.flat[0xF7C220:0xF7C226]),
+                         bytes.fromhex("0022481234ab"))
+
+    def test_a_glitch_image_over_an_smc_of_zeros_is_refused_unless_waived(self):
+        """The one case where refusing a blank SMC is ours: the original builds it."""
+        where = self._with_smc(bytes(0x3000))
+        refused = Build(BuildConfig(image_type="glitch2", console="trinity"),
+                        Material(where), self.release)
+        with self.assertRaisesRegex(ValueError, "blank"):
+            refused.image()
+        config = BuildConfig(image_type="glitch2", console="trinity", smcnocheck=True)
+        image = Build(config, Material(where), self.release).image()
+        head = image.header
+        sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
+        self.assertEqual(decrypt_smc(sealed)[4:], bytes(0x3000 - 4))
 
     def test_the_whole_file_is_the_original_s(self):
         """Every byte of the file a programmer writes, spare and codes included.

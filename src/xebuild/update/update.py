@@ -12,11 +12,11 @@ from ..network.updsrv import PORT
 from types import SimpleNamespace
 from ..build.build import SEAL_ALIGN
 from .material import ConsoleMaterial
-from ..image.settings import SmcConfig
 from ..network.info import PUBLIC_KEYS
 from ..crypto.formats import decrypt_smc
 from ..client.sysdata import send_avatars
 from ..image import Header, Image, Keyvault
+from ..image.settings import SmcConfig, sums
 from ..network import ConsoleInfo, Server, find
 from ..client.client import fuses_txt, options_ini
 
@@ -122,6 +122,20 @@ def collect(server, info: ConsoleInfo, recipe, base: str,
             if body:
                 found.files[listed.plain.lower()] = body
     server.unmount("usv")
+    # What the original asks of the two before it goes on, and neither is waived by
+    # `smcnocheck` -- read out of it (0x403B2F, 0x40426B), not measured: no console
+    # here hands over a broken one. The SMC at least 0x3000 and opening to the four
+    # zeros every SMC ends with; the settings block at least 0x400 and sound where it
+    # starts, of which the 0x400 are kept.
+    smc = found.smc
+    if len(smc) < 0x3000:
+        raise ValueError("could not retrieve smc.bin from console")
+    if decrypt_smc(smc)[-4:] != bytes(4):
+        raise ValueError("could not decrypt smc.bin from console")
+    if found.settings is None or len(found.settings) < 0x400 \
+            or not sums(found.settings):
+        raise ValueError("could not retrieve smc_config from console")
+    found.settings = found.settings[:0x400]
     return found
 
 
