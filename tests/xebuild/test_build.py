@@ -57,6 +57,12 @@ class WhatTheDirectorySupplies(unittest.TestCase):
         self.assertIsNone(one.ini)
         self.assertEqual(one.mobiles, {})
 
+    def test_an_empty_file_is_one_that_is_not_there(self):
+        """ "is a 0 byte file, loading skipped!", in every loader the original has."""
+        one = Material(a_directory(self, {"crl.bin": b"", "smc.bin": b""}))
+        self.assertIsNone(one.bytes_in("crl.bin"))
+        self.assertIsNone(one.smc)
+
     def test_the_bytes_come_back_whole(self):
         body = bytes(range(256)) * 8
         one = Material(a_directory(self, {"nanddump.bin": body}))

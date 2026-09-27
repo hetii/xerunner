@@ -315,3 +315,23 @@ class TheSmcSFingerprint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ADaeThatIsNotAChainOfRecords(unittest.TestCase):
+    """The original stops at the first header that is not a record's and takes the file
+    for one it cannot open; nothing is quietly cut off."""
+
+    def a_record(self, length=0x160):
+        return b"DAEP" + length.to_bytes(2, "big") + bytes(length - 6)
+
+    def test_no_record_at_all_does_not_open(self):
+        with self.assertRaisesRegex(ValueError, "expected header"):
+            formats.decrypt_dae(bytes(range(256)) * 0x40, bytes(16))
+
+    def test_bytes_left_after_the_records_do_not_open(self):
+        with self.assertRaisesRegex(ValueError, "expected header"):
+            formats.decrypt_dae(self.a_record() + b"junk" * 0x60, bytes(16))
+
+    def test_where_the_records_tile_the_file_the_walk_finds_them_all(self):
+        blob = self.a_record() + self.a_record(0x170)
+        self.assertEqual(formats.records(blob), [(0, 0x160), (0x160, 0x170)])

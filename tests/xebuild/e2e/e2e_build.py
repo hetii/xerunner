@@ -567,6 +567,30 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         image = Build(config, Material(where), self.release).image()
         self.assertEqual(bytes(image.flat[0x4000:0x8000]), self._own(0x4000, 0x4000))
 
+    def test_an_empty_file_beside_the_build_is_one_that_is_not_there(self):
+        """Measured with crl.bin, dae.bin and extended.bin: the image is the one built
+        with no such file at all."""
+        config = BuildConfig(image_type="glitch2", console="trinity")
+        when = 0x5A123457
+        without = Build(config, Material(self._spoilt({})), self.release).image(when)
+        for name in ("crl.bin", "dae.bin", "extended.bin"):
+            with self.subTest(name):
+                where = self._spoilt({}, {name: b""})
+                image = Build(config, Material(where), self.release).image(when)
+                self.assertEqual(image.raw, without.raw)
+
+    def test_a_dae_bin_that_is_no_chain_of_records_goes_in_as_it_is(self):
+        """Measured: random bytes, and random bytes 0x10 longer, both as they were
+        handed in, as the original leaves a file whose first header is not a
+        record's."""
+        noise = random.Random(3).randbytes(0xAD40)
+        for body in (noise[:0xAD30], noise):
+            with self.subTest(hex(len(body))):
+                where = self._spoilt({}, {"dae.bin": body})
+                config = BuildConfig(image_type="glitch2", console="trinity")
+                image = Build(config, Material(where), self.release).image()
+                self.assertEqual(image.read("dae.bin"), body)
+
     def test_a_glitch_image_over_an_smc_of_zeros_is_refused_unless_waived(self):
         """The one case where refusing a blank SMC is ours: the original builds it."""
         where = self._with_smc(bytes(0x3000))
