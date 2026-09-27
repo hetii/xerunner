@@ -366,6 +366,7 @@ class ADumpThatOnlyAnswersWhatIsAsked:
 
     def __init__(self, smc=AN_SMC, seed=b"\xfb\xd7\x5a\x10", tags=None):
         self.smc = encrypt_smc(smc, seed)
+        self.smc_opens = decrypt_smc(self.smc)[-4:] == bytes(4)
         # Sealed for real, under the key the tests hand a build: a keyvault that does
         # not open under its console's key is discarded, as the original discards one.
         self.sealed_keyvault = Keyvault(bytes(range(0x100)) * 0x40).sealed(
@@ -1014,7 +1015,7 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
         for dump in (True, False):
             with self.subTest(dump=dump), self.assertRaises(ValueError):
                 a_build(self, dump=dump,
-                        files={"smc_config.bin": bytes(0x400)})._given_config()
+                        files={"smc_config.bin": bytes(0x400)})._config_block()
 
     def test_a_listed_sysupdate_xexp_is_left_out_in_any_case(self):
         """ "'sysupdate.xexp' is a reserved name!", `_strnicmp` over fourteen."""

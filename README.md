@@ -41,3 +41,15 @@ the code makes the decision:
   0x202 and 0x303 whose sequence byte happens to match. Here the block's data is kept,
   with the original's warning given for exactly the blocks it would have dropped. None of
   the 260 dumps held here has such a block. -- `image/order.py`, `mixed_controller`
+- **`-o gpufan=0` leaves the settings block passing its own checksum.** The original
+  writes the value and does not recompute the block's head, as it does for `cpufan=0`,
+  so its block fails its own sum. -- `image/settings.py`, `set_fan`
+- **An SMC of nothing but 0x00 or 0xFF is refused unless `smcnocheck` is given.** The
+  original has no test for it and stops most such files only by chance, but on a glitch
+  image zeros have no reset limit, which it reads as "glitch hack found", and it builds
+  an image that gives the console no SMC at all. -- `build/build.py`, `_check_smc`
+- **A settings block found too near the end of its file is refused.** Where fewer than
+  0x400 bytes follow a sound head, the original skips the copy (0x429A26) and builds with
+  a buffer nothing was written to; its own raw branch refuses the same shortfall with
+  "extracting config did not work, not enough data to copy!", and so does this.
+  -- `image/settings.py`, `SmcConfig.found_in`

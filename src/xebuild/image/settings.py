@@ -50,6 +50,12 @@ def checksum(block: bytes) -> int:
     return (~sum(bytes(block)[SUMMED[0] : SUMMED[1]])) & 0xFFFF
 
 
+def sums(block: bytes) -> bool:
+    """Whether the first two bytes are `checksum`, little-endian: the original's whole
+    test of a settings block (0x40C210), and all of it lies in the first 0x10C."""
+    return int.from_bytes(bytes(block[:2]), "little") == checksum(block)
+
+
 class SmcConfig:
     """One settings block, and whatever follows it in the region it came in."""
 
@@ -59,24 +65,53 @@ class SmcConfig:
 
     @classmethod
     def found_in(cls, region: bytes) -> SmcConfig | None:
-        """The first block in `region` whose head sums, one 0x400 step at a time.
+        """The first sound block in `region`, or None where there is none -- the
+        original's search at 0x429800, which every settings block goes through, the
+        file handed over, the dump's and the console's alike.
 
         J-Runner hands over the whole 0x10000 a console keeps its copies in, and the
         original searches it -- "valid SMC config data found at offset 0xc000" in
-        `Donor Files/smc_config/Trinity.bin`.
+        `Donor Files/smc_config/Trinity.bin`. It steps 0x200 at a time, measured with a
+        block at 0x200, and where nothing is found steps again 0x210 at a time, the
+        stride of a raw flash with its spare.
+
+        Where the block is found, the four bytes at 0x20C say which it is: zeros in a
+        plain block -- every real one read here -- and a spare's code in a raw one,
+        whose 0x400 bytes are then the data of two pages 0x210 apart. A raw one needs a
+        whole block of the raw flash, 0x4200 bytes, from where it starts, and the
+        original refuses less: "extracting config did not work, not enough data to
+        copy!" -- measured with a plain block whose 0x20C was set, and with a raw
+        0x1080. It copies eight pages into a buffer of 0x400 and uses the first 0x400;
+        this takes those.
+
+        A plain block with less than 0x400 left behind it is refused the same way. The
+        original skips the copy there (0x429A26) and goes on with a buffer nothing was
+        written to, which is a fault rather than a choice: its own raw branch refuses
+        the same shortfall.
         """
-        for at in range(0, len(region) - CONFIG_LENGTH + 1, CONFIG_LENGTH):
-            found = cls(region[at:at + CONFIG_LENGTH])
-            if found.sound:
-                return found
-        return None
+        found = None
+        for step in (0x200, 0x210):
+            for at in range(0, len(region) - step + 1, step):
+                if sums(region[at:at + SUMMED[1]]):
+                    found = at
+                    break
+            if found is not None:
+                break
+        if found is None:
+            return None
+        if not any(region[found + 0x20C:found + 0x210]):
+            if len(region) - found < CONFIG_LENGTH:
+                raise ValueError("extracting config did not work, not enough data to "
+                                 "copy")
+            return cls(region[found:found + CONFIG_LENGTH])
+        if len(region) - found < 0x4200:
+            raise ValueError("extracting config did not work, not enough data to copy")
+        return cls(region[found:found + 0x200] + region[found + 0x210:found + 0x410])
 
     @property
     def sound(self) -> bool:
         """Whether the head says what the block sums to: the original's whole test."""
-        head = self.block[:CONFIG_LENGTH]
-        return (len(head) == CONFIG_LENGTH
-                and int.from_bytes(head[:2], "little") == checksum(head))
+        return len(self.block) >= CONFIG_LENGTH and sums(self.block)
 
     def set_fan(self, which: str, percent: int | None) -> None:
         """`cpu` or `gpu` at a fixed percent, 0 for auto, None to leave it."""
@@ -125,5 +160,8 @@ class SmcConfig:
             self.block[0x234:0x238] = (1).to_bytes(4, "big")
         out = bytearray(self.block)
         if bytes(out) != self.original:
-            out[0:2] = checksum(out).to_bytes(2, "little")
+            # Four bytes, as the original writes them (0x4294F5): the word, then two
+            # zeros. Every real block has zeros there anyway; measured with 12 34 put
+            # in, which a changed block comes back from as 00 00.
+            out[0:4] = checksum(out).to_bytes(2, "little") + bytes(2)
         return bytes(out)
