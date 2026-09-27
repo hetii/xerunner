@@ -198,6 +198,8 @@ class Dump:
             logger.warning("this is likely caused by previously using jaspersb on a "
                            "jasper type console!")
         self.image = Image(logical(raw, board.flash, remap, ecd), board.flash, bigffs)
+        if not self.header.keyvault_at:
+            logger.warning("KeyVault cannot be at 0x0, trying 0x4000")
         if self.header.smc_at not in (0x800, 0x1000):
             logger.warning("smc.bin should not be at %#x, trying 0x1000",
                            self.header.smc_at)
@@ -213,7 +215,9 @@ class Dump:
         # at zero, and one stating 0x8000 has a second keyvault behind the first --
         # "decrypting KeyVault at address 0x4000 of size 0x4000", then "decrypting alt
         # KeyVault at address 0x8000" -- measured on a dump whose header said 0x8000.
-        at = self.header.keyvault_at
+        # And at 0x4000 where the header states 0 -- "KeyVault cannot be at 0x0, trying
+        # 0x4000" (0x413F62), measured; any other address is taken as stated.
+        at = self.header.keyvault_at or 0x4000
         return self.image.flat[at : at + 0x4000]
 
     def keyvault(self, cpu_key: bytes) -> Keyvault:

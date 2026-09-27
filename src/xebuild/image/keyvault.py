@@ -96,7 +96,20 @@ class Keyvault:
         is what J-Runner hands over for a dead NAND and what the original says of it:
         "kv.bin appears to be decrypted already, but the hash does not match the CPU
         key". Either way the first sixteen bytes are a nonce, stale in a clear copy.
+
+        0x3FF0 bytes are a keyvault without that nonce, and the original puts sixteen
+        zeros in front (0x41D490), measured. Any other length than that or 0x4000 is
+        refused. The original says "kv.bin is not the correct size! Skipping
+        verification and encryption!" and writes the file into the image as it stands,
+        unsealed -- measured at 0x3F00 and 0x4100 -- which leaves the console a
+        keyvault it cannot open; sealing it at its wrong length, as this did before,
+        does no better, since the nonce then covers the wrong span.
         """
+        if len(given) == 0x3FF0:
+            given = bytes(NONCE) + bytes(given)
+        if len(given) != 0x4000:
+            raise ValueError("kv.bin is %#x bytes, not the correct size (0x4000, or "
+                             "0x3FF0 without its nonce)" % len(given))
         own = cls.opened_if_own(given, cpu_key)
         if own is not None:
             return own

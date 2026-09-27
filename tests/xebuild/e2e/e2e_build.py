@@ -18,7 +18,7 @@ from xebuild.release import Release
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto.keys import hmacsha
-from xebuild.image import Directory, Image
+from xebuild.image import Directory, Image, Keyvault
 from xebuild.image.settings import checksum
 from xebuild.crypto.formats import decrypt_smc
 from xebuild.imagetypes import for_name as type_for
@@ -511,6 +511,57 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         image = Build(config, Material(where), self.release).image()
         self.assertEqual(bytes(image.flat[0xF7C220:0xF7C226]),
                          bytes.fromhex("0022481234ab"))
+
+    def _plain_keyvault(self, serial: str) -> bytes:
+        """The console's own keyvault in the clear, its serial replaced so an image
+        says which file it was built from."""
+        cpu = bytes.fromhex(os.environ["XEBUILD_CPUKEY"])
+        plain = bytearray(Keyvault.opened(self._own(0x4000, 0x4000), cpu).plain)
+        plain[0xB0:0xBC] = serial.encode()
+        return bytes(plain)
+
+    def _serial_built(self, files: dict) -> str:
+        where = self._spoilt({}, files)
+        config = BuildConfig(image_type="glitch2", console="trinity")
+        image = Build(config, Material(where), self.release).image()
+        cpu = bytes.fromhex(os.environ["XEBUILD_CPUKEY"])
+        vault = Keyvault.opened_if_own(bytes(image.flat[0x4000:0x8000]), cpu)
+        return vault.serial
+
+    def test_a_keyvault_is_taken_from_kv_bin_then_keyvault_bin_then_kv_dec_bin(self):
+        """Measured with each alone and with two together."""
+        if not os.environ.get("XEBUILD_CPUKEY"):
+            raise unittest.SkipTest("XEBUILD_CPUKEY is what a keyvault is sealed for")
+        kv, named, dec = (self._plain_keyvault(one) for one in
+                          ("111111111111", "222222222222", "333333333333"))
+        for files, serial in (({"keyvault.bin": named}, "222222222222"),
+                              ({"KV_dec.bin": dec}, "333333333333"),
+                              ({"keyvault.bin": named, "KV_dec.bin": dec},
+                               "222222222222"),
+                              ({"kv.bin": kv, "keyvault.bin": named}, "111111111111"),
+                              ({"kv.bin": kv[0x10:]}, "111111111111")):
+            lengths = [hex(len(body)) for body in files.values()]
+            with self.subTest(sorted(files), lengths=lengths):
+                self.assertEqual(self._serial_built(files), serial)
+
+    def test_a_kv_bin_of_any_other_length_is_refused(self):
+        """The original writes such a file unsealed; see `Keyvault.handed_in`."""
+        if not os.environ.get("XEBUILD_CPUKEY"):
+            raise unittest.SkipTest("XEBUILD_CPUKEY is what a keyvault is sealed for")
+        kv = self._plain_keyvault("444444444444")
+        for body in (kv[:0x3F00], kv + bytes(0x100)):
+            with self.subTest(hex(len(body))), \
+                    self.assertRaisesRegex(ValueError, "not the correct size"):
+                self._serial_built({"kv.bin": body})
+
+    def test_a_header_stating_the_keyvault_at_0_is_read_at_0x4000(self):
+        """ "KeyVault cannot be at 0x0, trying 0x4000", measured."""
+        page = bytearray(self._own(0, 0x200))
+        page[0x6C:0x70] = bytes(4)
+        where = self._spoilt({0: bytes(page)})
+        config = BuildConfig(image_type="glitch2", console="trinity")
+        image = Build(config, Material(where), self.release).image()
+        self.assertEqual(bytes(image.flat[0x4000:0x8000]), self._own(0x4000, 0x4000))
 
     def test_a_glitch_image_over_an_smc_of_zeros_is_refused_unless_waived(self):
         """The one case where refusing a blank SMC is ours: the original builds it."""
