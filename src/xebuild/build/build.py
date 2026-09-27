@@ -470,8 +470,22 @@ class Build:
         """
         if self.image_type.number not in (2, 3, 4, 5):
             return None
-        jtag = self.image_type.name == "jtag"
-        return self.material.xell("xell-2f.bin" if jtag else "xell-gggggg.bin")
+        name = "xell-2f.bin" if self.image_type.name == "jtag" else "xell-gggggg.bin"
+        # Beside the build, then the release's bin/, then the base directory, and none
+        # at all stops the build (0x42A455) -- each measured, with a copy marked for
+        # each place so the image says which it took.
+        body = self.material.xell(name)
+        if body is None:
+            logger.info("xell not found in perbuild directory, checking firmware /bin "
+                        "folder")
+            body = self.release.in_bin(name)
+        if body is None:
+            logger.info("xell not found in firmware /bin folder, checking base path")
+            body = self.release.in_base(name)
+        if body is None:
+            raise ValueError("could not read %s: critical bootloader files are "
+                             "missing" % name)
+        return body
 
     def patch_slot(self) -> bytes:
         """What goes in the patch slot: one block, and a retail image leaves it erased.

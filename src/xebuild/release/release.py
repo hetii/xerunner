@@ -145,6 +145,13 @@ class Release:
         path = self._beside(os.path.join(self.where, "bin"), name)
         return self._read(path) if path else None
 
+    def in_base(self, name: str) -> bytes | None:
+        """A file in the base directory -- the one the release's directory is in -- or
+        None. Where the original looks last for a loader: "xell not found in firmware
+        /bin folder, checking base path"."""
+        path = self._beside(os.path.dirname(os.path.normpath(self.where)), name)
+        return self._read(path) if path else None
+
     def option(self, name: str) -> Patches:
         """The patch set one option carries, as `bin/<name>.bin`."""
         return Patches(self._read(self.where, "bin", "%s.bin" % name))
