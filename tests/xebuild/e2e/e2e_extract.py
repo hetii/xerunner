@@ -64,11 +64,13 @@ class EachDumpAsTheOriginalReadsIt(unittest.TestCase):
                 whole = handle.read()
             raw = dumps.cut(whole)
             board = boards.for_dump(raw)
-            cls.read.append((name, theirs, raw, board, len(whole), Dump(raw, board)))
+            # Once here rather than in every test: it reads each whole dump's codes.
+            fault = dumps.faulty(raw, board.flash, len(whole))
+            cls.read.append((name, theirs, raw, board, fault, Dump(raw, board)))
 
     def each(self):
-        for name, theirs, raw, board, whole, dump in self.read:
-            self.assertEqual(dumps.faulty(raw, board.flash, whole), "", name)
+        for name, theirs, raw, board, fault, dump in self.read:
+            self.assertEqual(fault, "", name)
             yield name, theirs, raw, board, dump
 
     def test_what_is_read_and_how_much_of_it(self):

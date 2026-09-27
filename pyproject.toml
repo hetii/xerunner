@@ -8,6 +8,17 @@ version = "0.1.0"
 description = "A NAND image builder for the Xbox 360"
 requires-python = ">=3.14"
 
+[dependency-groups]
+# What the tests need beyond the standard library: pytest runs the unittest suites as
+# they are, and xdist spreads the end-to-end one over every core.
+test = ["pytest", "pytest-xdist"]
+
+[tool.pytest.ini_options]
+# `e2e_*.py` as well, so that `pytest tests/xebuild/e2e -n auto --dist load` finds the
+# end-to-end suite; `tests/xebuild/e2e/__init__.py` says why it is named apart.
+python_files = ["test_*.py", "e2e_*.py"]
+addopts = "-p no:cacheprovider"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
