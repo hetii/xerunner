@@ -591,6 +591,52 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 image = Build(config, Material(where), self.release).image()
                 self.assertEqual(image.read("dae.bin"), body)
 
+    def _release_with(self, files: dict) -> Release:
+        """A release like the shared one, built of links in a directory of its own,
+        with `files` -- a path under the base directory to bytes -- added to it."""
+        shared = os.environ["XEBUILD_RELEASE_DIR"]
+        base = tempfile.mkdtemp(prefix="xebuild-e2e-base-")
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        release = os.path.join(base, os.path.basename(shared))
+        os.makedirs(os.path.join(release, "bin"))
+        for name in os.listdir(shared):
+            if name != "bin":
+                os.symlink(os.path.join(shared, name), os.path.join(release, name))
+        for name in os.listdir(os.path.join(shared, "bin")):
+            os.symlink(os.path.join(shared, "bin", name),
+                       os.path.join(release, "bin", name))
+        os.symlink(os.path.join(os.path.dirname(shared), "common"),
+                   os.path.join(base, "common"))
+        for path, body in files.items():
+            with open(os.path.join(base, path.replace("RELEASE", os.path.basename(
+                    shared))), "xb") as handle:
+                handle.write(body)
+        return Release(release, os.path.join(base, "common"))
+
+    def test_xell_is_looked_for_beside_the_build_then_in_bin_then_in_the_base(self):
+        """Measured with a copy marked for each place, and with none: the original
+        stops, "could not read xell-gggggg.bin"."""
+        name = "xell-gggggg.bin"
+        with open(os.path.join(self.where, name), "rb") as handle:
+            real = handle.read()
+
+        def marked(tag):
+            return real[:0x1000] + tag + real[0x1000 + len(tag):]
+
+        in_bin, in_base = marked(b"FROM-RELEASE-BIN"), marked(b"FROM-BASE-PATH")
+        where = self._spoilt({})
+        os.remove(os.path.join(where, name))
+        config = BuildConfig(image_type="glitch2", console="trinity")
+        for files, tag in (({"RELEASE/bin/" + name: in_bin}, b"FROM-RELEASE-BIN"),
+                           ({name: in_base}, b"FROM-BASE-PATH"),
+                           ({"RELEASE/bin/" + name: in_bin, name: in_base},
+                            b"FROM-RELEASE-BIN")):
+            with self.subTest(sorted(files)):
+                image = Build(config, Material(where), self._release_with(files))
+                self.assertIn(tag, bytes(image.image().flat[0x70000:0xB0000]))
+        with self.assertRaisesRegex(ValueError, "could not read xell-gggggg.bin"):
+            Build(config, Material(where), self._release_with({})).image()
+
     def test_a_glitch_image_over_an_smc_of_zeros_is_refused_unless_waived(self):
         """The one case where refusing a blank SMC is ours: the original builds it."""
         where = self._with_smc(bytes(0x3000))
