@@ -120,9 +120,18 @@ class Release:
         of its own. Which source a build then takes is `Build`'s -- see
         `Build._firmware_file`.
         """
-        path = os.path.normpath(os.path.join(self.where, name.replace("\\", "/")))
-        found = self._beside(os.path.dirname(path), os.path.basename(path))
+        found = self._listed_path(name)
         return self._read(found) if found else None
+
+    def listed_meta(self, name: str) -> bytes | None:
+        """The `.meta` beside a `[flashfs]` file relative to the release, or None --
+        its own stamp, which the original takes over the build's time (0x4282DC)."""
+        found = self._listed_path(name + ".meta")
+        return self._read(found) if found else None
+
+    def _listed_path(self, name: str) -> str | None:
+        path = os.path.normpath(os.path.join(self.where, name.replace("\\", "/")))
+        return self._beside(os.path.dirname(path), os.path.basename(path))
 
     def container_file(self, name: str) -> bytes | None:
         """A firmware file out of the update container, by its plain name, or None."""
@@ -135,6 +144,11 @@ class Release:
         release since 1888 keeps `xenonclatin.xtt`, `xenonjklatin.xtt` and
         `ximedic.xex` (0x427CC0: "reading ./common/xenonclatin.xtt")."""
         path = self._beside(self.common, name)
+        return self._read(path) if path else None
+
+    def common_meta(self, name: str) -> bytes | None:
+        """The `.meta` beside a firmware file in `common/`, or None (0x427E30)."""
+        path = self._beside(self.common, name + ".meta")
         return self._read(path) if path else None
 
     def raw_file(self, name: str) -> bytes:

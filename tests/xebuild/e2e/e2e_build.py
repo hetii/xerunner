@@ -726,6 +726,11 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
       with and without `nomobile`.
     * A `fuses.bin` of 0x60 bytes beside a JTAG and a glitch2m build, and one of 0x20
       that the original passes over.
+    * A `.meta` beside each security file handed in, a short one beside crl.bin, one
+      beside a firmware file in `common/` on a build with no dump, and one beside a
+      loose firmware file of 6717 -- each giving that one file its own time. Where it
+      is crl.bin's, the build's clock cannot be read back out of it, so `cell.json`
+      states it as `when`.
     * A flash filled so that files and blobs stop fitting; `-i` and `-r` together; a
       release's own payload.bin and freeboot.bin, known and changed; bad blocks on a
       big block dump and on a 16 MB dump built for a big block part.
@@ -764,7 +769,8 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                            "material-sec", "material-short-", "material-fcrt"),
         "kv_blobs_and_settings": ("material-kv-", "material-mobile",
                                   "material-smc_config", "material-statistics",
-                                  "material-manufacturing", "material-fuses"),
+                                  "material-manufacturing", "material-fuses",
+                                  "material-meta"),
         "memory_units": ("mu64-", "mu256-"),
         "blmod": ("blmod-",),
         "one_of_a_kind": ("jtag-", "patchname-", "rgh3-"),
@@ -829,7 +835,8 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                     release = Release(told["release"], os.path.join(
                         os.path.dirname(told["release"]), "common"))
                 one = Build(config, Material(data), release)
-                self.assertEqual(one.image(self._clock_of(image)).raw, raw)
+                when = told.get("when") or self._clock_of(image)
+                self.assertEqual(one.image(when).raw, raw)
 
     def _clock_of(self, image) -> int:
         """The build's clock, out of its crl.bin -- or its secdata.bin, where the

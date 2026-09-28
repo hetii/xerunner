@@ -63,6 +63,8 @@ RUNS = {
     "jtag-falcon-blmod": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
     "jtag-falcon-pairing": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
     "jtag-6717": ({"dump_to": "dump", "no_write": True, "data": "6717"}, 0x5A123457),
+    "jtag-6717-meta": ({"dump_to": "dump", "no_write": True, "data": "6717"},
+                       0x5A123457),
 }
 HEAP_LEFTOVERS = ((0xF74080, 0xF75000), (0xF78400, 0xF79000))
 
@@ -108,21 +110,28 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
             json.dump(table, handle)
         return serve
 
-    def run_ours(self, settings, when, system_update=None, serve=None):
+    def run_ours(self, settings, when, system_update=None, serve=None, placed=None):
+        """Ours in a directory of its own, over the stand-in. `placed` is a directory
+        of files the run had beside the release's own -- a `.meta` -- which, like a
+        system update, turns the release into links, file by file."""
         work = tempfile.mkdtemp(prefix="xebuild-update-")
         self.addCleanup(shutil.rmtree, work, ignore_errors=True)
         os.symlink(os.path.join(self.release, "common"), os.path.join(work, "common"))
         version = settings.get("data", "17559")
-        if system_update is None:
+        if system_update is None and placed is None:
             os.symlink(os.path.join(self.release, version), os.path.join(work, version))
         else:
-            # The release as links, file by file, with the update beside them.
+            # The release as links, file by file, with the update or the placed files
+            # beside them.
             os.makedirs(os.path.join(work, version))
             for one in os.listdir(os.path.join(self.release, version)):
                 os.symlink(os.path.join(self.release, version, one),
                            os.path.join(work, version, one))
-            os.symlink(os.path.join(system_update, "$SystemUpdate"),
-                       os.path.join(work, version, "$SystemUpdate"))
+            if system_update is not None:
+                os.symlink(os.path.join(system_update, "$SystemUpdate"),
+                           os.path.join(work, version, "$SystemUpdate"))
+            for one in os.listdir(placed) if placed else ():
+                os.symlink(os.path.join(placed, one), os.path.join(work, version, one))
         for one in ("xell-gggggg.bin", "xell-1f.bin", "xell-2f.bin"):
             shutil.copy(os.path.join(self.release, "data", one), work)
         stand_in = StandIn(serve or os.path.join(self.where, "_serve"))
@@ -164,8 +173,10 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
                 if not os.path.isdir(system_update):
                     continue
             with self.subTest(name):
-                stand_in, work = self.run_ours(settings, when, system_update,
-                                               self.serve_for(recorded))
+                placed = recorded + "/release"
+                stand_in, work = self.run_ours(
+                    settings, when, system_update, self.serve_for(recorded),
+                    placed if os.path.isdir(placed) else None)
                 with open(recorded + "/wire.log") as handle:
                     wanted = [one for one in handle.read().splitlines() if one]
                 self.assertEqual(stand_in.lines, wanted)
