@@ -62,3 +62,8 @@ the code makes the decision:
   "kv.bin is not the correct size! Skipping verification and encryption!" and writes the
   file into the image unsealed, which gives the console a keyvault it cannot open.
   -- `image/keyvault.py`, `Keyvault.handed_in`
+- **`update` leaves the rest of the Manufacturing.data and Statistics.settings blocks
+  erased.** The console hands over 0x80 and 0x400 bytes; the original copies them into
+  0x1000 buffers it never clears and writes those whole, so the rest is whatever its
+  heap last held -- the text of the release's file list, an HMAC pad -- and differs from
+  run to run. -- `update/update.py`, `BuildUpdate._console_statistics`
