@@ -1,7 +1,7 @@
 """xeBuild's command line, and what each switch sets: build mode's here, and the other
 three modes' further down, each with its own usage.
 
-The grammar is the original's, as its usage states it and as x360mcp measured it:
+The grammar is the original's, as its usage states it and as measured on it:
 
     xeBuild [mode] -t <type> [<switch> [<switch>...]] <out.bin>
 

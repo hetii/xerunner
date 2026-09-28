@@ -10,9 +10,9 @@ Every field can be written as well as read, and a write goes straight into the i
 a header is a view, so setting one is how a build fills the page it is assembling.
 `blank` makes a fresh page to start from where there is no image yet.
 
-The rest are here too, and each says what it stands on. Where x360mcp names a field,
-that name is used and a comment says it is a name rather than a finding; where nothing
-names one, the offset is the name, so the one thing known about it is not lost. None of
+The rest are here too, and each says what it stands on. Where a field has a name nothing
+here confirms, a comment says the name is a guess; where nothing names one, the offset
+is the name, so the one thing known about it is not lost. None of
 them is read by anything that decides anything, and none is in `__repr__`: they are here
 to be looked at and measured, not to be built on.
 """
@@ -132,9 +132,10 @@ class Header:
             )
         self.image[0x10:0x10 + len(line)] = line
 
-    # x360mcp calls the three bytes above this the boot flags, and it measured what each
-    # one carries: 0x4D a bitfield, 0x4E a second reason XeLL may start on, 0x4F the
-    # reason it starts on. What is checked here is the word they make up, against the
+    # The boot flags, the three bytes above this: 0x4D a bitfield, 0x4E a second reason
+    # XeLL may start on, 0x4F the reason it starts on -- each moved on the original by
+    # the option that sets it, all thirteen buttons among them, and named below as the
+    # reboot core names them. What is checked here is the word they make up, against the
     # pages of sixteen images: zero on a retail one, 0x12 -- the eject button -- on a
     # glitch of any kind, and 0x40012 on a JTAG one.
     @property
@@ -194,8 +195,8 @@ class Header:
         """Where the slots begin, which the page states twice.
 
         The same value as `size` at 0x0C on all sixteen images built, and a build that
-        set one and not the other would leave a page disagreeing with itself. x360mcp's
-        name for it, and `chain.Chain` reads the copy at 0x0C.
+        set one and not the other would leave a page disagreeing with itself.
+        `chain.Chain` reads the copy at 0x0C.
         """
         return self._long(0x64)
 
@@ -291,7 +292,7 @@ class Header:
     def word_at_06(self, value: int) -> None:
         self._put(">H", 0x06, value)
 
-    # x360mcp calls this the word before the boot flags. That is a name, not a finding.
+    # Named for where it sits, before the boot flags.
     @property
     def before_flags(self) -> int:
         """The word at 0x48, before the boot flags.
@@ -308,7 +309,7 @@ class Header:
     def before_flags(self, value: int) -> None:
         self._put(">I", 0x48, value)
 
-    # x360mcp calls this the number of patch slots. That is a name, not a finding.
+    # The name is a guess at what it counts; nothing here confirms it.
     @property
     def patch_slots(self) -> int:
         """Two on both consoles measured."""
@@ -318,7 +319,7 @@ class Header:
     def patch_slots(self, value: int) -> None:
         self._put(">H", 0x68, value)
 
-    # x360mcp calls this the keyvault's version. That is a name, not a finding.
+    # The name is a guess at what it versions; nothing here confirms it.
     @property
     def keyvault_version(self) -> int:
         """0x0712 on both consoles measured.

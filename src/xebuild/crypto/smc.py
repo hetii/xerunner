@@ -37,8 +37,8 @@ def fingerprint(sealed_image: bytes) -> bytes:
     on before the chain existed: a literal transcription of J-Runner's
     `Nand.CalculateSMCHash`, its own spelling of the rotations kept ("rotate left 29"
     and "rotate left 31", which on 64 bits are these two rotations right), over both
-    consoles' sealed SMCs and random input of four lengths; and the x360mcp tree, which
-    measured it against six images of one console whose digests all differed.
+    consoles' sealed SMCs and random input of four lengths; and every reference image
+    the original built, whose digests this reproduces.
 
     The sixteen bytes are **not** serialised J-Runner's way. It renders each
     accumulator with `ToString("X")`, which drops leading zero nibbles and then copies

@@ -7,10 +7,10 @@ takes the content from one place and the sealing parameters from another. How ea
 encrypted is `crypto.formats`'s; what goes into them -- the stamp, the lockdown value,
 the console's own parameters -- is this module's.
 
-Every rule here was measured by x360mcp, mostly by opening both sides of a build and
-diffing the plaintexts, and several by reading the original's code; the addresses are
-kept beside the rules they came from. Each is then held here against the files of the
-reference images, byte for byte.
+Every rule here was measured on the original, mostly by opening both sides of a build
+and diffing the plaintexts, and several by reading its code; the addresses are kept
+beside the rules they came from. Each is then held here against the files of the
+reference images and the recorded cells, byte for byte.
 
 **Where things come from, for a build from a dump:**
 
@@ -94,7 +94,7 @@ def crl(content: bytes, cpu_key: bytes, when: int, ldv: int, iv: bytes,
 def dae_parameters(own: bytes, cpu_key: bytes) -> tuple:
     """The seven bytes of head and sixteen of field a console's own dae.bin carries.
 
-    Read out of the original by x360mcp: at 0x40D298 it takes the copy it has just
+    Read out of the original: at 0x40D298 it takes the copy it has just
     opened, adds 0x120, and copies thirty-two bytes -- the header's field and the first
     sixteen of the opened body, whose bytes 8 to 0x0E are the head.
     """
@@ -146,9 +146,8 @@ def dae(content: bytes, cpu_key: bytes, when: int, ldv: int, head: bytes,
 # draws over all twelve unless `-norandom` or a finished nonce walk over the dump has
 # cleared its flag, and reading the console's own files overwrites the ones it can --
 # so each value is drawn, the console's, or this, in that order of precedence. See
-# `Build.drawing`. x360mcp read them out and confirmed each twice: by poisoning the slot
-# in a copy of the binary and watching the image move, and by building with `-norandom`
-# and finding every one of them back in the image.
+# `Build.drawing`. Each is at its address in the binary byte for byte, and a build with
+# `-norandom` carries every one of them: the donor cells, measured on the original.
 #
 #   crl.bin      0x44A630 the vector, 0x44A620 the file key
 #   dae.bin      0x44A618 the seven-byte head, 0x44A600 the header's field

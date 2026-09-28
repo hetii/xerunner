@@ -64,8 +64,8 @@ refusal says why, and none of them is for want of trying:
   needs a private key that is not ours to have.
 
 So the five served here are the five that can be held against an image. What the
-original's own layout tables say about the rest is recorded in x360mcp; a number read
-out of a table and never seen in an image is not what this module is for.
+original's own layout tables say about the rest is not recorded here; a number read out
+of a table and never seen in an image is not what this module is for.
 
 **Why this is in `build` and not beside the reading.** Everywhere else, the code that
 writes a structure sits with the code that reads it, because one number in two places is
@@ -171,8 +171,7 @@ def for_type(image_type, flash, chain_end: int, bigffs: bool = False,
     the cursor the original decides XeLL and the slot from -- "patch slot offset reset
     to" is printed before the patches go on. **XeLL is left out when the chain would
     reach it**: 17489's chain ends at 0xCE0C0, so its glitch2m image has no XeLL and its
-    slot at 0xD0000. The test rounds by a block; a devgl chain that grows past 0x70000
-    only once patched keeps its XeLL, which x360mcp measured.
+    slot at 0xD0000, measured on the original. The test rounds by a block.
 
     Refuses the six types no image of which could be built to hold it against; the
     message says which and why. A number nobody measured is worse here than none.

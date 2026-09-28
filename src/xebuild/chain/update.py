@@ -29,8 +29,7 @@ def with_tail(cf: bytearray, first_block: int, count: int) -> None:
 
     A count at 0x30 and then that many block numbers, one up from the other. The
     number is the block's place in the flash, not in the filesystem -- 0x34 on a 16 MB
-    image and 0xAE0 on a 64 MB one. x360mcp read the routine that writes it, at
-    0x41C910, after first taking the numbers for versions.
+    image and 0xAE0 on a 64 MB one, as the original's routine at 0x41C910 writes it.
     """
     field = count.to_bytes(2, "big") + b"".join(
         (first_block + step).to_bytes(2, "big") for step in range(count)

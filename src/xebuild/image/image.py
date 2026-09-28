@@ -123,7 +123,7 @@ class Image:
     def mark_written(self, start: int = 0, end: int | None = None) -> None:
         """Mark every page in the span that holds anything but erased flash.
 
-        The rule x360mcp measured on every page of a reference build: a page gets spare
+        The rule every page of the original's reference images keeps: a page gets spare
         exactly when the build wrote something at it. Content decides for most of an
         image, since erased flash is what nothing wrote; a region whose pages may hold
         0xFF all the same -- a file, the statistics -- is marked by its span instead.

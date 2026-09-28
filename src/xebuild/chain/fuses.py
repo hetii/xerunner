@@ -2,8 +2,8 @@
 
 A console's real fuses are burnt into its CPU. A manufacturing chain and a JTAG image's
 reboot core cannot rely on them, so the image carries a copy -- 0x60 bytes -- and the
-loader hands that over instead. Each line was read out of the original's own code by
-x360mcp -- the template at 0x44A700 and the routines that fill it -- and every
+loader hands that over instead. Each line was read out of the original's own code --
+the template at 0x44A700 and the routines that fill it -- and every
 manufacturing and JTAG reference image agrees to the byte:
 
     line 0     C0FFFFFFFFFFFFFF

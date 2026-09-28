@@ -433,8 +433,9 @@ class Build:
     def plain_keyvault(self) -> Keyvault:
         """The keyvault in the clear, as this build will seal it.
 
-        **A `kv.bin` beside the build is written, over the dump's too** -- measured by
-        x360mcp on a build with both, whose image carried the file's keyvault; see
+        **A `kv.bin` beside the build is written, over the dump's too** -- measured on
+        the original with both, whose image carried the file's keyvault (the
+        `material-kv-*` cells); see
         `Keyvault.handed_in` for the two states it may come in.
 
         **Its eight bytes of head are not the file's.** They are a staging buffer: the
@@ -468,7 +469,7 @@ class Build:
 
         `xell-gggggg.bin` for a glitch image and `xell-2f.bin` for a JTAG one, verbatim
         and exactly 0x40000 bytes: the original's default-name resolver chooses by the
-        type alone (x360mcp read it out of the jump table at 0x4501E8), and every
+        type alone (the jump table at 0x4501E8, kind 25), and every
         image measured carries the one it names. Only the hack types carry one in the
         system area -- numbers 2 to 5; a devkit image lists XeLL as a file instead.
         """
@@ -528,7 +529,7 @@ class Build:
     def _with_addons(self, listed: bytes) -> bytes:
         """The slot's patch set with every `-a` file's entries spliced in.
 
-        Measured by x360mcp, building with `-a` and without: the entries go in behind
+        Measured on the original, one `-a` and two: the entries go in behind
         the set's own, before its terminator, one terminator closes the lot, and the
         word after it says how many bytes the files brought -- their own lengths added
         up, 00 00 0C F8 for `xl_usb`'s 3320 and 00 00 0D 14 with `hvFixKeys` as well.
@@ -653,9 +654,9 @@ class Build:
                 )
             # Sealed over the padding as well as the body: the stream simply carries
             # on. Measured on the last stage, whose header states less than it fills --
-            # the six bytes after CE are that continuation, and x360mcp saw it on a
-            # manufacturing image, where CE had moved by 0x20 and the dump's bytes at
-            # the same place were something else entirely.
+            # the six bytes after CE are that continuation, which the original's
+            # manufacturing images carry, where CE had moved by 0x20 and the dump's
+            # bytes at the same place were something else entirely.
             padded = stage.length + -stage.length % SEAL_ALIGN
             body = bytes(out[stage.at + len(stage.head):stage.at + padded])
             out[stage.at:stage.at + padded] = stage.head + encrypt_bootloader(body, key)
@@ -837,7 +838,7 @@ class Build:
         4532, carries the console's nonces and says where its tail is, and nothing
         else of the release's file is changed -- no slot number, no pairing, no
         binding. The last carries all of it, and its slot number is its place, which
-        x360mcp read at 0x41CDB0 and the JTAG image confirms with a 1.
+        the original writes at 0x41CDB0 and the JTAG image confirms with a 1.
 
         What changes in the release's CF is `chain.update`'s -- where the tail lies,
         the console's block and the binding -- and **both nonces are the console's
@@ -1239,8 +1240,9 @@ class Build:
         files carry: the clock when nothing says, and a reference build's own when one
         is being reproduced.
 
-        Which pages carry spare follows the rule x360mcp measured over every page of a
-        reference build: a page gets it exactly when the build wrote something there.
+        Which pages carry spare follows the rule every page of the original's reference
+        images keeps, spare included: a page gets it exactly when the build wrote
+        something there.
         Content decides for the regions below the filesystem, since what nothing wrote
         is erased; the files, the settings blobs, the table and the console's settings
         are marked by their spans, because their pages may hold 0xFF all the same.
@@ -1454,7 +1456,8 @@ class Build:
           zeros to the patch list -- each patched as `jtag.loaders` says.
         * **the patch list**, the whole patch file -- see `patch_slot` -- and zeros to
           the end of the block. The block after it is erased and still marked written,
-          which is the rest of the list's 0x4000: x360mcp measured the eight pages.
+          which is the rest of the list's 0x4000: the eight pages, as the original's
+          JTAG image has them.
         * **the fuses**, from the second chain's CB -- see `fuses`.
         * **the second chain**, and zeros to the end of its block.
 
@@ -1708,9 +1711,9 @@ class Build:
         flash = self.flash
         head.block_size = flash.block_size if flash.states_block_size else 0
         if head.block_size and self.image_type.name == "jtag":
-            # A JTAG image states the 16 MB step whatever the part's own is: x360mcp
-            # measured `-t jtag -c jasper256`, whose flash steps 0x20000 and whose image
-            # says 0x10000 here.
+            # A JTAG image states the 16 MB step whatever the part's own is: measured on
+            # the original, `-t jtag -c jasper256`, whose flash steps 0x20000 and whose
+            # image says 0x10000 here.
             head.block_size = 0x10000
         head.smc_size = smc_length
         head.smc_at = layout.smc_at(smc_length)
@@ -1719,8 +1722,8 @@ class Build:
     def boot_options(self, head: Header) -> None:
         """The four bytes at 0x4C that decide how the console starts, set on `head`.
 
-        Measured by x360mcp a build at a time, each option against a reference, and
-        named in `Header`:
+        Measured on the original a build at a time, each option against a reference,
+        and named in `Header`:
 
         * `xell_reason` is `xellbutton`; `nodvd` and `olddvd` clear it
         * `xell_reason2` is `xellbutton2`, zero when it is the same button
@@ -1732,7 +1735,7 @@ class Build:
 
         A retail image carries XeLL on no button at all and the word is zero, which the
         reference images show; so does a devkit one. The whole block belongs to types 2
-        to 5, as x360mcp read at 0x40D700.
+        to 5, as the original decides at 0x40D700.
         """
         if self.image_type.number not in (2, 3, 4, 5):
             head.boot_flags = 0
@@ -1772,10 +1775,11 @@ def build_image(config, when: int | None = None) -> str:
 
     The image goes to `out`, and with none to the name the original makes up:
     `<the file list's version>_<word>_<the -c spelling>.bin` -- `17559_g2_trinity.bin`,
-    `17559_gg_jasper256.bin`, `17559mfg_g2m_trinitybigffs.bin`, all measured by x360mcp;
-    the version is the list's own and not the directory's. `sha_file` asks for a
-    SHA-1 of the image beside it, as `sha1sum` writes one -- the digest, " *" and the
-    image's name -- in the file it names, or `<out>.sha1` when it is just `True`.
+    `17559_gg_jasper256.bin`, `17559mfg_g2m_trinitybigffs.bin`, all measured on the
+    original; the version is the list's own and not the directory's. `sha_file` asks
+    for a SHA-1 of the image beside it, as `sha1sum` writes one -- the digest, " *"
+    and the image's name -- in the file it names, or `<out>.sha1` when it is just
+    `True`.
 
     Returns where the image went. `when` is the build's clock, for reproducing one.
     """
