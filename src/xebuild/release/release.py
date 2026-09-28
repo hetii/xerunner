@@ -10,10 +10,11 @@ This is the only thing here that touches the disk. Everything under it takes byt
 
 import os
 import logging
+import binascii
 
-from .recipe import Recipe
 from ..files import beside
 from .patches import Patches
+from .recipe import Recipe, canonical
 from .container import Container, intact
 
 logger = logging.getLogger(__name__)
@@ -60,18 +61,55 @@ class Release:
         inside the container, and the original says so as it takes them out --
         "decrypting SUPD/xboxupd.bin/CF_17559.bin". So they are looked for there, and
         they come back opened, which is the form the file list's checksum covers.
+
+        Each is checked as the original checks it on loading (0x429B30), and refused
+        where it fails -- "could not read cba_9188.bin", then "critical bootloader files
+        are missing" -- see `_checked`.
         """
         for where in (self.common, self.where):
             path = beside(where, listed.plain)
             if path:
-                return self._read(path)
+                return self._checked(listed, self._read(path))
         if listed.kind in ("CF", "CG") and self.container is not None:
             cf, cg = self.container.stages
-            return cf if listed.kind == "CF" else cg
+            return self._checked(listed, cf if listed.kind == "CF" else cg)
         raise ValueError(
             "%s is named by the file list and is in neither %s nor %s"
             % (listed.plain, self.common, self.where)
         )
+
+    @staticmethod
+    def _checked(listed, body: bytes) -> bytes:
+        """A bootloader as it came, once it passes the original's three checks.
+
+        Its stated length no more than the file holds; its magic a C or an S and then
+        the letter of its kind; and its checksum the list's, taken over the form the
+        list states it for -- `Listed.vouches_for`. A list's `ffffffff` spares the
+        checksum only an SC, SD or SE; for every other kind it is a checksum like any,
+        and so is zero. Measured on the original: a byte changed in CB_A, CB_B, CD, CE
+        and a JTAG image's two CBs, the checksum of CF and CG changed in the list, each
+        of those and CB_A with `ffffffff`, CB_A with `00000000`, CB_A's stated length
+        past its end, CD's magic spoilt and CD's made CE's -- all refused.
+
+        The kind is the one the file's name gives. The original checks the magic
+        against the slot the list puts the file in, which is the same kind in every
+        list a release ships.
+        """
+        stated = int.from_bytes(body[0x0C:0x10], "big")
+        if stated > len(body):
+            raise ValueError("BL size (%#x) is bigger than the file (%#x) read in! "
+                             "could not read %s" % (stated, len(body), listed.plain))
+        if listed.kind and (body[0] & 0x43 != 0x43
+                            or body[1:2] != listed.kind[1].encode()):
+            raise ValueError("BL magic check %s for %s failed! could not read %s"
+                             % (body[:2].decode("latin-1"), listed.kind, listed.plain))
+        spared = listed.kind in ("SC", "SD", "SE") and listed.crc == 0xFFFFFFFF
+        if not spared and not listed.vouches_for(body):
+            raise ValueError("BL crc check failed! calculated: %08x expected: %08x; "
+                             "could not read %s"
+                             % (binascii.crc32(canonical(body, listed.kind))
+                                & 0xFFFFFFFF, listed.crc or 0, listed.plain))
+        return body
 
     def patches(self, image_type, board, ext: str = "") -> Patches | None:
         """The patch set for this image type on this console, where there is one.
