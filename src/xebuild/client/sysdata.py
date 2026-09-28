@@ -12,6 +12,7 @@ import hashlib
 import logging
 import contextlib
 
+from ..files import beside
 from ..network import ServerError
 from ..release.container import intact
 from ..release.manifest import Manifest
@@ -20,13 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 def found(directory: str, name: str) -> str:
-    """`name` in `directory` whatever its case, or the name as it stands -- the
-    original runs where case does not count."""
-    if os.path.isdir(directory):
-        for one in sorted(os.listdir(directory)):
-            if one.lower() == name.lower():
-                return os.path.join(directory, one)
-    return os.path.join(directory, name)
+    """`name` in `directory` whatever its case -- see `files.beside` -- or the name as
+    it stands."""
+    return beside(directory, name) or os.path.join(directory, name)
 
 
 def _quietly_unmount(server, drive: str) -> None:

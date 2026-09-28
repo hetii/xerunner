@@ -4,6 +4,7 @@ import os
 import logging
 import binascii
 
+from ..files import beside
 from ..chain import sealing
 from ..build import Material
 from ..chain.stage import Stage
@@ -24,13 +25,14 @@ def locate(path: str) -> tuple:
     `su20076000_00000000` in it, then in `$SystemUpdate` in it. The list goes beside the
     container, `<path>_SU.ini` for a file named outright and `_SU.ini` in the directory
     otherwise -- measured: `d/_SU.ini`, `x/$SystemUpdate/_SU.ini`, `mysu.bin_SU.ini`.
+    Both names are found whatever their case, as where the original runs.
     """
     if os.path.isfile(path):
         return path, path + "_SU.ini"
-    base = path if path.endswith(("/", "\\")) else path + "/"
-    for where in (base, base + "$SystemUpdate/"):
-        if os.path.isfile(where + "su20076000_00000000"):
-            return where + "su20076000_00000000", where + "_SU.ini"
+    for where in (path, beside(path, "$SystemUpdate")):
+        found = beside(where, "su20076000_00000000") if where else None
+        if found is not None:
+            return found, os.path.join(where, "_SU.ini")
     raise ValueError("system update container not found at or near %s!!" % path)
 
 
