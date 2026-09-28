@@ -67,7 +67,7 @@ class OptionsConfig(BaseConfig):
         self.avregion = None
         self.gameregion = 0
         self.dvdregion = None
-        self.xellbutton = "eject"
+        self.xellbutton = None
         self.xellbutton2 = None
         self.dualboot = None
         self.macid = None
@@ -396,8 +396,10 @@ class OptionsConfig(BaseConfig):
     def xellbutton(self) -> str | None:
         """Which power-on button starts Xell.
 
-        Ignored when `olddvd` or `nodvd` is set, and the eject button when nothing
-        says otherwise.
+        None when nothing names one, which a build takes as the eject button -- or as
+        none with `olddvd` or `nodvd`. One that is named is kept with those two too:
+        the original clears the button for either and then sets the one named. See
+        `BuildConfig` for one named in the ini against `nodvd` on the command line.
         """
         return self["xellbutton"]
 

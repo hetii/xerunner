@@ -329,8 +329,9 @@ class TheOptions(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     BuildConfig(**{name: "banana"})
 
-    def test_the_eject_button_unless_something_says_otherwise(self):
-        self.assertEqual(BuildConfig().xellbutton, "eject")
+    def test_no_button_unless_something_names_one(self):
+        """A build takes the eject button for none -- see `Build`'s boot flags."""
+        self.assertIsNone(BuildConfig().xellbutton)
         self.assertIsNone(BuildConfig().xellbutton2)
         self.assertIsNone(BuildConfig().dualboot)
 
@@ -383,6 +384,16 @@ class TheIni(unittest.TestCase):
         self.assertFalse(made.nomobile)
         self.assertEqual(made.cfldv, 12)
         self.assertEqual(made.xellbutton, "power")
+
+    def test_nodvd_on_the_command_line_clears_the_ini_s_button(self):
+        """The ini's settings go first and the command line's after, each `nodvd` or
+        `olddvd` before `xellbutton`; either clears the button (0x42698E). Measured."""
+        self.assertIsNone(BuildConfig(ini=self.ini, nodvd=True).xellbutton)
+        self.assertIsNone(BuildConfig(ini=self.ini, olddvd=True).xellbutton)
+        self.assertEqual(BuildConfig(ini=self.ini, nodvd=False).xellbutton, "power")
+        self.assertEqual(
+            BuildConfig(ini=self.ini, nodvd=True, xellbutton="remox").xellbutton,
+            "remox")
 
     def test_a_blank_value_sets_nothing(self):
         self.assertIsNone(BuildConfig(ini=self.ini).cpu_key)
