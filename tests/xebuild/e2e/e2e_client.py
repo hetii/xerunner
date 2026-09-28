@@ -36,6 +36,8 @@ from xebuild.client.client import options_ini, reason
 
 
 class EachActionAsTheOriginalDidIt(unittest.TestCase):
+    """Each action's recording. The classes below take its helpers and replace its
+    test by naming theirs the same, so the actions do not run again under them."""
 
     @classmethod
     def setUpClass(cls):
@@ -157,7 +159,7 @@ class AnOlderServer(EachActionAsTheOriginalDidIt):
     first lines of its report and still dumps the flash; the peek version it does not
     look at here."""
 
-    def test_the_wire_the_files_and_the_refusal(self):
+    def test_the_wire_and_the_files(self):
         where = os.path.join(self.where, "_older")
         if not os.path.isdir(where):
             self.skipTest("XEBUILD_CLIENT holds no _older recordings")
@@ -306,7 +308,7 @@ class TheHardDiskDataOfEachMadeUpCase(EachActionAsTheOriginalDidIt):
     of a container the check covers and in the one it does not; a directory with
     nested, hidden, empty and unindexed parts; and a console with no hard disk."""
 
-    def test_the_wire_and_the_payloads(self):
+    def test_the_wire_and_the_files(self):
         where = os.path.join(self.where, "_sysdata")
         if not os.path.isdir(os.path.join(where, "supd17559")):
             self.skipTest("XEBUILD_CLIENT holds no _sysdata recordings")
