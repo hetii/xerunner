@@ -699,11 +699,21 @@ class Build:
             runs.append(run)
         return runs[which] if which < len(runs) else []
 
-    def _stage_body(self, listed, index: int) -> bytes:
+    def _stage_body(self, listed, index: int, blmod: bool = True) -> bytes:
         """One stage in the clear, patched, and as long as its header will say.
 
         Padding to `SEAL_ALIGN` is part of what is sealed, so it is part of the stage
         rather than a gap between stages.
+
+        **`blmod.bin` beside the build goes on the end of one patched stage**
+        (0x42BCB4): CB_B where the file list names two CBs -- "ini dictates dual CB for
+        this model" -- and CD otherwise. It goes in at the length the stage's header
+        states, and the header then states that length and it, rounded up to 0x10:
+        "Adding 0x200 bytes blmod.bin data to CBB...Done!", measured on glitch, glitch2
+        and glitch2m, CB_B 0x7800 becoming 0x7A00. CB_B may not grow past 0xC000 and
+        CD past 0x10000; what would is cut off the end of the file with a warning,
+        measured with 0x6000 bytes. A retail image patches no stage and does not read
+        the file at all, measured; a JTAG one is not measured and patches none either.
         """
         body = bytearray(self.release.bootloader(listed))
         which = self._patch_set_for(listed.kind, index)
@@ -715,7 +725,41 @@ class Build:
                     body += bytes(ends - len(body))
                 body = bytearray(patches.over(bytes(body), which=which))
                 Stage(body, 0).length = len(body) + -len(body) % SEAL_ALIGN
+            added = self.material.blmod if blmod and self.patches is not None else None
+            dual = self._dual_cb
+            if added and ((dual and ROLES.get(listed.kind) == "B" and index == 1)
+                          or (not dual and ROLES.get(listed.kind) == "D")):
+                size = Stage(body, 0).length
+                limit = 0xC000 if dual else 0x10000
+                end = size + len(added) + -(size + len(added)) % 0x10
+                if end > limit:
+                    logger.warning("blmod.bin is %#x bytes too large, truncating to "
+                                   "%#x bytes!", end - limit, limit - size)
+                    added = added[:len(added) - (end - limit)]
+                    end = size + len(added) + -(size + len(added)) % 0x10
+                logger.info("Adding %#x bytes blmod.bin data to %s...", len(added),
+                            "CBB" if dual else "CD")
+                body = body + bytes(size - len(body)) + added
+                Stage(body, 0).length = end
         return bytes(body) + bytes(-len(body) % SEAL_ALIGN)
+
+    def _blmod_growth(self) -> int:
+        """How much `blmod.bin` grew the stage it went on; zero where none."""
+        if not self.material.blmod:
+            return 0
+        for index, listed in enumerate(self._chain_files()):
+            grown = (Stage(self._stage_body(listed, index), 0).length
+                     - Stage(self._stage_body(listed, index, blmod=False), 0).length)
+            if grown:
+                return grown
+        return 0
+
+    @property
+    def _dual_cb(self) -> bool:
+        """Whether the file list names a second CB, a CB_B -- the original's own test
+        (0x40A1CA), the second entry of the list being anything but `none`."""
+        chain = self._chain_files()
+        return len(chain) > 1 and ROLES.get(chain[1].kind) == "B"
 
     def _patch_set_for(self, kind: str, index: int):
         """Which set of the release's patch file this stage takes, if any.
@@ -1176,6 +1220,14 @@ class Build:
         slots, tail_at = where["slot"][0], where["tail"][0]
         self._head_lay(out, slots, chain, chain_end)
         xell = self.xell() if "xell" in where else None
+        # Where the slots go was settled before `blmod.bin` went on (0x42BCB4): "patch
+        # slot offset reset to: 0xb0000" comes first. XeLL's room is judged again as
+        # the chain is laid, with the file counted and the patches not, and where the
+        # chain now reaches it XeLL is left out and the slots stay put -- measured with
+        # 0x4000 on CB_B, the chain ending at 0x705C0.
+        if xell is not None and plain_end + self._blmod_growth() > where["xell"][0]:
+            logger.warning("skipping xell, there doesn't appear to be enough room!")
+            xell = None
         if xell is not None:
             out.put(where["xell"][0], xell)
         # One slot pair after another, and each tail straight behind the one before.
@@ -1574,6 +1626,9 @@ class Build:
         year = 2010 if kit else self.console.notice_year(self.image_type.name)
         head.notice = NOTICE.replace(b"2010", b"%d" % year)
         head.before_flags = 1 if self.image_type.number in (2, 3, 4, 5) else 0
+        # And what `blmod.bin` added to the stage it went on, in the two bytes above
+        # that one (0x42BD64): 0x0200 for 0x200 bytes on CB_B, measured.
+        head.before_flags |= self._blmod_growth() << 8
         if kit:
             head.word_at_04 = 0x8000
         self.boot_options(head)

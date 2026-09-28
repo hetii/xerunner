@@ -24,6 +24,7 @@ class ConsoleMaterial(Material):
         self.settings = None
         self.statistics = None
         self.manufacturing = None
+        self.addons = ()
 
     def bytes_in(self, _name: str) -> None:
         """Nothing is handed over beside the build."""

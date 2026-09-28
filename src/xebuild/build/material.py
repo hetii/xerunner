@@ -137,6 +137,11 @@ class Material:
         return self.bytes_in("smc.bin")
 
     @property
+    def blmod(self) -> bytes | None:
+        """Data a build appends to a stage it patches; see `Build._stage_body`."""
+        return self.bytes_in("blmod.bin")
+
+    @property
     def smc_config(self) -> bytes | None:
         """A settings block, or the slice of a flash tail that holds one.
 

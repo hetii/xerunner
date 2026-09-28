@@ -6,6 +6,7 @@ on a real console's answer, whose every field the original's report agrees with:
 
     0x00  the server's version in the upper bytes, its peek version in the lowest
     0x04  the running kernel, major.minor.build.qfe in 4.4.16.(4 of 8) bits
+    0x08  what more the server can hand over: 2 its `blmod`, 4 its `addons`
     0x0C  the bootstrap flags: the board in the low nibble, the hack in the top bits
     0x10  the hardware flags: the board in the top nibble, an HDD at 0x20
     0x14  the NAND image's length, 0x18 its block length with spare
@@ -84,6 +85,17 @@ class ConsoleInfo:
     @property
     def hdd(self) -> bool:
         return bool(self.hardware & 0x20)
+
+    @property
+    def offers_blmod(self) -> bool:
+        """Whether the server hands over a `blmod` (0x4039B0) -- measured on a stand-in
+        console: the original asks for it only with this bit set."""
+        return bool(self.word(0x08) & 0x2)
+
+    @property
+    def offers_addons(self) -> bool:
+        """Whether the server hands over its `addons` (0x403A32), likewise."""
+        return bool(self.word(0x08) & 0x4)
 
     @property
     def flash_length(self) -> int:
