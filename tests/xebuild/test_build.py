@@ -92,6 +92,17 @@ class WhatTheDirectorySupplies(unittest.TestCase):
         where = a_directory(self, {"options.ini": "[nothing]\n"})
         self.assertEqual(Material(where).ini, os.path.join(where, "options.ini"))
 
+    def test_a_file_named_after_a_console_names_it(self):
+        """ "Using trinity ctype (perbox file)": empty, with `.txt` or without, any
+        case; the first of the original's twenty names wins."""
+        self.assertIsNone(Material(a_directory(self)).console_named())
+        for files, named in (({"trinity.txt": b""}, "trinity"),
+                             ({"JASPERBC": b""}, "jasperbc"),
+                             ({"trinity.txt": b"", "xenon": b""}, "xenon")):
+            with self.subTest(sorted(files)):
+                where = a_directory(self, files)
+                self.assertEqual(Material(where).console_named(), named)
+
     def test_a_loader_is_asked_for_by_name(self):
         """Three are shipped; which a build uses follows the button it starts on."""
         one = Material(a_directory(self, {"xell-2f.bin": b"L" * 16}))

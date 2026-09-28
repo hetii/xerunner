@@ -22,11 +22,11 @@ import os
 import sys
 import logging
 
-from ..build import build_image
 from ..client import run_client
 from ..update import run_update
 from ..network import ServerError
 from ..extract import extract_image
+from ..build import Material, build_image
 from ..config.options import OptionsConfig
 from ..config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
 
@@ -247,7 +247,12 @@ def main(argv=None) -> int:
         format="%(message)s",
         level=logging.INFO if settings.get("verbose") else logging.WARNING,
     )
-    ini = os.path.join(settings.get("per_build") or "data", "options.ini")
+    where = settings.get("per_build") or "data"
+    ini = os.path.join(where, "options.ini")
+    if "console" not in settings and os.path.isdir(where):
+        named = Material(where).console_named()
+        if named is not None:
+            settings["console"] = named
     try:
         config = BuildConfig(ini=ini if os.path.isfile(ini) else None, **settings)
         out = build_image(config)

@@ -724,6 +724,8 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
       MobileJ.dat under `nomobile`; Statistics.settings and Manufacturing.data whole,
       short and long, and under `nomobile`; and a dump carrying a Manufacturing.data,
       with and without `nomobile`.
+    * A `fuses.bin` of 0x60 bytes beside a JTAG and a glitch2m build, and one of 0x20
+      that the original passes over.
     * A flash filled so that files and blobs stop fitting; `-i` and `-r` together; a
       release's own payload.bin and freeboot.bin, known and changed; bad blocks on a
       big block dump and on a 16 MB dump built for a big block part.
@@ -762,7 +764,7 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                            "material-sec", "material-short-", "material-fcrt"),
         "kv_blobs_and_settings": ("material-kv-", "material-mobile",
                                   "material-smc_config", "material-statistics",
-                                  "material-manufacturing"),
+                                  "material-manufacturing", "material-fuses"),
         "memory_units": ("mu64-", "mu256-"),
         "blmod": ("blmod-",),
         "one_of_a_kind": ("jtag-", "patchname-", "rgh3-"),
