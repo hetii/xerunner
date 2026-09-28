@@ -45,7 +45,7 @@ class Material:
         if not os.path.isdir(where):
             raise ValueError("%s is not a directory" % where)
         self.where = where
-        self._read = {}
+        self._files = {}
 
     def _beside(self, name: str) -> str | None:
         """That file, found whatever case it is spelled in.
@@ -75,19 +75,19 @@ class Material:
         -- and goes on to the next place, measured with crl.bin, dae.bin and
         extended.bin.
         """
-        if name in self._read:
-            return self._read[name]
+        if name in self._files:
+            return self._files[name]
         path = self._beside(name)
         body = None
         if path is not None:
-            with open(path, "rb") as handle:
-                body = handle.read()
-            if body:
-                logger.info("reading %s (%#x bytes)", path, len(body))
+            size = os.path.getsize(path)
+            if size:
+                logger.info("reading %s (%#x bytes)", path, size)
+                with open(path, "rb") as handle:
+                    body = handle.read()
             else:
                 logger.warning("'%s' is a 0 byte file, loading skipped!", path)
-                body = None
-        self._read[name] = body
+        self._files[name] = body
         return body
 
     def key_in_file(self, name: str) -> bytes | None:
@@ -97,9 +97,13 @@ class Material:
         files on this bench end in a newline. Anything else is a refusal rather than a
         shrug -- a key read wrong is a key that seals an image nobody can open.
         """
+        if ("key", name) in self._files:
+            return self._files[("key", name)]
         path = self._beside(name)
         if path is None:
+            self._files[("key", name)] = None
             return None
+        logger.info("loading %s from %s", name, path)
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             said = handle.read().split()
         if not said:
@@ -112,7 +116,10 @@ class Material:
             ) from None
         if len(key) != 16:
             raise ValueError("%s holds %d bytes, and a key is 16" % (path, len(key)))
-        logger.info("loading %s from %s", name, path)
+        # Kept, since a build asks for its key at every step that seals something --
+        # and kept as the sixteen bytes read out of the file, not the file's text:
+        # the one thing `_files` holds that is not a file's body as it is on disk.
+        self._files[("key", name)] = key
         return key
 
     @property

@@ -26,13 +26,23 @@ class Release:
             raise ValueError("%s is not a directory" % where)
         self.where = where
         self._container = False
+        self._files = {}
         self.common = common or os.path.join(os.path.dirname(where.rstrip("/\\")),
                                              "common")
 
     def _read(self, *parts) -> bytes:
+        """One file's bytes, read once and kept, as `Material.bytes_in` keeps what it
+        reads: a build asks for the same bootloader and patch file more than once.
+
+        Kept for as long as this object lives; a file changed on disk after it was read
+        is not seen again by this object.
+        """
         path = os.path.join(*parts)
-        with open(path, "rb") as handle:
-            return handle.read()
+        if path not in self._files:
+            logger.info("reading %s (%#x bytes)", path, os.path.getsize(path))
+            with open(path, "rb") as handle:
+                self._files[path] = handle.read()
+        return self._files[path]
 
     def _beside(self, where: str, name: str) -> str | None:
         """A file in that directory, found whatever case it is spelled in.
@@ -57,7 +67,6 @@ class Release:
     def recipe(self, image_type, ext: str = "") -> Recipe:
         """The file list for an image type, which names itself."""
         name = image_type.file_list(ext)
-        logger.info("reading %s", os.path.join(self.where, name))
         return Recipe(
             self._read(self.where, name).decode("utf-8", "replace")
         )
@@ -169,7 +178,6 @@ class Release:
             self._container = None
             for name in sorted(os.listdir(self.where)):
                 if name.lower().startswith("su") and "_" in name:
-                    logger.info("reading %s", os.path.join(self.where, name))
                     raw = self._read(self.where, name)
                     # Checked whole before anything is taken from it, and not loaded
                     # at all where any of it fails (0x40CB2C): measured with one byte
