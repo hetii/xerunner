@@ -40,6 +40,7 @@ says so and the caller decides.
 
 import time
 import struct
+import calendar
 
 from ..boards.flash import BLOCK, PAGE
 
@@ -119,6 +120,13 @@ class Entry:
         date = ((at.tm_year - 1980) << 9) | (at.tm_mon << 5) | at.tm_mday
         clock = (at.tm_hour << 11) | (at.tm_min << 5) | (at.tm_sec // 2)
         return (date << 16) | clock
+
+    @staticmethod
+    def seconds_of(stamp: int) -> int:
+        """`fat_time` the other way round: the moment in UTC a FAT date and time say."""
+        date, clock = stamp >> 16, stamp & 0xFFFF
+        return calendar.timegm(((date >> 9) + 1980, (date >> 5) & 0xF, date & 0x1F,
+                                clock >> 11, (clock >> 5) & 0x3F, (clock & 0x1F) * 2))
 
     def __repr__(self) -> str:
         return "Entry(%r, block %#x, %#x bytes%s)" % (

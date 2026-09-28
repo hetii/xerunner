@@ -919,6 +919,9 @@ class AReleaseHoldingEveryFile:
     def listed_file(self, name):
         return BODY
 
+    def listed_meta(self, name):
+        return None
+
     def container_file(self, name):
         return None
 
@@ -938,7 +941,7 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
         one = a_build(self, kind=kind, board=board)
         one.release = AReleaseHoldingEveryFile()
         one._recipe = AListOfFirmware(*listed)
-        return [name for name, _body in one.files(0x5A000000)]
+        return [name for name, _body, _when in one.files(0x5A000000)]
 
     def test_a_jtag_image_names_its_patch_files_for_two_slots_whatever_it_lists(self):
         """`aac.xexp2` from a JTAG list with its own pair taken out -- measured; and

@@ -907,7 +907,9 @@ class Build:
         return pairs
 
     def files(self, when: int) -> list:
-        """The files the filesystem holds after the CG's tail, as `(name, bytes)`.
+        """The files the filesystem holds after the CG's tail, as `(name, bytes, when)`
+        -- `when` the build's, or the file's own where a `.meta` beside it says so, see
+        `_stamped`.
 
         The release's `[flashfs]` list and then its `[security]` list, each in the
         order it names them -- which is the order of every reference image's table.
@@ -937,8 +939,8 @@ class Build:
                 logger.warning("firmware file %s ignored, 'sysupdate.xexp' is a "
                                "reserved name!", listed.name)
                 continue
-            body = self._firmware_file(listed)
-            if body is None:
+            found = self._firmware_file(listed)
+            if found is None:
                 # A file the list vouches for with no checksum, or with zero, is one
                 # the original goes without: "could not read file '..\\launch.xex',
                 # skipping" -- and 7258's `Byrom.xex`, listed with none, likewise.
@@ -947,6 +949,7 @@ class Build:
                     continue
                 raise ValueError("%s is named by the file list and the release does "
                                  "not have it" % listed.plain)
+            body, meta = found
             name = listed.plain
             # Any name ending in `p` that the list vouches for with a checksum: 17489's
             # and 1838's `rrbkgnd.bmp` go in as `rrbkgnd.bmp1` beside every `.xexp1`,
@@ -954,12 +957,40 @@ class Build:
             # all three measured.
             if name.lower().endswith("p") and listed.crc:
                 name += suffix
-            out.append((name, body))
+            out.append((name, body, self._stamped(listed.plain, meta, when)))
         for listed in recipe.security:
-            body = self.security_file(listed.plain, when)
+            # Only beside a file taken from the build's directory (0x427AB0): crl.bin
+            # out of the update container keeps the build's time.
+            at = when
+            if self.material.bytes_in(listed.plain) is not None:
+                at = self._stamped(listed.plain,
+                                   self.material.bytes_in(listed.plain + ".meta"), when)
+            body = self.security_file(listed.plain, at)
             if body is not None:
-                out.append((listed.plain, body))
+                out.append((listed.plain, body, at))
         return out
+
+    @staticmethod
+    def _stamped(name: str, meta: bytes | None, when: int) -> int:
+        """The time a file goes in at: the build's, or the one its `.meta` gives.
+
+        Four bytes, a FAT date and then a time, big-endian; a shorter file leaves the
+        rest zero and all zeros is the build's time, as the original reads it into a
+        zeroed stamp (0x42EF6D) -- "metadata found, not using system time". It is the
+        file's own and no other's, measured on the original against itself: crl.bin,
+        dae.bin and secdata.bin carry it in their content and their entry, extended.bin
+        and fcrt.bin and a loose firmware file in their entry only, a bootloader not at
+        all. Two seconds earlier, since `when` is what the build's stamps are two on
+        from -- see `security.stamp`.
+        """
+        if meta is None:
+            return when
+        # Said whenever there is one, all zeros too, as the original says it.
+        logger.info("%s.meta metadata found, not using system time", name)
+        raw = meta[:4].ljust(4, b"\x00")
+        if not any(raw):
+            return when
+        return Entry.seconds_of(int.from_bytes(raw, "big")) - 2
 
     # --- what the console itself holds -------------------------------------------
     # Off its dump. Nothing else here asks where they came from, so a subclass can
@@ -1018,9 +1049,10 @@ class Build:
             logger.warning("'%s' crc32: %#010x expected: %#010x", where, found, crc)
         return found == crc
 
-    def _firmware_file(self, listed) -> bytes | None:
+    def _firmware_file(self, listed) -> tuple | None:
         """One `[flashfs]` file, from the first source the original would take it from,
-        or None.
+        as `(bytes, its .meta or None)`, or None. Only a loose file on disk -- the
+        release's own or `common/`'s -- can have a `.meta` beside it.
 
         Read out of 0x428040 and its callers at 0x42EB9F, 0x42ECF0, 0x42EDB0 and
         0x42EE40, and measured on the original with the copies made to differ -- the
@@ -1052,14 +1084,14 @@ class Build:
         if listed.name.lower().endswith("p"):
             names += [listed.name + "1", listed.name + "2"]
         for number, name in enumerate(names):
-            body = self._firmware_from(name, listed.crc, container=number == 0,
-                                       common=True)
-            if body is not None:
-                return body
+            found = self._firmware_from(name, listed.crc, container=number == 0,
+                                        common=True)
+            if found is not None:
+                return found
         return None
 
     def _firmware_from(self, name: str, crc: int, container: bool,
-                       common: bool) -> bytes | None:
+                       common: bool) -> tuple | None:
         """One pass of `_firmware_file` over its sources for one spelling of a name."""
         plain = name.replace("\\", "/").rsplit("/", 1)[-1]
 
@@ -1073,20 +1105,20 @@ class Build:
 
         body = read(self.release.listed_file(name), name)
         if self._firmware_fits(body, name, crc):
-            return body
+            return body, self.release.listed_meta(name)
         if container:
             body = self.release.container_file(plain)
             if crc and self._firmware_fits(body, plain, crc):
                 logger.info("extracted SUPD/%s (%#x bytes)", plain, len(body))
-                return body
+                return body, None
         body = self._console_firmware(plain, crc)
         if body is not None:
             logger.info("%s found, adding from previous parse", plain)
-            return body
+            return body, None
         if common:
             body = read(self.release.common_file(plain), plain)
             if self._firmware_fits(body, plain, crc):
-                return body
+                return body, self.release.common_meta(plain)
         return None
 
     def security_file(self, name: str, when: int) -> bytes | None:
@@ -1322,8 +1354,8 @@ class Build:
         # are the first two.
         for index, spill in enumerate(spills):
             fs.add("sysupdate.xexp%d" % (index + 1), spill, stamp=stamp)
-        for name, body in self.files(when):
-            fs.add(name, body, stamp=stamp)
+        for name, body, at in self.files(when):
+            fs.add(name, body, stamp=Entry.fat_time(at + 2))
         fields = b""
         if flash.spare is not None and flash.spare.fs_at is not None:
             fields = self._fs_fields(where["slot"][0])

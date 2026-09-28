@@ -231,6 +231,11 @@ class AnEntrySStamp(unittest.TestCase):
         self.assertEqual(stamp & 0xFFFF, (15 << 11) | (17 << 5) | 25)
         self.assertEqual(Entry.for_file("a", 1, 2, stamp).stamp, stamp)
 
+    def test_a_fat_date_and_time_read_back_is_the_moment_to_the_even_second(self):
+        """What a `.meta` holds, turned back into the time it says."""
+        when = calendar.timegm((2015, 6, 15, 12, 34, 57, 0, 0, 0))
+        self.assertEqual(Entry.seconds_of(Entry.fat_time(when)), when - 1)
+
 
 class TheFileTable(unittest.TestCase):
 
