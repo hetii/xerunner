@@ -9,11 +9,12 @@ the release states for it, which is a proof that needs no other tool.
 
 import struct
 import hashlib
+import binascii
 import unittest
 
 from xebuild.boards import for_name
-from xebuild.release.recipe import canonical
-from xebuild.release import Container, Patches, Recipe
+from xebuild.release.recipe import Listed, canonical
+from xebuild.release import Container, Patches, Recipe, Release
 
 A_LIST = """\
 [version]
@@ -150,6 +151,44 @@ class TheFormAChecksumCovers(unittest.TestCase):
     def test_a_kind_it_does_not_know_is_only_cut(self):
         body = self.a_stage("ZZ", 0x200, stated=0x80)
         self.assertEqual(canonical(body, ""), body[:0x80])
+
+
+class TheChecksABootloaderPasses(unittest.TestCase):
+    """`Release._checked`: its stated length, its magic and its checksum, each
+    refused as the original refuses it (0x429B30)."""
+
+    def listed(self, name: str, body: bytes, crc: int | None = None) -> Listed:
+        kind = Listed(name, "0").kind
+        found = binascii.crc32(canonical(body, kind)) & 0xFFFFFFFF
+        return Listed(name, "%08x" % (found if crc is None else crc))
+
+    def test_a_stage_the_list_vouches_for_goes_through_as_it_came(self):
+        body = TheFormAChecksumCovers().a_stage("CD", 0x100)
+        self.assertEqual(Release._checked(self.listed("cd_1.bin", body), body), body)
+
+    def test_a_changed_byte_is_refused_by_its_checksum(self):
+        body = TheFormAChecksumCovers().a_stage("CD", 0x100)
+        listed = self.listed("cd_1.bin", body)
+        with self.assertRaisesRegex(ValueError, "BL crc check failed"):
+            Release._checked(listed, body[:0x80] + b"\xff" + body[0x81:])
+
+    def test_ffffffff_spares_only_an_sc_sd_or_se(self):
+        body = TheFormAChecksumCovers().a_stage("SD", 0x100)
+        self.assertEqual(Release._checked(self.listed("sd_1.bin", body, 0xFFFFFFFF),
+                                          body), body)
+        body = TheFormAChecksumCovers().a_stage("CD", 0x100)
+        with self.assertRaisesRegex(ValueError, "BL crc check failed"):
+            Release._checked(self.listed("cd_1.bin", body, 0xFFFFFFFF), body)
+
+    def test_a_stated_length_past_the_file_is_refused(self):
+        body = TheFormAChecksumCovers().a_stage("CD", 0x100, stated=0x110)
+        with self.assertRaisesRegex(ValueError, "BL size"):
+            Release._checked(self.listed("cd_1.bin", body), body)
+
+    def test_a_magic_of_another_kind_is_refused(self):
+        body = TheFormAChecksumCovers().a_stage("CE", 0x100)
+        with self.assertRaisesRegex(ValueError, "BL magic check CE for CD"):
+            Release._checked(self.listed("cd_1.bin", body), body)
 
 
 class APatchFile(unittest.TestCase):
