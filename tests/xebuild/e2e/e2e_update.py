@@ -68,6 +68,8 @@ HEAP_LEFTOVERS = ((0xF74080, 0xF75000), (0xF78400, 0xF79000))
 
 
 class EachRunAsTheOriginalDidIt(unittest.TestCase):
+    """Each run's recording. `AnOlderServer` takes its helpers and replaces its test
+    by naming its own the same, so the runs do not go again under it."""
 
     @classmethod
     def setUpClass(cls):
@@ -200,7 +202,7 @@ class AnOlderServer(EachRunAsTheOriginalDidIt):
     recent enough to support update mode!", then "updsvr on console needs to be
     updated!" below version 3 -- and hangs up without a QUIT."""
 
-    def test_the_refusal_and_the_wire(self):
+    def test_the_wire_the_image_and_what_is_kept(self):
         where = os.path.join(self.where, "_older")
         if not os.path.isdir(where):
             self.skipTest("XEBUILD_UPDATE holds no _older recordings")
