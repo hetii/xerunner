@@ -22,13 +22,15 @@ import os
 import sys
 import logging
 
+from ..ini import write_su_ini
 from ..client import run_client
 from ..update import run_update
 from ..network import ServerError
 from ..extract import extract_image
 from ..build import Material, build_image
 from ..config.options import OptionsConfig
-from ..config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
+from ..config import BuildConfig, ClientConfig, ExtractConfig, IniConfig, \
+    UpdateConfig
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,22 @@ Switches:
    -v       : shows more info during extract process
    -noenter : suppresses prompt for enter key when finished
    -?       : shows this info"""
+
+
+# Ini mode's own usage, the original's words (0x418240); its main usage does not name
+# the mode at all.
+INI_USAGE = """\
+Usage   :
+   xeBuild ini [systeUpdateConPath]
+
+Examples:
+   xeBuild ini ./16547/
+   xeBuild ini c:\\16547\\$SystemUpdate
+   xeBuild ini z:\\someWeirdPath\\su20076000_00000000
+      when specifying path, either provide relative path or full path
+      to either the SU container, a folder with $SystemUpdate folder in it,
+      or a folder with flash update named 'su20076000_00000000' in it.
+      Hash data will be output to the folder with the SU in it named _SU.ini"""
 
 
 CLIENT_USAGE = """\
@@ -229,6 +247,8 @@ def main(argv=None) -> int:
         return _client(argv[1:])
     if argv and argv[0] == "update":
         return _update(argv[1:])
+    if argv and argv[0] == "ini":
+        return _ini(argv[1:])
     try:
         mode, settings, flags = parse(argv)
     except UsageError as why:
@@ -445,6 +465,24 @@ def parse_update(argv) -> tuple:
     if appended:
         settings["append"] = tuple(appended)
     return settings, flags
+
+
+def _ini(argv) -> int:
+    """Ini mode: one path and nothing else, not `-noenter` either -- any other count
+    of words gets its usage, measured. What it says is what it is for, so it is
+    shown whatever the verbosity."""
+    if len(argv) != 1:
+        print(INI_USAGE, file=sys.stderr)
+        return 2
+    logging.basicConfig(format="%(message)s", level=logging.INFO)
+    try:
+        write_su_ini(IniConfig(system_update=argv[0]))
+    except (ValueError, OSError) as why:
+        print("Error loading SU! %s" % why, file=sys.stderr)
+        return 1
+    if sys.stdin.isatty():
+        input("press <enter> to quit...")
+    return 0
 
 
 def _update(argv) -> int:
