@@ -1741,8 +1741,8 @@ class Build:
             head.boot_flags = 0
             return
         config, jtag = self.config, self.image_type.name == "jtag"
-        reason = 0 if config.nodvd or config.olddvd else \
-            BUTTONS[config.xellbutton or "eject"]
+        reason = BUTTONS[config.xellbutton] if config.xellbutton else \
+            0 if config.nodvd or config.olddvd else BUTTONS["eject"]
         second = BUTTONS[config.xellbutton2] if config.xellbutton2 else 0
         options = 1 if (config.cygnos or config.demon) else 0
         if jtag and config.nodvd:
@@ -1753,6 +1753,8 @@ class Build:
         head.xell_reason = reason
         head.xell_reason2 = 0 if second == reason else second
         head.boot_options = options
+        if switch and switch == reason:
+            logger.info("dualboot setting ignored!")
         head.dualboot_reason = 0 if switch == reason else switch
 
     def auto_name(self) -> str:

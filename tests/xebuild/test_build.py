@@ -631,6 +631,13 @@ class WhatTheHeaderSays(unittest.TestCase):
         self.assertEqual(self.a_page(nodvd=True).boot_flags, 0)
         self.assertEqual(self.a_page(olddvd=True).boot_flags, 0)
 
+    def test_a_button_named_beside_them_is_kept(self):
+        """The original clears the button for `nodvd` and then sets the one named:
+        0x00000011 on glitch2 and 0x00020011 on JTAG, measured."""
+        self.assertEqual(self.a_page(nodvd=True, xellbutton="power").boot_flags, 0x11)
+        self.assertEqual(self.a_page(kind="jtag", board="falcon", nodvd=True,
+                                     xellbutton="power").boot_flags, 0x20011)
+
     def test_an_alternate_uart_speed_is_one_bit(self):
         """`cygnos` and `demon` write the same byte, which is measured, not a slip."""
         self.assertEqual(self.a_page(cygnos=True).boot_flags, 0x10012)

@@ -43,7 +43,17 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
         self.out = None
         if ini is not None:
             logger.info("read %s", ini)
-            settings = {**self.settings_in_ini(ini), **settings}
+            found = self.settings_in_ini(ini)
+            # The original takes the ini's settings first and the command line's after,
+            # each `nodvd`/`olddvd` before `xellbutton`, and either of the two clears
+            # the button (0x42698E): so a button the ini names survives an ini's
+            # `nodvd` and not a command line's. Measured on JTAG and glitch2 with the
+            # two in each order and each place.
+            if "xellbutton" not in settings and any(
+                    self.check_truth(name, settings[name])
+                    for name in ("nodvd", "olddvd") if name in settings):
+                found.pop("xellbutton", None)
+            settings = {**found, **settings}
         super().__init__(**settings)
 
     @staticmethod
