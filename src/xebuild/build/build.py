@@ -1319,8 +1319,7 @@ class Build:
         if flash.spare is not None and flash.spare.fs_at is not None:
             fields = self._fs_fields(where["slot"][0])
         fs.over(out, fields)
-        placed = fs.lay_blobs(out, {} if self.config.nomobile else self._mobiles(),
-                              fields)
+        placed = fs.lay_blobs(out, self._mobiles(), fields)
         fs.lay_table(out, fields)
         return placed, fs.table_at
 
@@ -1473,31 +1472,53 @@ class Build:
         return bytes([system, size >> 5, 4])
 
     def _mobiles(self) -> dict:
-        """The settings blobs this console carries, by name: the material's first."""
+        """The settings blobs this console carries, by name: the material's first, then
+        the dump's. `nomobile` leaves out only the dump's -- the original does not
+        parse them at all (0x417C62) -- and what the material holds still goes in,
+        measured."""
         out = dict(self.material.mobiles)
-        if self.dump is not None:
+        if self.dump is not None and not self.config.nomobile:
             for name in self.dump.image.blobs:
                 if name.startswith("Mobile") and name not in out:
+                    logger.info("%s found, adding from previous parse", name)
                     out[name] = self.dump.image.blob(name)
         return out
 
     def _settings(self) -> list:
         """The console's statistics, manufacturing data and settings block, placed.
 
-        As `(where, bytes, how much is marked written)`. Each is given eight pages of
-        spare whatever its bytes hold -- measured by x360mcp: the statistics' block at
-        0xF78000 carries spare on all eight pages although most of it is 0xFF. With
-        `nomobile` the statistics are not written at all, spare included, and
-        manufacturing data only when the console has any.
+        As `(where, bytes, how much is marked written)`. The statistics and the
+        manufacturing data each come from the material first -- "Statistics.settings
+        found, adding from file" -- then the console's: "adding from previous parse"
+        (0x42F2D0). `nomobile` leaves out only the dump's, which the original does not
+        parse (0x417C62); a file handed in still goes in, measured. A file is laid in
+        its 0x1000 whatever its length: a shorter one followed by zeros, a longer one
+        cut -- measured with 0x80, 0x400 and 0x1400 bytes, the original's log saying
+        "len 0x1400" and its image holding 0x1000 of them.
+
+        Each is given spare on all eight pages of its block whatever its bytes hold --
+        measured on the original's images: the dump's statistics, whose last five pages
+        are 0xFF, and files of 0x80 and 0x400 bytes, whose pages of zeros behind them
+        all carry spare too.
         """
         flash = self.flash
         span = 0x1000
         stats_at = flash.smc_config - flash.round_to
+        own = not self.config.nomobile
         out = []
-        if self._console_manufacturing is not None:
-            out.append((stats_at - flash.round_to, self._console_manufacturing, span))
-        if self._console_statistics is not None and not self.config.nomobile:
-            out.append((stats_at, self._console_statistics, span))
+        for at, name, console in (
+                (stats_at, "Statistics.settings", self._console_statistics),
+                (stats_at - flash.round_to, "Manufacturing.data",
+                 self._console_manufacturing)):
+            body = self.material.bytes_in(name)
+            if body is not None:
+                logger.info("%s found, adding from file", name)
+                body = body[:span] + bytes(max(0, span - len(body)))
+            elif own and console is not None:
+                logger.info("%s found, adding from previous parse", name)
+                body = console
+            if body is not None:
+                out.append((at, body, span))
         out.append((flash.smc_config, self._configured(self._config_block()), span))
         return out
 

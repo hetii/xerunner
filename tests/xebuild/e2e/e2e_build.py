@@ -720,6 +720,10 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
     * Every file a console's material may hold, handed in beside a build from a dump:
       a borrowed or sealed kv.bin, a MobileB.dat, smc_config.bin, fcrt.bin, and each
       security file open, sealed, and sealed under another console's key.
+    * The settings a build takes from a file before the dump: MobileF.dat, and
+      MobileJ.dat under `nomobile`; Statistics.settings and Manufacturing.data whole,
+      short and long, and under `nomobile`; and a dump carrying a Manufacturing.data,
+      with and without `nomobile`.
     * A flash filled so that files and blobs stop fitting; `-i` and `-r` together; a
       release's own payload.bin and freeboot.bin, known and changed; bad blocks on a
       big block dump and on a 16 MB dump built for a big block part.
@@ -757,7 +761,8 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                            "material-own-", "material-ext", "material-plainz-",
                            "material-sec", "material-short-", "material-fcrt"),
         "kv_blobs_and_settings": ("material-kv-", "material-mobile",
-                                  "material-smc_config"),
+                                  "material-smc_config", "material-statistics",
+                                  "material-manufacturing"),
         "memory_units": ("mu64-", "mu256-"),
         "blmod": ("blmod-",),
         "one_of_a_kind": ("jtag-", "patchname-", "rgh3-"),
