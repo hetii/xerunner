@@ -51,14 +51,23 @@ class BuildUpdate(Build):
 
     @property
     def _console_statistics(self) -> bytes | None:
-        """0x400 bytes, laid at the head of its block. What the original leaves in the
-        rest of the block is not 0xFF and not anything it was handed -- repeatable, but
-        its source is not found (see update's notes); this leaves it erased."""
+        """0x400 bytes, laid at the head of its 0x1000 block, the rest left erased.
+
+        A deliberate divergence. The original copies the file into a 0x1000 buffer it
+        never clears and writes the whole buffer, so the rest of the block is whatever
+        its heap last held: across eight recorded runs, eight different tails, among
+        them a run of 0x36 -- an HMAC pad -- and pointers and sizes; 0xFF where
+        `-clean` left the file unfetched. Nothing a console handed over, nothing it
+        reads, and not reproducible; the console keeps more of its own there, which
+        update mode is never given, so erased flash is what this can honestly write.
+        """
         return self.material.statistics or None
 
     @property
     def _console_manufacturing(self) -> bytes | None:
-        """0x80 bytes, laid the same way."""
+        """0x80 bytes, laid the same way and for the same reason: the original's tail
+        here held the text of the release's file list it had read earlier -- "[zephyrbl]
+        cb_4578.bin,7dce10bf" and on -- and every console dump here has 0xFF there."""
         return self.material.manufacturing or None
 
     def _head_extent(self) -> tuple:

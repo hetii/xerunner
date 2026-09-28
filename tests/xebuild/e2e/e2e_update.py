@@ -17,8 +17,9 @@ and runs here only when `XEBUILD_SYSTEM_UPDATE` names that update.
 
 Two ranges of the image are left out of the comparison: the rest of the 0x1000 blocks
 `Manufacturing.data` (0x80 bytes) and `Statistics.settings` (0x400) go into. The
-original fills them with bytes it was handed nowhere, the same on every run; this
-leaves them erased. An open question.
+original writes what its heap last held there -- the text of the release's file list,
+an HMAC pad -- and this leaves them erased, a deliberate divergence; see
+`BuildUpdate._console_statistics`.
 """
 
 import os
@@ -44,7 +45,7 @@ RUNS = {
     "write-avatar": ({"no_reboot": True}, 0x5A123457),
     "write-avatar-su": ({"no_reboot": True}, 0x5A123457),
 }
-UNEXPLAINED = ((0xF74080, 0xF75000), (0xF78400, 0xF79000))
+HEAP_LEFTOVERS = ((0xF74080, 0xF75000), (0xF78400, 0xF79000))
 
 
 class EachRunAsTheOriginalDidIt(unittest.TestCase):
@@ -90,7 +91,7 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
         board, _ = for_name("trinity")
         a, b = Image(ours, board.flash), Image(theirs, board.flash)
         keep = bytearray(len(a.flat))
-        for start, end in UNEXPLAINED:
+        for start, end in HEAP_LEFTOVERS:
             keep[start:end] = b"\x01" * (end - start)
         wrong = [at for at in range(len(a.flat))
                  if a.flat[at] != b.flat[at] and not keep[at]]
@@ -98,7 +99,7 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
         pairs = enumerate(zip(a.spares, b.spares, strict=True))
         pages = [page for page, (x, y) in pairs
                  if x != y and not any(page * 0x200 < e and s < (page + 1) * 0x200
-                                       for s, e in UNEXPLAINED)]
+                                       for s, e in HEAP_LEFTOVERS)]
         self.assertEqual(pages, [], what)
 
     def test_the_wire_the_image_and_what_is_kept(self):
