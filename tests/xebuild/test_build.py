@@ -553,7 +553,7 @@ class WhatTheSlotForPatchesHolds(unittest.TestCase):
 
     def test_a_manufacturing_chain_puts_the_console_s_fuses_in_front(self):
         """Twelve lines of eight bytes, the set moving to 0x60. Read out of the
-        original's code by x360mcp, and all four such reference images agree."""
+        original's code, and all four such reference images agree."""
         raw = self.sets([(0x10, (1,))], [(0x20, (2,))])
         one = WhichStagesTheChainIsMadeOf.a_chain(self, kind="glitch2m")
         one.release.raw = raw
@@ -761,8 +761,8 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
 
     def test_the_last_stage_is_sealed_over_its_padding_too(self):
         """The region runs past what CE states, to the next 0x10: the stream carries on
-        over the padding, which x360mcp saw on a manufacturing image whose CE had moved
-        and whose dump held something else at the same place."""
+        over the padding, as the original's manufacturing images carry it, where CE had
+        moved and the dump held something else at the same place."""
         one = self.a_chain(stages=(("CBA", 0x100), ("CBB", 0x200), ("CD", 0x180),
                                    ("CE", 0x14a)))
         out = one.chain()

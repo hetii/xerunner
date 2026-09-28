@@ -253,7 +253,7 @@ class Dump:
         The first sound block from where the shape keeps it to the end of the flash,
         0x200 at a time (0x4159AE): the original searches upward whatever it prints,
         measured with the block spoilt and a sound copy 0x200 and 0x400 above it. Below
-        that place it does not look, measured by x360mcp with a copy one block lower.
+        that place it does not look: its search only climbs.
         """
         flat = self.image.flat
         for at in range(self.flash.smc_config, len(flat) - 0x200 + 1, 0x200):
@@ -307,8 +307,8 @@ class Dump:
         The range is the author's own, in the ini xeBuild's source ships: "blocks 0x10
         through 0x15B (inclusive) ... when NAND MU data is detected only". The blocks
         are the chip's 0x20000, so 0x200000 up to 0x2B80000 -- the gap between the
-        bootloaders and the filesystem. Detected, as at the original's 0x415B8A read by
-        x360mcp, by a page whose kind is 1 to 0x29, which only a big block chip has.
+        bootloaders and the filesystem. Detected, as at the original's 0x415B8A, by a
+        page whose kind is 1 to 0x29, which only a big block chip has.
         """
         spare = self.flash.spare
         if spare is None or spare.pages_a_block != 256:

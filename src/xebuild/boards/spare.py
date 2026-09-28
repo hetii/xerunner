@@ -92,7 +92,7 @@ class Spare:
 
         `extra` is the four bytes only a settings blob fills, at `extra_at`: its length
         in units of 0x100 and how many pages of its block are still free after it --
-        read out of the routine at 0x4106E8 by x360mcp, and on every reference image a
+        read out of the original's routine at 0x4106E8, and on every reference image a
         mobile's page carries exactly that, 08 1C for a 0x800 blob and 02 1F for a 0x200
         one.
 

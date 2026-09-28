@@ -119,8 +119,8 @@ class Chain:
         goes straight on to its CD and has still finished. An RGH3 chain does not: its
         third CB stands where the CD is due, so the walk stops with the exploit's own
         stage read as CB_B. The CF and CG are the console's slot's, read only by a walk
-        that finished. x360mcp read the walk at 0x417651 and found the flag it clears
-        in its very last instruction, which is what decides whether a build draws its
+        that finished. The original's walk clears its flag in its very last
+        instruction, at 0x417651, which is what decides whether a build draws its
         nonces.
         """
         read, finished = self.positional()

@@ -118,7 +118,7 @@ class Smc:
         return set(self.plain) <= {0x00} or set(self.plain) <= {0xFF}
 
     def clean_for(self, number: int) -> bool:
-        """The original's classifier at 0x40BD80, read out by x360mcp, for an image
+        """The original's classifier at 0x40BD80, read out of its code, for an image
         type by its number.
 
         Clean when the checksum is one of the stock images; otherwise by type: never
@@ -204,9 +204,9 @@ class Smc:
             smcnoblink   A2 CF 92 E0 A2 CE 22 ...
                      ->  D3 22 00 00 00 00 00 SETB C / RET: the ring blinks once
 
-        Measured by x360mcp on the nineteen images the original ships: the eject routine
-        is in every one exactly once, and the blink routine in sixteen -- not in the
-        three Corona images nor Winchester, where the original warns "could not patch
+        Counted in the nineteen images the original ships: the eject routine is in
+        every one exactly once, and the blink routine in fifteen -- not in the three
+        Corona images nor Winchester, where the original warns "could not patch
         SMC to disable ROL center blinking" and carries on, which is what this does too.
         A signature found twice is refused: patching one would be a guess at which.
         """

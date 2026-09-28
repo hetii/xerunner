@@ -69,9 +69,8 @@ def for_dump(raw: bytes, prefer: Board | None = None) -> Board:
 
     Two things decide it and both are in the dump: its length, and the erase block its
     own header states at 0x70, which is zero where the controller is a small block one.
-    x360mcp reads the controller off that same field. Among the consoles here those two
-    tell every flash apart. `prefer` is taken when it fits, so a dump read for its own
-    console is read exactly as that console's.
+    Among the consoles here those two tell every flash apart. `prefer` is taken when it
+    fits, so a dump read for its own console is read exactly as that console's.
     """
     stated = int.from_bytes(bytes(raw[0x70:0x74]), "big")
     fits = [

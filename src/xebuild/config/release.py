@@ -38,9 +38,9 @@ class ReleaseConfig(BaseConfig):
     def append(self) -> tuple:
         """Patch files, by name, whose entries are added to the image's patch list.
 
-        `-a` may be given more than once and each one counts: x360mcp measured `-a
-        xl_usb -a hvFixKeys` against the two alone. So this is a tuple, in the order
-        given, and a single name is a tuple of one.
+        `-a` may be given more than once and each one counts: measured on the original,
+        `-a nofcrt -a hvFixKeys`. So this is a tuple, in the order given, and a single
+        name is a tuple of one.
         """
         return self["append"]
 

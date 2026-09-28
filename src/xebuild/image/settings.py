@@ -2,8 +2,8 @@
 
 0x400 bytes a flash keeps at the place its shape names -- `Flash.smc_config` -- and a
 console hands over as `smc_config.bin`. The fields below are the ones a build writes,
-each found by x360mcp building twice, once with the option and once without, and
-reading the difference; J-Runner's own field table agrees on every one it has.
+each found by building on the original twice, once with the option and once without,
+and reading the difference; J-Runner's own field table agrees on every one it has.
 
     0x11  CPU fan, 0x12  GPU fan         0x80 | percent; 0x7F is on auto
     0x29..0x2B  CPU, GPU, EDRAM target temperature, Centigrade
