@@ -316,6 +316,8 @@ class Build:
             if not self.dump.smc_opens:
                 raise ValueError("the dump's SMC does not decrypt and there is no "
                                  "smc.bin to use instead")
+            logger.info("reading %s failed, using smc.bin from nand dump",
+                        os.path.join(self.material.where, "smc.bin"))
             carried = self.dump.smc
             plain = decrypt_smc(carried)
         if self.image_type.number in (2, 3, 4, 5):
@@ -396,6 +398,8 @@ class Build:
         if (self._handed_keyvault is None and self.dump is not None
                 and not self.drawing and not self._dvdkey_goes_in
                 and (not self.cpu_key or self._decrypt_console_keyvault() is not None)):
+            logger.info("reading %s failed, using kv.bin from nand dump",
+                        os.path.join(self.material.where, "kv.bin"))
             return self.dump.sealed_keyvault
         return self.plain_keyvault().sealed(self.cpu_key)
 
@@ -450,6 +454,8 @@ class Build:
         if given is not None:
             vault = Keyvault.handed_in(given, self.cpu_key)
         elif own is not None:
+            logger.info("reading %s failed, using kv.bin from nand dump",
+                        os.path.join(self.material.where, "kv.bin"))
             vault = own
         else:
             raise ValueError("could not read kv.bin, and no keyvault the CPU key opens "
@@ -1012,9 +1018,11 @@ class Build:
         if container:
             body = self.release.container_file(plain)
             if crc and self._firmware_fits(body, plain, crc):
+                logger.info("extracted SUPD/%s (%#x bytes)", plain, len(body))
                 return body
         body = self._console_firmware(plain, crc)
         if body is not None:
+            logger.info("%s found, adding from previous parse", plain)
             return body
         if common:
             body = read(self.release.common_file(plain), plain)
@@ -1064,8 +1072,12 @@ class Build:
         if content is None and name in ("crl.bin", "dae.bin") and \
                 not config.nosusecurity and self.release.container is not None and \
                 name in self.release.container.held:
+            logger.info("could not read %s, using data from SUPD...", name)
             content = self.release.container.read(name)
         if content is None and not made_clean:
+            if own is not None:
+                logger.info("could not read %s, using data from previous parse...",
+                            name)
             content = own
         cpu, ldv = self.cpu_key, self.ldv
         if name == "crl.bin":
@@ -1456,6 +1468,8 @@ class Build:
                 break
             given, name = self.material.bytes_in(other), other
         if given is None and self.dump is not None:
+            logger.info("reading %s failed, using smc_config.bin from nand dump",
+                        os.path.join(self.material.where, "smc_config.bin"))
             given, name = self.dump.smc_config, "the dump"
         if given is None:
             raise ValueError("could not read smc_config.bin, and the dump holds no "
