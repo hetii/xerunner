@@ -38,6 +38,29 @@ class BuildUpdate(Build):
         measured on an update image, as a dump's is."""
         return self.material.keyvault
 
+    @property
+    def _walk(self) -> tuple:
+        """The nonces the console's info names, and nothing drawn: update mode clears
+        the original's random flag (0x4318E0) and fills the stage buffers from the
+        info, where a build reads them off a dump."""
+        return self.material.nonces, False
+
+    @property
+    def pairing(self) -> bytes:
+        """The pairing the console's info names (0x41ADE0) -- "pairing set to: 5a 7c
+        31" -- and a build's where it names none, which with no dump is the static one:
+        measured on the original against a stand-in console saying JTAG, both ways."""
+        if self.zero_paired or not self.material.pairing:
+            return super().pairing
+        return self.material.pairing.to_bytes(3, "big")
+
+    @property
+    def _console_smc(self) -> bytes:
+        """As it handed it over, which `collect` has made sure opens; the seal takes
+        its four as a dump's are taken (0x4042C9) -- measured on a JTAG update, whose
+        head is a build's."""
+        return self.material.smc
+
     def _console_file(self, name: str) -> bytes | None:
         """Its copy, read over its update server -- "retrieving USVR\\crl.bin...OK"."""
         return self.material.files.get(name.lower())
@@ -75,7 +98,11 @@ class BuildUpdate(Build):
         truncated bootloader size 0x6c5c0" -- and there is no chain of the release's.
         Refused where the stages are not a chain a build can carry: "bootloaders
         retrieved from console are inconsistent, cannot proceed!" (0x42EC6C), which an
-        RGH3 console gets."""
+        RGH3 console gets.
+
+        A JTAG console hands over no bootloaders, and its head is a build's."""
+        if self.material.bootloaders is None:
+            return super()._head_extent()
         console = self.material.bootloaders
         found = Chain(SimpleNamespace(flat=console, header=Header(console[:0x200])),
                       self.console)
@@ -91,7 +118,10 @@ class BuildUpdate(Build):
         """The console's first bytes as it holds them -- header, SMC, keyvault and
         chain to the end of its CE; measured, the original's image carries GTBL's bytes
         to 0x6C5C0 exactly, even the sixteen this console keeps at 0x6D0 -- and zeros
-        behind them to the end of the block."""
+        behind them to the end of the block. A JTAG console's head is a build's."""
+        if self.material.bootloaders is None:
+            super()._head_lay(out, slots, chain, chain_end)
+            return
         out.put(0, self.material.bootloaders[:chain_end]
                 + bytes(-chain_end % layout.BLOCK))
 
@@ -105,17 +135,39 @@ def collect(server, info: ConsoleInfo, recipe, base: str,
     console -- a base file whose patch the list names, and the ones outside the
     release -- and the partition unmounted. `clean` leaves secdata, extended and the
     statistics on the console, as `-clean` says.
+
+    **Only a glitch console hands over its bootloaders** (0x404357): a JTAG one is not
+    asked -- "Skipping getting bootloaders on non-glitch machine!" -- and its image is
+    laid from the release's chain as build mode lays one. Its keyvault and SMC are
+    asked for on their own instead, `kv_enc` and `smc_enc` behind the security files,
+    and the security files are the ones its type's list names, which for JTAG leaves
+    out fcrt.bin. Measured on the original against a stand-in console saying JTAG.
     """
-    server.file("flash_hdr")
+    header = server.file("flash_hdr")
     server.bad_blocks()
     server.mount("usv", "\\SystemRoot")
-    found = ConsoleMaterial(base, server.bootloaders())
-    for name in SECURITY:
+    jtag = info.image_type[1] == "JTAG"
+    if jtag:
+        logger.info("Skipping getting bootloaders on non-glitch machine!")
+    found = ConsoleMaterial(base, None if jtag else server.bootloaders())
+    found.flash_header = header
+    found.nonces = info.nonces
+    found.pairing = info.pairing
+    if found.pairing:
+        logger.info("pairing set to: %s", found.pairing.to_bytes(3, "big").hex(" "))
+    for name in (one.plain for one in recipe.security):
         if clean and name in ("extended.bin", "secdata.bin"):
             continue
         body = server.file("usv:\\%s" % name)
         if body:
             found.files[name] = body
+    if jtag:
+        found.sealed_keyvault = server.file("kv_enc")
+        if not found.sealed_keyvault:
+            raise ValueError("could not retrieve keyvault from console!")
+        found.sealed_smc = server.file("smc_enc")
+        if not found.sealed_smc:
+            raise ValueError("could not retrieve smc.bin from console!")
     for letter in "BCDEFGHIJ":
         body = server.file("usv:\\Mobile%s.dat" % letter)
         if body:
@@ -269,9 +321,12 @@ def _keep(where: str, info: ConsoleInfo, material: ConsoleMaterial, flash: bytes
     settings blobs and settings, the fuses, the public keys and an options.ini --
     enough for build mode to build from later."""
     cpu = info.cpu_key
-    out = {name: image, "nanddump.bin": flash, "fbldrs.bin": material.bootloaders,
+    out = {name: image, "nanddump.bin": flash,
            "kv.bin": Keyvault.opened(material.keyvault, cpu).plain,
            "smc.bin": decrypt_smc(material.smc)}
+    # A JTAG console handed over no bootloaders, and none are kept -- measured.
+    if material.bootloaders is not None:
+        out["fbldrs.bin"] = material.bootloaders
     for file in SECURITY:
         if file in material.files:
             out[file] = decrypt_securityfile(file, material.files[file], cpu)
@@ -290,6 +345,6 @@ def _keep(where: str, info: ConsoleInfo, material: ConsoleMaterial, flash: bytes
             handle.write(body)
     with open(os.path.join(where, "fuses.txt"), "w", newline="\n") as handle:
         handle.write(fuses_txt(info))
-    header = material.bootloaders[:0x200]
+    header = material.flash_header[:0x200]
     with open(os.path.join(where, "options.ini"), "w", newline="\n") as handle:
         handle.write(options_ini(info, header))

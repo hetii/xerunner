@@ -13,6 +13,7 @@ on a real console's answer, whose every field the original's report agrees with:
     0x1C  the CF's console block: pairing in the upper three bytes, lockdown below
     0x20  CPU key, 0x30 DVD key, 0x40 twelve fuse lines, 0xA0 twelve virtual ones
     0x100 1BL key, 0x110 1BL, 0x220 PIRS and 0x330 MASTER public keys, 0x110 each
+    0x440 six stage nonces, 0x10 each: CB_A, CB_B, CD, CE, CF, CG
 """
 
 from ..crypto.keys import hammingweight, uideccencode
@@ -108,6 +109,19 @@ class ConsoleInfo:
     @property
     def pairing(self) -> int:
         return self.word(0x1C) >> 8
+
+    @property
+    def nonces(self) -> dict:
+        """The stage nonces the console names, by the staging buffer each fills.
+
+        Update mode puts each one that is not all zeros into its buffer (0x4318E0,
+        setters 0x41AC70 to 0x41AD60, CB_A's at 0x44A6A4 down to CG's at 0x44A654);
+        the rest keep the compiled-in value.
+        """
+        names = ("CB_A", "CB_B", "CD", "CE", "CF", "CG")
+        fields = (self.body[at:at + 0x10] for at in range(0x440, 0x4A0, 0x10))
+        return {name: field for name, field in zip(names, fields, strict=True)
+                if any(field)}
 
     @property
     def ldv(self) -> int:

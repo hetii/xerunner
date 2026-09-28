@@ -340,9 +340,7 @@ class Build:
             # The console's own four only where its SMC opened: the original takes
             # them as it reads the dump (0x41ADD0) and a discarded SMC leaves them
             # alone -- measured with the dump's SMC spoilt and a good smc.bin given.
-            own = None
-            if self.dump is not None and self.dump.smc_opens:
-                own = self.dump.smc[:4]
+            own = self._console_smc[:4] if self._console_smc else None
             if own is None and not self.drawing:
                 # The staging buffer's 8E0375CC (0x44A640) as it comes out sealed:
                 # measured on a trinity, a falcon JTAG and a corona build with three
@@ -962,6 +960,14 @@ class Build:
     def _console_keyvault(self) -> bytes | None:
         """The console's own keyvault, sealed, or None with no dump."""
         return self.dump.sealed_keyvault if self.dump is not None else None
+
+    @property
+    def _console_smc(self) -> bytes | None:
+        """The console's own SMC, sealed, where it opens; None with no dump or one
+        whose SMC was discarded -- see `Dump.smc_opens`."""
+        if self.dump is None or not self.dump.smc_opens:
+            return None
+        return self.dump.smc
 
     def _console_file(self, name: str) -> bytes | None:
         """The console's own copy of a file -- crl.bin, ximedic.xex -- or None."""

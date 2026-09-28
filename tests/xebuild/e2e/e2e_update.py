@@ -15,6 +15,10 @@ The `addons-` runs were made against the stand-in with its answer to GTIN saying
 addons and, in `addons-blmod`, a blmod to hand over, and with those files made up for
 it; each run's `served/` holds what it answered differently from `_serve/`.
 
+The `jtag-` runs are a console saying JTAG on a Falcon, which hands over no
+bootloaders and its keyvault and SMC as `kv_enc` and `smc_enc` -- a JTAG SMC, sealed
+for it -- and in `jtag-falcon-blmod` a blmod as well, which a JTAG image does not take.
+
 `write-avatar-su` was run with the 17559 system update in the release's directory, so
 the avatar data went too; it keeps the image and only the SHA-1 of every file after it,
 and runs here only when `XEBUILD_SYSTEM_UPDATE` names that update.
@@ -55,6 +59,9 @@ RUNS = {
     "addons-cmdline": ({"dump_to": "dump", "no_write": True, "append": ("nolan",)},
                        0x5A123457),
     "addons-blmod": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "jtag-falcon": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "jtag-falcon-blmod": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "jtag-falcon-pairing": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
 }
 HEAP_LEFTOVERS = ((0xF74080, 0xF75000), (0xF78400, 0xF79000))
 
@@ -84,6 +91,8 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
         with open(os.path.join(shared, "serve.json")) as handle:
             table = json.load(handle)
         table["files"].update(served["files"])
+        if served.get("no_bootloaders"):
+            del table["bootloaders"]
         table["info"] = "served-" + served["info"]
         for one in os.listdir(shared):
             if one != "serve.json":
