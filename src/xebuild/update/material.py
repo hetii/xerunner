@@ -16,7 +16,7 @@ class ConsoleMaterial(Material):
     dump, no keys, no files handed in beside the build.
     """
 
-    def __init__(self, base: str, bootloaders: bytes):
+    def __init__(self, base: str, bootloaders: bytes | None):
         super().__init__(base)
         self.bootloaders = bootloaders
         self.files = {}
@@ -25,6 +25,15 @@ class ConsoleMaterial(Material):
         self.statistics = None
         self.manufacturing = None
         self.addons = ()
+        # The stage nonces its info names, by buffer -- `ConsoleInfo.nonces`.
+        self.nonces = {}
+        # The pairing its info names, 0 where it names none.
+        self.pairing = 0
+        # What a JTAG console hands over instead of its bootloaders, `kv_enc` and
+        # `smc_enc`, sealed; and the flash's first page, `flash_hdr`.
+        self.sealed_keyvault = None
+        self.sealed_smc = None
+        self.flash_header = None
 
     def bytes_in(self, _name: str) -> None:
         """Nothing is handed over beside the build."""
@@ -40,13 +49,19 @@ class ConsoleMaterial(Material):
 
     @property
     def keyvault(self) -> bytes:
-        """Sealed, where the header says -- "extracting BLDR\\kv_enc"."""
+        """Sealed, where the header says -- "extracting BLDR\\kv_enc" -- or as a JTAG
+        console hands it over, "retrieving USVR\\kv_enc"."""
+        if self.bootloaders is None:
+            return self.sealed_keyvault
         at = int.from_bytes(self.bootloaders[0x6C:0x70], "big")
         return self.bootloaders[at:at + 0x4000]
 
     @property
     def smc(self) -> bytes:
-        """Sealed, where the header says -- "extracting BLDR\\smc_enc"."""
+        """Sealed, where the header says -- "extracting BLDR\\smc_enc" -- or as a JTAG
+        console hands it over, "retrieving USVR\\smc_enc"."""
+        if self.bootloaders is None:
+            return self.sealed_smc
         at = int.from_bytes(self.bootloaders[0x7C:0x80], "big")
         length = int.from_bytes(self.bootloaders[0x78:0x7C], "big")
         return self.bootloaders[at:at + length]

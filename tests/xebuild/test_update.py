@@ -57,7 +57,7 @@ class AConsole:
 
 class WhatUpdateAsksOfTheConsole(unittest.TestCase):
 
-    RECIPE = SimpleNamespace(firmware=[])
+    RECIPE = SimpleNamespace(firmware=[], security=[])
 
     def setUp(self):
         self.base = tempfile.mkdtemp()
@@ -122,8 +122,9 @@ class TheAddonsAConsoleHandsOver(unittest.TestCase):
         info[0x0B] = offers
         self.console = AConsole(encrypt_smc(bytes(0x3000), bytes(4)), a_block(),
                                 served)
-        return collect(self.console, ConsoleInfo(bytes(info)),
-                       SimpleNamespace(firmware=[]), self.base, append=append)
+        recipe = SimpleNamespace(firmware=[], security=[])
+        return collect(self.console, ConsoleInfo(bytes(info)), recipe, self.base,
+                       append=append)
 
     def test_nothing_is_asked_for_where_the_console_offers_nothing(self):
         found = self.collect(0, {"addons": self.NOFCRT, "blmod": b"x" * 4})
@@ -148,6 +149,17 @@ class TheAddonsAConsoleHandsOver(unittest.TestCase):
         found = self.collect(4, {"addons": self.NOFCRT}, append=("nolan",))
         self.assertNotIn("addons", self.console.asked)
         self.assertEqual(found.addons, ())
+
+
+class Nonces(unittest.TestCase):
+    """The stage nonces an info names, as update mode fills its buffers (0x4318E0)."""
+
+    def test_only_the_fields_that_are_not_all_zeros_name_a_nonce(self):
+        info = bytearray(0x4A0)
+        info[0x440:0x450] = b"15432 py builder"
+        info[0x49F] = 1
+        self.assertEqual(ConsoleInfo(bytes(info)).nonces,
+                         {"CB_A": b"15432 py builder", "CG": bytes(15) + b"\x01"})
 
 
 if __name__ == "__main__":
