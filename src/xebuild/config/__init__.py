@@ -12,6 +12,7 @@ Every value goes in through an attribute that checks it, so a configuration that
 is already valid and the code reading one never checks anything twice.
 """
 
+from .ini import IniConfig
 from .build import BuildConfig
 from .client import ClientConfig
 from .update import UpdateConfig
