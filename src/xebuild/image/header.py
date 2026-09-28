@@ -294,14 +294,13 @@ class Header:
     # x360mcp calls this the word before the boot flags. That is a name, not a finding.
     @property
     def before_flags(self) -> int:
-        """One for every hack and zero for a retail image, and still nobody's name.
+        """The word at 0x48, before the boot flags.
 
-        The word before the boot flags, as x360mcp calls it. What it is for is not
-        known; what it holds is, over sixty-two images the original built with no
-        exception either way: **one** on glitch, glitch2, glitch2m and JTAG, **zero** on
-        retail. A console's own dump carries what its history put there -- the glitched
-        console measured here says one, and x360mcp records an RGH3 dump that says zero
-        with the boot flag bytes beside it cleared as well.
+        Its low byte is **one** on glitch, glitch2, glitch2m and JTAG and **zero** on
+        retail, over sixty-two images the original built with no exception either way.
+        The two bytes above it say how much `blmod.bin` grew the stage it went on
+        (0x42BD64): 0x0200 for 0x200 bytes on CB_B, measured, and zero with no such
+        file. A console's own dump carries what its history put there.
         """
         return self._long(0x48)
 

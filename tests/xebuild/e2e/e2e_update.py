@@ -11,6 +11,10 @@ Each run is repeated here with the settings the original actually ended up with.
 of its switches eat the word after them -- see `cli.command.parse_update` -- so
 `write-noreeb` rebooted and is compared as such.
 
+The `addons-` runs were made against the stand-in with its answer to GTIN saying it has
+addons and, in `addons-blmod`, a blmod to hand over, and with those files made up for
+it; each run's `served/` holds what it answered differently from `_serve/`.
+
 `write-avatar-su` was run with the 17559 system update in the release's directory, so
 the avatar data went too; it keeps the image and only the SHA-1 of every file after it,
 and runs here only when `XEBUILD_SYSTEM_UPDATE` names that update.
@@ -44,6 +48,13 @@ RUNS = {
     "write-noreeb": ({"no_avatar": True}, 0x5A123457),
     "write-avatar": ({"no_reboot": True}, 0x5A123457),
     "write-avatar-su": ({"no_reboot": True}, 0x5A123457),
+    "addons-nofcrt": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "addons-all": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "addons-partial": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "addons-odd": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "addons-cmdline": ({"dump_to": "dump", "no_write": True, "append": ("nolan",)},
+                       0x5A123457),
+    "addons-blmod": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
 }
 HEAP_LEFTOVERS = ((0xF74080, 0xF75000), (0xF78400, 0xF79000))
 
@@ -59,7 +70,33 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
             raise unittest.SkipTest("XEBUILD_UPDATE or XEBUILD_ORIGINAL_DIR is not "
                                     "set: the recordings and the xeBuild folder")
 
-    def run_ours(self, settings, when, system_update=None):
+    def serve_for(self, recorded: str) -> str:
+        """`_serve/`, or where a run answered differently a copy of it made of links
+        with the run's own `served/` files over them."""
+        own = os.path.join(recorded, "served")
+        shared = os.path.join(self.where, "_serve")
+        if not os.path.isdir(own):
+            return shared
+        serve = tempfile.mkdtemp(prefix="xebuild-serve-")
+        self.addCleanup(shutil.rmtree, serve, ignore_errors=True)
+        with open(os.path.join(own, "served.json")) as handle:
+            served = json.load(handle)
+        with open(os.path.join(shared, "serve.json")) as handle:
+            table = json.load(handle)
+        table["files"].update(served["files"])
+        table["info"] = "served-" + served["info"]
+        for one in os.listdir(shared):
+            if one != "serve.json":
+                os.symlink(os.path.join(shared, one), os.path.join(serve, one))
+        for one in os.listdir(own):
+            if one != "served.json":
+                name = "served-" + one if one == served["info"] else one
+                os.symlink(os.path.join(own, one), os.path.join(serve, name))
+        with open(os.path.join(serve, "serve.json"), "x") as handle:
+            json.dump(table, handle)
+        return serve
+
+    def run_ours(self, settings, when, system_update=None, serve=None):
         work = tempfile.mkdtemp(prefix="xebuild-update-")
         self.addCleanup(shutil.rmtree, work, ignore_errors=True)
         os.symlink(os.path.join(self.release, "common"), os.path.join(work, "common"))
@@ -75,7 +112,7 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
                        os.path.join(work, "17559", "$SystemUpdate"))
         for one in ("xell-gggggg.bin", "xell-1f.bin", "xell-2f.bin"):
             shutil.copy(os.path.join(self.release, "data", one), work)
-        stand_in = StandIn(os.path.join(self.where, "_serve"))
+        stand_in = StandIn(serve or os.path.join(self.where, "_serve"))
         stand_in.start()
         here = os.getcwd()
         os.chdir(work)
@@ -113,7 +150,8 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
                 if not os.path.isdir(system_update):
                     continue
             with self.subTest(name):
-                stand_in, work = self.run_ours(settings, when, system_update)
+                stand_in, work = self.run_ours(settings, when, system_update,
+                                               self.serve_for(recorded))
                 with open(recorded + "/wire.log") as handle:
                     wanted = [one for one in handle.read().splitlines() if one]
                 self.assertEqual(stand_in.lines, wanted)

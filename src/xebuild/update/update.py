@@ -5,12 +5,12 @@ import logging
 
 from ..chain import Chain
 from ..crypto import formats
-from ..release import Release
 from ..config import BuildConfig
 from ..build import Build, layout
 from ..network.updsrv import PORT
 from types import SimpleNamespace
 from ..build.build import SEAL_ALIGN
+from ..release import Release, addons
 from .material import ConsoleMaterial
 from ..network.info import PUBLIC_KEYS
 from ..crypto.formats import decrypt_smc
@@ -97,7 +97,7 @@ class BuildUpdate(Build):
 
 
 def collect(server, info: ConsoleInfo, recipe, base: str,
-            clean: bool = False) -> ConsoleMaterial:
+            clean: bool = False, append: tuple = ()) -> ConsoleMaterial:
     """Everything a build takes from the console, asked for in the original's order:
     the flash header, the bad blocks, the system partition mounted as `usv:`, the
     bootloaders, the security files, the settings blobs B to J, the statistics,
@@ -123,6 +123,42 @@ def collect(server, info: ConsoleInfo, recipe, base: str,
     if not clean:
         found.statistics = server.file("usv:\\Statistics.settings")
     found.manufacturing = server.file("usv:\\Manufacturing.data")
+    # Then what only a server that offers them hands over, each asked for where the
+    # original asks (0x4039BA, 0x403BE4) -- measured on a stand-in console with the
+    # two bits set in its answer to GTIN.
+    if not info.offers_blmod:
+        logger.info("console has no available blmod")
+    elif server.file("blmod") is None:
+        logger.warning("Unable to retrieve blmod.bin data from console!")
+    # Asked for and not used: it goes on a chain a build lays, and an update lays none
+    # of its own but puts the console's bootloaders back as they came, which the
+    # original does too -- measured, "Adding ... blmod.bin data" is never said.
+    if not info.offers_addons:
+        logger.info("console has no available addons")
+    elif append:
+        logger.info("skipping USVR\\addons, addons have been specified on command "
+                    "line")
+    else:
+        body = server.file("addons")
+        if body is None:
+            logger.warning("Unable to retrieve addons.bin from console!")
+        elif len(body) % 4:
+            logger.warning("addons.bin from console is not a multiple of 4 bytes! "
+                           "Skipping!")
+        else:
+            # The index of the release the console runs, beside the base directory
+            # (0x403772: ".\\%d\\bin\\addon.idx"), not of the one being built.
+            path = os.path.join(base, info.kernel.split(".")[2], "bin", "addon.idx")
+            try:
+                with open(path, "rb") as handle:
+                    table = handle.read()
+            except OSError:
+                logger.warning("unable to open %s to parse addons.bin from console!",
+                               path)
+            else:
+                found.addons = tuple(addons.named(addons.index(table), body))
+                for name in found.addons:
+                    logger.info("addon patch from console: %s", name)
     found.settings = server.file("usv:\\Static.settings")
     names = {one.plain.lower() for one in recipe.firmware}
     for listed in recipe.firmware:
@@ -168,8 +204,12 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
         build = BuildUpdate(settings, None, release)
         material = collect(server, info, build.recipe,
                            os.path.dirname(os.path.abspath(config.data or "data")),
-                           config.clean)
+                           config.clean, config.append)
         build.material = material
+        # The console's own addons go back in as `-a` would put them (0x428CBD):
+        # "patches now 0x948 bytes total with addon byte count appended".
+        if material.addons:
+            build.config.append = material.addons
         image = build.image(when)
         name = build.auto_name()
         kept = None

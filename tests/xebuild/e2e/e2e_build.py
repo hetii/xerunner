@@ -723,6 +723,8 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
     * A flash filled so that files and blobs stop fitting; `-i` and `-r` together; a
       release's own payload.bin and freeboot.bin, known and changed; bad blocks on a
       big block dump and on a 16 MB dump built for a big block part.
+    * A `blmod.bin` beside a glitch2 build: 0x200 bytes on CB_B, 0x4000 that leave
+      XeLL no room, and 0x6000 cut down to what CB_B may hold.
     * Devkit images from 17489 and 1838 on xenon, falcon, jasper and jasperbb, whose
       `[rawpatch]` files no release ships: made up and put in a copy of the release,
       which `cell.json` then names as `release`.
@@ -757,6 +759,7 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
         "kv_blobs_and_settings": ("material-kv-", "material-mobile",
                                   "material-smc_config"),
         "memory_units": ("mu64-", "mu256-"),
+        "blmod": ("blmod-",),
         "one_of_a_kind": ("jtag-", "patchname-", "rgh3-"),
     }
 
@@ -791,6 +794,9 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
 
     def test_memory_units(self):
         self._each_whole_file("memory_units")
+
+    def test_blmod(self):
+        self._each_whole_file("blmod")
 
     def test_one_of_a_kind(self):
         self._each_whole_file("one_of_a_kind")
