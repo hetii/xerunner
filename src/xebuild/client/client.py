@@ -123,31 +123,40 @@ def _info(server, info: ConsoleInfo, directory: str | None) -> None:
     logger.info("hardware type   : %s", info.hardware_type)
     logger.info("hardware flags  : 0x%08x", info.hardware)
     logger.info("internal HDD    : %s", "present" if info.hdd else "not present")
-    logger.info("Image Type      : %s (%s)", board, hack)
-    logger.info("CPU key         : %s (weight:%#x %s; ecd: %s)",
-                info.cpu_key.hex().upper(), checks["cpu weight"],
-                "valid" if checks["cpu weight"] == 53 else "error",
-                "valid" if checks["cpu ecd"] else "error")
-    logger.info("DVD key         : %s", info.dvd_key.hex().upper())
-    logger.info("1BL key         : %s (%s)", info.one_bl_key.hex().upper(),
-                "good" if checks["1bl"] else "bad")
-    for number, line in enumerate(info.fuses):
-        logger.info("fuseset %02d: %s", number, line.hex().upper())
-    logger.info("Virtual Fuses   : %s",
-                "present" if any(any(one) for one in info.virtual_fuses)
-                else "not present")
-    for name, _file, _at, _wanted in PUBLIC_KEYS:
-        logger.info("%s RSA pub : %s", name, "good" if checks[name] else "bad")
-    header = server.file("flash_hdr")
-    if header:
-        logger.info("Xell Reason     : %s", reason(header[0x4F], info.fat, True)[1])
-        if header[0x4E]:
-            logger.info("Xell Alt Reason : %s",
-                        reason(header[0x4E], info.fat, True)[1])
-        if header[0x4D] & 1:
-            logger.info("UART speed      : cygnos/demon speed set")
-    logger.info("CF LDV          : %d", info.ldv)
-    logger.info("Pairing Value   : 0x%06x", info.pairing)
+    # A server older than 3 stops the report here (0x431AA8), and `-i` still goes on
+    # to the bad blocks and the flash but writes nothing else -- measured on the
+    # original against a stand-in console saying version 2.
+    current = info.server_version[0] >= 3
+    header = None
+    if current:
+        logger.info("Image Type      : %s (%s)", board, hack)
+        logger.info("CPU key         : %s (weight:%#x %s; ecd: %s)",
+                    info.cpu_key.hex().upper(), checks["cpu weight"],
+                    "valid" if checks["cpu weight"] == 53 else "error",
+                    "valid" if checks["cpu ecd"] else "error")
+        logger.info("DVD key         : %s", info.dvd_key.hex().upper())
+        logger.info("1BL key         : %s (%s)", info.one_bl_key.hex().upper(),
+                    "good" if checks["1bl"] else "bad")
+        for number, line in enumerate(info.fuses):
+            logger.info("fuseset %02d: %s", number, line.hex().upper())
+        logger.info("Virtual Fuses   : %s",
+                    "present" if any(any(one) for one in info.virtual_fuses)
+                    else "not present")
+        for name, _file, _at, _wanted in PUBLIC_KEYS:
+            logger.info("%s RSA pub : %s", name, "good" if checks[name] else "bad")
+        header = server.file("flash_hdr")
+        if header:
+            logger.info("Xell Reason     : %s",
+                        reason(header[0x4F], info.fat, True)[1])
+            if header[0x4E]:
+                logger.info("Xell Alt Reason : %s",
+                            reason(header[0x4E], info.fat, True)[1])
+            if header[0x4D] & 1:
+                logger.info("UART speed      : cygnos/demon speed set")
+        logger.info("CF LDV          : %d", info.ldv)
+        logger.info("Pairing Value   : 0x%06x", info.pairing)
+    else:
+        logger.error("updsvr on console needs to be updated!")
     bad = server.bad_blocks()
     if bad:
         logger.info("the console lists %#x bytes of bad blocks", len(bad))
@@ -155,6 +164,8 @@ def _info(server, info: ConsoleInfo, directory: str | None) -> None:
         return
     os.makedirs(directory, exist_ok=True)
     _save(os.path.join(directory, "nanddump.bin"), server.flash(), "the flash")
+    if not current:
+        return
     with open(os.path.join(directory, "options.ini"), "w", newline="\n") as handle:
         handle.write(options_ini(info, header))
     with open(os.path.join(directory, "fuses.txt"), "w", newline="\n") as handle:
