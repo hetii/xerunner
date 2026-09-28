@@ -53,9 +53,7 @@ nothing about it has to be carried from the dump.
 
 import logging
 
-from ..crypto.formats import decrypt_keyvault, encrypt_keyvault
-
-NONCE = 0x10
+from ..crypto.formats import NONCE_LENGTH, decrypt_keyvault, encrypt_keyvault
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +82,7 @@ class Keyvault:
         measured with a CPU key one bit wrong.
         """
         vault = cls.opened(sealed, cpu_key)
-        if vault.sealed(cpu_key)[:NONCE] != bytes(sealed)[:NONCE]:
+        if vault.sealed(cpu_key)[:NONCE_LENGTH] != bytes(sealed)[:NONCE_LENGTH]:
             return None
         return vault
 
@@ -106,7 +104,7 @@ class Keyvault:
         does no better, since the nonce then covers the wrong span.
         """
         if len(given) == 0x3FF0:
-            given = bytes(NONCE) + bytes(given)
+            given = bytes(NONCE_LENGTH) + bytes(given)
         if len(given) != 0x4000:
             raise ValueError("kv.bin is %#x bytes, not the correct size (0x4000, or "
                              "0x3FF0 without its nonce)" % len(given))
@@ -121,10 +119,11 @@ class Keyvault:
     def head(self) -> bytes:
         """The eight bytes a build puts in afresh at 0x10 -- see `with_head` -- and the
         head `extended.bin` takes as its own."""
-        return self.plain[NONCE:NONCE + 8]
+        return self.plain[NONCE_LENGTH:NONCE_LENGTH + 8]
 
     def with_head(self, head: bytes) -> Keyvault:
-        return Keyvault(self.plain[:NONCE] + bytes(head)[:8] + self.plain[NONCE + 8:])
+        return Keyvault(self.plain[:NONCE_LENGTH] + bytes(head)[:8]
+                        + self.plain[NONCE_LENGTH + 8:])
 
     def with_dvd_key(self, key: bytes) -> Keyvault:
         return Keyvault(self.plain[:0x100] + bytes(key) + self.plain[0x110:])
