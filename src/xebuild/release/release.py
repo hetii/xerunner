@@ -12,6 +12,7 @@ import os
 import logging
 
 from .recipe import Recipe
+from ..files import beside
 from .patches import Patches
 from .container import Container, intact
 
@@ -44,26 +45,6 @@ class Release:
                 self._files[path] = handle.read()
         return self._files[path]
 
-    def _beside(self, where: str, name: str) -> str | None:
-        """A file in that directory, found whatever case it is spelled in.
-
-        The original runs where case does not count and the file lists are spelled
-        inconsistently: release 17559 asks for `sc_17489.bin` and what is there is
-        `SC_17489.bin`. Matching exactly loses 54 bootloaders across the nine releases
-        here, all of them to that and nothing else.
-        """
-        exact = os.path.join(where, name)
-        if os.path.isfile(exact):
-            return exact
-        wanted = name.lower()
-        try:
-            for found in os.listdir(where):
-                if found.lower() == wanted:
-                    return os.path.join(where, found)
-        except OSError:
-            return None
-        return None
-
     def recipe(self, image_type, ext: str = "") -> Recipe:
         """The file list for an image type, which names itself."""
         name = image_type.file_list(ext)
@@ -81,7 +62,7 @@ class Release:
         they come back opened, which is the form the file list's checksum covers.
         """
         for where in (self.common, self.where):
-            path = self._beside(where, listed.plain)
+            path = beside(where, listed.plain)
             if path:
                 return self._read(path)
         if listed.kind in ("CF", "CG") and self.container is not None:
@@ -131,7 +112,7 @@ class Release:
 
     def _listed_path(self, name: str) -> str | None:
         path = os.path.normpath(os.path.join(self.where, name.replace("\\", "/")))
-        return self._beside(os.path.dirname(path), os.path.basename(path))
+        return beside(os.path.dirname(path), os.path.basename(path))
 
     def container_file(self, name: str) -> bytes | None:
         """A firmware file out of the update container, by its plain name, or None."""
@@ -143,17 +124,17 @@ class Release:
         """A firmware file in `common/`, by its plain name, or None -- where every
         release since 1888 keeps `xenonclatin.xtt`, `xenonjklatin.xtt` and
         `ximedic.xex` (0x427CC0: "reading ./common/xenonclatin.xtt")."""
-        path = self._beside(self.common, name)
+        path = beside(self.common, name)
         return self._read(path) if path else None
 
     def common_meta(self, name: str) -> bytes | None:
         """The `.meta` beside a firmware file in `common/`, or None (0x427E30)."""
-        path = self._beside(self.common, name + ".meta")
+        path = beside(self.common, name + ".meta")
         return self._read(path) if path else None
 
     def raw_file(self, name: str) -> bytes:
         """A file `-8` names, which the original looks for relative to the release."""
-        path = name if os.path.isabs(name) else self._beside(self.where, name)
+        path = name if os.path.isabs(name) else beside(self.where, name)
         if path is None or not os.path.isfile(path):
             raise ValueError("could not load [rawpatch] file '%s'" % name)
         return self._read(path)
@@ -165,14 +146,14 @@ class Release:
         `payload.bin` and `freeboot.bin` -- before it falls back to the copies built
         into itself: "could not read 17559/bin/payload.bin, using built in payload".
         """
-        path = self._beside(os.path.join(self.where, "bin"), name)
+        path = beside(os.path.join(self.where, "bin"), name)
         return self._read(path) if path else None
 
     def in_base(self, name: str) -> bytes | None:
         """A file in the base directory -- the one the release's directory is in -- or
         None. Where the original looks last for a loader: "xell not found in firmware
         /bin folder, checking base path"."""
-        path = self._beside(os.path.dirname(os.path.normpath(self.where)), name)
+        path = beside(os.path.dirname(os.path.normpath(self.where)), name)
         return self._read(path) if path else None
 
     def option(self, name: str) -> Patches:

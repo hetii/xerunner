@@ -36,6 +36,8 @@ line and the ini are `config`'s, so putting them in order is the caller's --
 import os
 import logging
 
+from ..files import beside
+
 logger = logging.getLogger(__name__)
 
 # The settings blobs the original looks for here, B to J (0x42F40B) -- a console keeps
@@ -53,22 +55,6 @@ class Material:
         self.where = where
         self._files = {}
 
-    def _beside(self, name: str) -> str | None:
-        """That file, found whatever case it is spelled in.
-
-        The original runs where case does not count, and the names in a directory a
-        person assembled by hand are not consistent. `release.Release` does the same for
-        the same reason, and there it cost 54 bootloaders to find out.
-        """
-        exact = os.path.join(self.where, name)
-        if os.path.isfile(exact):
-            return exact
-        wanted = name.lower()
-        for found in sorted(os.listdir(self.where)):
-            if found.lower() == wanted:
-                return os.path.join(self.where, found)
-        return None
-
     def bytes_in(self, name: str) -> bytes | None:
         """One file's bytes, or None when this directory does not hold it.
 
@@ -83,7 +69,7 @@ class Material:
         """
         if name in self._files:
             return self._files[name]
-        path = self._beside(name)
+        path = beside(self.where, name)
         body = None
         if path is not None:
             size = os.path.getsize(path)
@@ -105,7 +91,7 @@ class Material:
         """
         if ("key", name) in self._files:
             return self._files[("key", name)]
-        path = self._beside(name)
+        path = beside(self.where, name)
         if path is None:
             self._files[("key", name)] = None
             return None
@@ -131,7 +117,7 @@ class Material:
     @property
     def ini(self) -> str | None:
         """Where the settings file is, for whoever reads settings. Not read here."""
-        return self._beside("options.ini")
+        return beside(self.where, "options.ini")
 
     @property
     def dump(self) -> bytes | None:
@@ -192,7 +178,7 @@ class Material:
                      "jasperbb", "jasper256", "jasper512", "trinity", "trinitybb",
                      "trinitybigffs", "corona", "coronabb", "coronabigffs", "corona4g",
                      "winchester", "winchester4g", "winchesterbb", "winchesterbigffs"):
-            if self._beside(name) or self._beside(name + ".txt"):
+            if beside(self.where, name) or beside(self.where, name + ".txt"):
                 logger.info("Using %s ctype (perbox file)", name)
                 return name
         return None
