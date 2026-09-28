@@ -62,6 +62,7 @@ RUNS = {
     "jtag-falcon": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
     "jtag-falcon-blmod": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
     "jtag-falcon-pairing": ({"dump_to": "dump", "no_write": True}, 0x5A123457),
+    "jtag-6717": ({"dump_to": "dump", "no_write": True, "data": "6717"}, 0x5A123457),
 }
 HEAP_LEFTOVERS = ((0xF74080, 0xF75000), (0xF78400, 0xF79000))
 
@@ -109,16 +110,17 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
         work = tempfile.mkdtemp(prefix="xebuild-update-")
         self.addCleanup(shutil.rmtree, work, ignore_errors=True)
         os.symlink(os.path.join(self.release, "common"), os.path.join(work, "common"))
+        version = settings.get("data", "17559")
         if system_update is None:
-            os.symlink(os.path.join(self.release, "17559"), os.path.join(work, "17559"))
+            os.symlink(os.path.join(self.release, version), os.path.join(work, version))
         else:
             # The release as links, file by file, with the update beside them.
-            os.makedirs(os.path.join(work, "17559"))
-            for one in os.listdir(os.path.join(self.release, "17559")):
-                os.symlink(os.path.join(self.release, "17559", one),
-                           os.path.join(work, "17559", one))
+            os.makedirs(os.path.join(work, version))
+            for one in os.listdir(os.path.join(self.release, version)):
+                os.symlink(os.path.join(self.release, version, one),
+                           os.path.join(work, version, one))
             os.symlink(os.path.join(system_update, "$SystemUpdate"),
-                       os.path.join(work, "17559", "$SystemUpdate"))
+                       os.path.join(work, version, "$SystemUpdate"))
         for one in ("xell-gggggg.bin", "xell-1f.bin", "xell-2f.bin"):
             shutil.copy(os.path.join(self.release, "data", one), work)
         stand_in = StandIn(serve or os.path.join(self.where, "_serve"))
@@ -127,7 +129,7 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
         here = os.getcwd()
         os.chdir(work)
         try:
-            config = UpdateConfig(address="127.0.0.1", data="17559", **settings)
+            config = UpdateConfig(address="127.0.0.1", **{"data": "17559", **settings})
             run_update(config, port=stand_in.port, when=when)
         finally:
             os.chdir(here)
@@ -185,7 +187,8 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
                         continue
                     with open(os.path.join(kept, one), "rb") as a, \
                             open(os.path.join(work, "dump", one), "rb") as b:
-                        if one.endswith(".bin") and one.startswith("17559_"):
+                        if one.endswith(".bin") and \
+                                one.startswith(settings.get("data", "17559") + "_"):
                             self.same_image(b.read(), a.read(), one)
                         else:
                             self.assertEqual(b.read(), a.read(), one)

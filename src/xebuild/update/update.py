@@ -66,10 +66,16 @@ class BuildUpdate(Build):
         return self.material.files.get(name.lower())
 
     def _console_firmware(self, name: str, crc: int) -> bytes | None:
-        """Its copy counts with no checksum too, where a dump's does not: the original
-        takes the console's (0x42875F) -- measured, `launch.xex` off the console when
-        the base directory has none, and the base directory's when it has one."""
-        body = self._console_file(name)
+        """Its copy, asked for over `usv:` only now -- where a build would read the
+        dump, after the release's directory and its container had no copy that fits
+        (0x428194, 0x404600) -- so a release that holds its own files, as 6717 does,
+        asks the console for none of them: measured, the original's wire with 6717
+        has no firmware on it at all.
+
+        It counts with no checksum too, where a dump's does not: the original takes
+        the console's (0x42875F) -- measured, `launch.xex` off the console when the
+        base directory has none, and the base directory's when it has one."""
+        body = self.server.file("usv:\\%s" % name)
         return body if self._firmware_fits(body, name, crc) else None
 
     @property
@@ -131,10 +137,11 @@ def collect(server, info: ConsoleInfo, recipe, base: str,
     """Everything a build takes from the console, asked for in the original's order:
     the flash header, the bad blocks, the system partition mounted as `usv:`, the
     bootloaders, the security files, the settings blobs B to J, the statistics,
-    manufacturing data and settings, then each firmware file the release leaves to the
-    console -- a base file whose patch the list names, and the ones outside the
-    release -- and the partition unmounted. `clean` leaves secdata, extended and the
-    statistics on the console, as `-clean` says.
+    manufacturing data and settings. `usv:` is left mounted: the firmware files are
+    asked for by the build, one at a time as it needs them -- see
+    `BuildUpdate._console_firmware` -- and the partition is unmounted after it.
+    `clean` leaves secdata, extended and the statistics on the console, as `-clean`
+    says.
 
     **Only a glitch console hands over its bootloaders** (0x404357): a JTAG one is not
     asked -- "Skipping getting bootloaders on non-glitch machine!" -- and its image is
@@ -212,13 +219,6 @@ def collect(server, info: ConsoleInfo, recipe, base: str,
                 for name in found.addons:
                     logger.info("addon patch from console: %s", name)
     found.settings = server.file("usv:\\Static.settings")
-    names = {one.plain.lower() for one in recipe.firmware}
-    for listed in recipe.firmware:
-        if listed.outside or listed.plain.lower() + "p" in names:
-            body = server.file("usv:\\%s" % listed.plain)
-            if body:
-                found.files[listed.plain.lower()] = body
-    server.unmount("usv")
     # What the original asks of the two before it goes on, and neither is waived by
     # `smcnocheck` -- read out of it (0x403B2F, 0x40426B), not measured: no console
     # here hands over a broken one. The SMC at least 0x3000 and opening to the four
@@ -271,11 +271,13 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
                            os.path.dirname(os.path.abspath(config.data or "data")),
                            config.clean, config.append)
         build.material = material
+        build.server = server
         # The console's own addons go back in as `-a` would put them (0x428CBD):
         # "patches now 0x948 bytes total with addon byte count appended".
         if material.addons:
             build.config.append = material.addons
         image = build.image(when)
+        server.unmount("usv")
         name = build.auto_name()
         kept = None
         if config.dump_to:
