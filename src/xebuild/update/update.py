@@ -244,7 +244,20 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
     address = config.address or find()
     release = Release(config.data or "data")
     with Server(address, port) as server:
+        # The original hangs up without a QUIT in update mode, whether it finishes or
+        # stops -- measured with `-nowrite -noreeb`, where the stand-in saw the
+        # connection close after GTFL, and on a refusal after GTIN.
+        server.hung_up = True
         info = ConsoleInfo(server.info())
+        # Checked before anything else is asked (0x431A9E), the peek version first --
+        # measured on the original against a stand-in console saying older ones.
+        version, peek = info.server_version
+        if peek <= 1:
+            raise ValueError("console hv patches are not recent enough to support "
+                             "update mode! update console patches and reboot before "
+                             "trying again.")
+        if version < 3:
+            raise ValueError("updsvr on console needs to be updated!")
         board, hack = info.image_type
         kind = {"JTAG": "jtag", "Glitch2": "glitch2", "Glitch": "glitch",
                 "Glitch-FAT": "glitch", "Glitch2M": "glitch2m", "": "retail"}[hack]
@@ -286,10 +299,6 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
                 logger.warning("%s", why)
         if not config.no_write and not config.no_reboot:
             server.reboot()
-        else:
-            # The original hangs up without a QUIT in update mode -- measured with
-            # `-nowrite -noreeb`: the stand-in saw the connection close after GTFL.
-            server.hung_up = True
     return kept
 
 

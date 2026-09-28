@@ -151,6 +151,49 @@ class EachActionAsTheOriginalDidIt(unittest.TestCase):
                         self.assertEqual(b.read(), a.read(), key)
 
 
+class AnOlderServer(EachActionAsTheOriginalDidIt):
+    """`_older/`: `-i` against a console saying an older server or peek version. Below
+    version 3 the original says "updsvr on console needs to be updated!" after the
+    first lines of its report and still dumps the flash; the peek version it does not
+    look at here."""
+
+    def test_the_wire_the_files_and_the_refusal(self):
+        where = os.path.join(self.where, "_older")
+        if not os.path.isdir(where):
+            self.skipTest("XEBUILD_CLIENT holds no _older recordings")
+        for name in sorted(os.listdir(where)):
+            with self.subTest(name):
+                one = os.path.join(where, name)
+                serve = tempfile.mkdtemp(prefix="xebuild-serve-")
+                self.addCleanup(shutil.rmtree, serve, ignore_errors=True)
+                shared = os.path.join(self.where, "_serve")
+                for part in os.listdir(shared):
+                    if part != "info.bin":
+                        os.symlink(os.path.join(shared, part),
+                                   os.path.join(serve, part))
+                shutil.copy(one + "/info.bin", serve + "/info.bin")
+                with open(one + "/argv.json") as handle:
+                    argv = json.load(handle)[1:]
+                with self.assertLogs("xebuild", "INFO") as said:
+                    stand_in, made = self.run_ours(argv, StandIn(serve))
+                with open(one + "/original.txt", errors="replace") as handle:
+                    refused = "needs to be updated" in handle.read()
+                self.assertEqual(any("needs to be updated" in line
+                                     for line in said.output), refused)
+                with open(one + "/wire.log") as handle:
+                    wanted = [line for line in handle.read().splitlines() if line]
+                self.assertEqual(stand_in.lines, wanted)
+                theirs = {}
+                for root, _dirs, files in os.walk(one + "/made"):
+                    for part in files:
+                        path = os.path.join(root, part)
+                        theirs[os.path.relpath(path, one + "/made")] = path
+                self.assertEqual(sorted(made), sorted(theirs))
+                for key, path in theirs.items():
+                    with open(path, "rb") as a, open(made[key], "rb") as b:
+                        self.assertEqual(b.read(), a.read(), key)
+
+
 class ThePatchUpdateOnEachMadeUpConsole(EachActionAsTheOriginalDidIt):
     """`-p` with the original's own choice of file and payload, console by console."""
 

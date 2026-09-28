@@ -122,6 +122,7 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
         for one in ("xell-gggggg.bin", "xell-1f.bin", "xell-2f.bin"):
             shutil.copy(os.path.join(self.release, "data", one), work)
         stand_in = StandIn(serve or os.path.join(self.where, "_serve"))
+        self.stand_in = stand_in
         stand_in.start()
         here = os.getcwd()
         os.chdir(work)
@@ -130,7 +131,7 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
             run_update(config, port=stand_in.port, when=when)
         finally:
             os.chdir(here)
-        stand_in.join(30)
+            stand_in.join(30)
         return stand_in, work
 
     def same_image(self, ours: bytes, theirs: bytes, what: str):
@@ -188,6 +189,39 @@ class EachRunAsTheOriginalDidIt(unittest.TestCase):
                             self.same_image(b.read(), a.read(), one)
                         else:
                             self.assertEqual(b.read(), a.read(), one)
+
+
+class AnOlderServer(EachRunAsTheOriginalDidIt):
+    """`_older/`: a console saying an older server or peek version. The original
+    refuses right after GTIN -- the peek version first, "console hv patches are not
+    recent enough to support update mode!", then "updsvr on console needs to be
+    updated!" below version 3 -- and hangs up without a QUIT."""
+
+    def test_the_refusal_and_the_wire(self):
+        where = os.path.join(self.where, "_older")
+        if not os.path.isdir(where):
+            self.skipTest("XEBUILD_UPDATE holds no _older recordings")
+        for name in sorted(os.listdir(where)):
+            with self.subTest(name):
+                one = os.path.join(where, name)
+                serve = tempfile.mkdtemp(prefix="xebuild-serve-")
+                self.addCleanup(shutil.rmtree, serve, ignore_errors=True)
+                shared = os.path.join(self.where, "_serve")
+                for part in os.listdir(shared):
+                    if part != "info.bin":
+                        os.symlink(os.path.join(shared, part),
+                                   os.path.join(serve, part))
+                shutil.copy(one + "/info.bin", serve + "/info.bin")
+                with open(one + "/original.txt", errors="replace") as handle:
+                    said = handle.read()
+                wanted = ("hv patches are not recent enough" if "hv patches" in said
+                          else "updsvr on console needs to be updated")
+                with self.assertRaisesRegex(ValueError, wanted):
+                    self.run_ours({"no_write": True}, None, serve=serve)
+                with open(one + "/wire.log") as handle:
+                    self.assertEqual(self.stand_in.lines,
+                                     [line for line in handle.read().splitlines()
+                                      if line])
 
 
 if __name__ == "__main__":
