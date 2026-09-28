@@ -11,7 +11,9 @@ release's:
     nanddump.bin                the console's own flash
     smc.bin  smc_config.bin     an SMC and a settings block to use instead of the dump's
     kv.bin  fcrt.bin            likewise a keyvault and an FCRT
-    Mobile*.dat                 settings blobs, four of them
+    Mobile*.dat                 settings blobs, B to J
+    Statistics.settings         the dashboard's counters, instead of the dump's
+    Manufacturing.data          the factory's block, instead of the dump's
     xell-*.bin                  the loader, chosen by which button starts it
 
 Every one of them is optional. What a build does when one is missing is the build's
@@ -34,8 +36,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# The four settings blobs a console keeps, by the name this directory spells them with.
-MOBILES = ("MobileB.dat", "MobileC.dat", "MobileD.dat", "MobileE.dat")
+# The settings blobs the original looks for here, B to J (0x42F40B) -- a console keeps
+# four, and measured, MobileF.dat and MobileJ.dat handed in go in too, as kinds 0x35 and
+# 0x39.
+MOBILES = tuple("Mobile%s.dat" % letter for letter in "BCDEFGHIJ")
 
 
 class Material:
@@ -168,6 +172,7 @@ class Material:
         for name in MOBILES:
             body = self.bytes_in(name)
             if body is not None:
+                logger.info("%s found, adding from file", name)
                 out[name] = body
         return out
 

@@ -161,7 +161,7 @@ class Filesystem:
         What follows the files starts on the flash's own step: a jasperbb's files end at
         0x38D0000 and its blobs go to 0x38E0000 -- and so does its table when there are
         no blobs. On every other part the files already end on one. The blobs go
-        `mobile_stride` apart in the order B, C, D, E, each with its version 1, its kind
+        `mobile_stride` apart in the order B to J, each with its version 1, its kind
         from 0x31 up, and four bytes more: its length in units of 0x100 and how many
         pages of its block are still free -- counted in fours on a big block chip,
         0x3F, 0x3E, 0x3D, 0x3C down a block. A blob that would reach the block kept for
@@ -181,7 +181,7 @@ class Filesystem:
         placed, table_at = {}, start
         for index, name in enumerate(sorted(blobs)):
             at = start + index * flash.mobile_stride
-            body, kind = blobs[name], 0x31 + "BCDE".index(name[6])
+            body, kind = blobs[name], 0x31 + "BCDEFGHIJ".index(name[6])
             if at + len(body) > (flash.last_block - 1) * BLOCK:
                 logger.error("adding %s will exceed available flash space! Skipped!",
                              name)
