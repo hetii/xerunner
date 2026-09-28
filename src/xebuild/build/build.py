@@ -712,8 +712,8 @@ class Build:
         "Adding 0x200 bytes blmod.bin data to CBB...Done!", measured on glitch, glitch2
         and glitch2m, CB_B 0x7800 becoming 0x7A00. CB_B may not grow past 0xC000 and
         CD past 0x10000; what would is cut off the end of the file with a warning,
-        measured with 0x6000 bytes. A retail image patches no stage and does not read
-        the file at all, measured; a JTAG one is not measured and patches none either.
+        measured with 0x6000 bytes. A retail image and a JTAG one patch no stage and do
+        not read the file at all, both measured.
         """
         body = bytearray(self.release.bootloader(listed))
         which = self._patch_set_for(listed.kind, index)
