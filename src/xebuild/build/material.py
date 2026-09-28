@@ -11,6 +11,8 @@ release's:
     nanddump.bin                the console's own flash
     smc.bin  smc_config.bin     an SMC and a settings block to use instead of the dump's
     kv.bin  fcrt.bin            likewise a keyvault and an FCRT
+    fuses.bin                   the last three fuse lines, JTAG and glitch2m
+    trinity, trinity.txt, ...   the console, when `-c` names none
     Mobile*.dat                 settings blobs, B to J
     Statistics.settings         the dashboard's counters, instead of the dump's
     Manufacturing.data          the factory's block, instead of the dump's
@@ -175,6 +177,25 @@ class Material:
                 logger.info("%s found, adding from file", name)
                 out[name] = body
         return out
+
+    def console_named(self) -> str | None:
+        """The console a file here is named after, when `-c` names none.
+
+        What is in the file does not count, only that it is there, with `.txt` or
+        without and in any case: the original looks for these twenty names in this
+        order and takes the first it finds (0x423830) -- "Using trinity ctype (perbox
+        file)" -- over an `options.ini`'s `type`, and `-c` over both. Each is taken as
+        `-c` would take it; measured on the original, the same image under the same
+        name for all twenty, the four winchester names refused alike.
+        """
+        for name in ("xenon", "zephyr", "falcon", "jasper", "jasperbc", "jaspersb",
+                     "jasperbb", "jasper256", "jasper512", "trinity", "trinitybb",
+                     "trinitybigffs", "corona", "coronabb", "coronabigffs", "corona4g",
+                     "winchester", "winchester4g", "winchesterbb", "winchesterbigffs"):
+            if self._beside(name) or self._beside(name + ".txt"):
+                logger.info("Using %s ctype (perbox file)", name)
+                return name
+        return None
 
     def xell(self, name: str) -> bytes | None:
         """One loader by name, since which one is a build's choice rather than this

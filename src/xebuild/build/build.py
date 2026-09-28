@@ -568,11 +568,20 @@ class Build:
         `devkit` gives a development kernel's instead, type 0 and no allow bits: a JTAG
         chain that ends in 1838's `SE_1838.bin` is "re-encoded" after its CB and the
         fuses the original then prints and writes are those -- measured.
+
+        A `fuses.bin` of exactly 0x60 bytes handed in gives the last three lines, which
+        nothing computes; any other length is passed over for the original's own 0x60
+        (0x42A4D9, at 0x44A700), whose last three are zeros. Measured on JTAG and
+        glitch2m with 0x20, 0x60 and 0x100 bytes.
         """
         if not self.cpu_key:
             raise ValueError("fuses carry the CPU key, and none was given")
         word = 0 if devkit else fuses.cb_word(self.release.bootloader(listed))
-        return fuses.virtual(word, self.cpu_key, self.ldv)
+        out = fuses.virtual(word, self.cpu_key, self.ldv)
+        given = self.material.bytes_in("fuses.bin")
+        if given is not None and len(given) == 0x60:
+            out = out[:0x48] + given[0x48:]
+        return out
 
     def chain(self, which: int = 0) -> bytes:
         """The bootloader region: the release's stages, patched, bound and sealed.
