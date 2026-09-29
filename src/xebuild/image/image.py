@@ -227,7 +227,12 @@ class Image:
         the filesystem table included, and 1 is what is reported here -- measured on an
         image it built and then read back.
         """
-        one = Anchor.chosen(bytes(self.flat))
+        try:
+            one = Anchor.chosen(bytes(self.flat))
+        except ValueError:
+            # Neither anchor parses, so nothing is named: the original says "anchor
+            # block at 0x2fe8000 is invalid" of both and builds on -- measured.
+            return {}
         out = {}
         for kind, (block, length) in one.blobs.items():
             out[_named(kind)] = _found(block * BLOCK, length, 1)
@@ -268,8 +273,15 @@ class Image:
 
     @property
     def directory(self) -> Directory:
-        """The filesystem's table, out of the live copy of it."""
-        found = self.blobs["fsroot"]
+        """The filesystem's table, out of the live copy of it.
+
+        A flash where no table can be found names no files: the original says "ERROR!
+        Could not find fsroot!" and builds on without anything from it -- measured
+        with every table page of a dump erased, and with both of an eMMC's anchors.
+        """
+        found = self.blobs.get("fsroot")
+        if found is None:
+            return Directory(b"", self.flash.blocks)
         block = self.flat[found["offset"] : found["offset"] + found["length"]]
         return Directory(block, self.flash.blocks)
 

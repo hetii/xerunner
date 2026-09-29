@@ -1015,13 +1015,18 @@ class Build:
 
     @property
     def _console_statistics(self) -> bytes | None:
-        """The console's Statistics block, or None with no dump."""
-        return self.dump.statistics if self.dump is not None else None
+        """The console's Statistics block, or None with no dump or one whose table was
+        not found -- see `Dump.fsroot_found`."""
+        if self.dump is None or not self.dump.fsroot_found:
+            return None
+        return self.dump.statistics
 
     @property
     def _console_manufacturing(self) -> bytes | None:
-        """The console's Manufacturing block, or None where it keeps none."""
-        if self.dump is None or not self.dump.manufacturing_written:
+        """The console's Manufacturing block, or None where it keeps none or its table
+        was not found -- see `Dump.fsroot_found`."""
+        if (self.dump is None or not self.dump.fsroot_found
+                or not self.dump.manufacturing_written):
             return None
         return self.dump.manufacturing
 
@@ -1523,11 +1528,12 @@ class Build:
         parse them at all (0x417C62) -- and what the material holds still goes in,
         measured."""
         out = dict(self.material.mobiles)
-        if self.dump is not None and not self.config.nomobile:
-            for name in self.dump.image.blobs:
+        dump = self.dump
+        if dump is not None and not self.config.nomobile and dump.fsroot_found:
+            for name in dump.image.blobs:
                 if name.startswith("Mobile") and name not in out:
                     logger.warning("%s found, adding from previous parse", name)
-                    out[name] = self.dump.image.blob(name)
+                    out[name] = dump.image.blob(name)
         return out
 
     def _settings(self) -> list:
