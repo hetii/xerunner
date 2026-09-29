@@ -98,6 +98,7 @@ def run_client(config, port: int = PORT) -> None:
         elif config.reboot:
             logger.info("sending reboot command")
             server.reboot()
+    logger.info("disconnecting from server...OK")
 
 
 def _save(path: str, body: bytes, what: str) -> None:

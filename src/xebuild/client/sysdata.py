@@ -8,6 +8,7 @@ order, with the same bytes.
 """
 
 import os
+import time
 import hashlib
 import logging
 import contextlib
@@ -124,6 +125,7 @@ def send_avatars(server, where: str, kernel: int) -> None:
     manifest last, and the partition unmounted -- which the original also sends after
     a format, a mount, a directory or a file that failed, and so does this.
     """
+    started = time.monotonic()
     logger.info("loading avatar data...")
     try:
         manifest, directories, items = avatar_items(where, kernel)
@@ -162,6 +164,7 @@ def send_avatars(server, where: str, kernel: int) -> None:
         raise ValueError("aborting sending avatar data, failed to send %s"
                          % sending) from None
     logger.info("success! Avatar data is successfully sent to the console!")
+    logger.info("Completed in %.0fs", time.monotonic() - started)
     server.unmount("SSEP")
     logger.debug("unmounting SSEP:...success!")
 
