@@ -81,8 +81,10 @@ class SmcConfig:
         whole block of the raw flash, 0x4200 bytes, from where it starts, and the
         original refuses less: "extracting config did not work, not enough data to
         copy!" -- measured with a plain block whose 0x20C was set, and with a raw
-        0x1080. It copies eight pages into a buffer of 0x400 and uses the first 0x400;
-        this takes those.
+        0x1080. Given a whole raw block it copies eight pages, 0x1000 bytes (0x4298C4),
+        into a buffer of 0x400 (0x429803), and dies after "extracting config raw" --
+        measured with a config_raw.bin of the dump's own block. This takes the 0x400 it
+        meant to: a known divergence.
 
         A plain block with less than 0x400 left behind it is refused the same way. The
         original skips the copy there (0x429A26) and goes on with a buffer nothing was
