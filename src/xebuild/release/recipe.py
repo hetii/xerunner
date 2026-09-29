@@ -223,8 +223,17 @@ class Recipe:
 
     @property
     def firmware(self) -> tuple:
-        """The files that go into the image's filesystem."""
-        return self._listed("flashfs")
+        """The files that go into the image's filesystem.
+
+        A name of more than 21 characters stops the build as the list is read, whether
+        or not the file is there: "file in [flashfs] has greater than 21 chars in it's
+        name!" (0x40A965), measured with 22 and with 34.
+        """
+        found = self._listed("flashfs")
+        if any(len(one.name) > 21 for one in found):
+            raise ValueError("file in [flashfs] has greater than 21 chars in it's "
+                             "name!")
+        return found
 
     @property
     def security(self) -> tuple:
@@ -237,12 +246,27 @@ class Recipe:
 
     @property
     def raw_patches(self) -> tuple:
-        """Patches applied to the image itself, where a release names any.
+        """Patches applied to the image itself, where a release names any, as (name,
+        offset) pairs.
 
-        None of the nine releases on this bench does, so nothing here has ever been
-        exercised against a real one; it is read because the original reads it.
+        None of the nine releases on this bench does; what is read here was measured
+        on made-up lists. The offset is decimal unless it starts `0x`, as `-8`'s is:
+        `rp.bin,100000` goes to 0x186A0. The original takes `f0000` as 0 and writes
+        over the flash header; that is refused here, as `-8` refuses it.
         """
-        return self._listed("rawpatch")
+        out = []
+        for line in self.sections.get("rawpatch", ()):
+            name, sign, at = line.partition(",")
+            at = at.strip()
+            if not sign or not at:
+                raise ValueError("an entry in [rawpatch] is missing offset info!")
+            try:
+                out.append((name.strip(), int(at, 16) if at[:2].lower() == "0x"
+                            else int(at, 10)))
+            except ValueError:
+                raise ValueError("[rawpatch] %s states %r where an offset should be"
+                                 % (name.strip(), at)) from None
+        return tuple(out)
 
     def __repr__(self) -> str:
         return "Recipe(%s, %d sections)" % (self.version or "no version",

@@ -133,6 +133,25 @@ class AReleaseSFileList(unittest.TestCase):
         self.assertEqual(Release(where).recipe(kind).version, "17559")
 
 
+class WhatAListSaysBeyondItsFiles(unittest.TestCase):
+    """Measured on made-up lists against the original."""
+
+    def test_a_raw_patch_offset_is_decimal_unless_it_starts_0x(self):
+        found = Recipe("[rawpatch]\na.bin,100000\nb.bin,0x100000\nc.bin,0X10\n")
+        self.assertEqual(found.raw_patches,
+                         (("a.bin", 100000), ("b.bin", 0x100000), ("c.bin", 0x10)))
+
+    def test_a_raw_patch_with_no_offset_or_none_that_reads_is_refused(self):
+        for line in ("a.bin", "a.bin,", "a.bin,f0000"):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                Recipe("[rawpatch]\n%s\n" % line).raw_patches  # noqa: B018
+
+    def test_a_firmware_name_past_21_characters_is_refused(self):
+        self.assertEqual(len(Recipe("[flashfs]\n%s.xex,0\n" % ("b" * 17)).firmware), 1)
+        with self.assertRaisesRegex(ValueError, "greater than 21 chars"):
+            Recipe("[flashfs]\n%s.xex,0\n" % ("c" * 18)).firmware  # noqa: B018
+
+
 class TheFormAChecksumCovers(unittest.TestCase):
     """The release's own readme states this, and it is quoted at the site."""
 
