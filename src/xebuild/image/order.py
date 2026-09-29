@@ -14,7 +14,9 @@ A block is one to replace when either of two things is true. Its mark byte says 
 carries the code its data asks for, which is a block on the way out: one flipped byte
 with its code left alone gives "ECD error at block 0x2a (raw offset 0xad400), block will
 be remapped". The second test is what `noecdremap` turns off and the whole of it is what
-`noremap` turns off -- "Discarding remap data as NOREMAP was specified!".
+`noremap` turns off -- "Discarding remap data as NOREMAP was specified!". A block the
+pool already stands in for is moved as well, marked or not. A block marked bad is never
+read itself, under either option: where nothing stands in for it, it is left erased.
 
 What replaces it is a block carrying its number, and where that block may be is not
 anywhere: a block at 0x387 holding block 0x2a's data and number was turned away as
