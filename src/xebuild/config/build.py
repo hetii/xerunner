@@ -15,6 +15,7 @@ twenty-one. The thirty-one `-o` settings come from a third table and are declare
 
 import logging
 
+from ..chain import sealing
 from .. import boards, imagetypes
 from .options import OptionsConfig
 from .release import ReleaseConfig
@@ -41,6 +42,26 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
         self.raw_patches = ()
         self.no_random = False
         self.out = None
+        # A key the command line does not give comes from its file before the ini, as
+        # the original's loader takes it (0x4193F0): cpukey.txt in the per build
+        # directory, 1blkey.txt where the tool runs, its name built with no directory
+        # (0x419A0A). A file whose key fails its check is said and passed over.
+        # Measured with the file and the ini holding different keys, each way round.
+        for field, label, where, name in (
+                ("cpu_key", "CPU key", settings.get("per_build") or "data",
+                 "cpukey.txt"),
+                ("one_bl_key", "1BL key", ".", "1blkey.txt")):
+            found = None if settings.get(field) is not None else \
+                self.key_in_file(where, name)
+            if found is None:
+                continue
+            try:
+                setattr(self, field, found[1])
+            except ValueError as why:
+                logger.error("%s: %s", found[0], why)
+            else:
+                logger.warning("%s read from %s", label, found[0])
+                settings[field] = found[1]
         if ini is not None:
             logger.debug("read %s", ini)
             found = self.settings_in_ini(ini)
@@ -167,9 +188,18 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
 
     @one_bl_key.setter
     def one_bl_key(self, key):
-        self["one_bl_key"] = (
-            None if key is None else self.check_hex("one_bl_key", key, 16)
-        )
+        """Sixteen bytes that sum as the 1BL key does: the original adds them up and
+        stops a build whose sum is not 0x983 -- "1BL key 0x0011... does not appear to
+        be correct!" -- measured, and it checks a key from each place it takes one
+        (0x41B740)."""
+        if key is None:
+            self["one_bl_key"] = None
+            return
+        given = self.check_hex("one_bl_key", key, 16)
+        if sealing.key_sum(given) != sealing.key_sum(sealing.ONE_BL_KEY):
+            raise ValueError("1BL key 0x%s does not appear to be correct!"
+                             % given.hex().upper())
+        self["one_bl_key"] = given
 
     @property
     def per_build(self) -> str | None:

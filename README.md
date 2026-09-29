@@ -27,6 +27,8 @@ directory is the one `-d` names, `data/` when it is not given; the dump is the
 | `MobileB.dat` to `MobileJ.dat` | the per build directory; the dump (not under `nomobile`) |
 | `Statistics.settings`, `Manufacturing.data` | the per build directory; the dump |
 | `fuses.bin` (JTAG, glitch2m) | the per build directory, taken only at 0x60 bytes; the lines built into the program |
+| the CPU key | `-p`; `cpukey.txt` in the per build directory; `cpukey` in `options.ini`. A key file that fails its check is said and passed over |
+| the 1BL key | `-b`; `1blkey.txt` in the directory the tool runs in (in ini mode its only source); `1blkey` in `options.ini`. A key file that fails its check is said and passed over |
 | the console | `-c`; a file named after it in the per build directory (`trinity`, `trinity.txt`, ...); `type` in `options.ini` |
 | each option | the command line; `options.ini` in the per build directory |
 

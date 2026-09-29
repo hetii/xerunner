@@ -39,10 +39,6 @@ class ConsoleMaterial(Material):
         """Nothing is handed over beside the build."""
         return None
 
-    def key_in_file(self, _name: str) -> None:
-        """The keys come from the console's info, not a file."""
-        return None
-
     @property
     def ini(self) -> None:
         return None

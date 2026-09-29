@@ -154,38 +154,6 @@ class Build:
         return self._raw or None
 
     @property
-    def cpu_key(self) -> bytes | None:
-        """This console's CPU key, from wherever the original looks first.
-
-        The command line wins and the file is then not even opened -- "CPU key
-        overridden from command line, not looking for cpukey.txt" -- and `config` is
-        where the command line and the ini have already been settled against each
-        other.
-        """
-        if self.config.cpu_key is not None:
-            return self.config.cpu_key
-        return self.material.key_in_file("cpukey.txt")
-
-    @property
-    def one_bl_key(self) -> bytes | None:
-        """The 1BL key, the same way, and refused where its sum is not the 1BL key's.
-
-        The original adds its bytes up and stops a build whose sum is not 0x983 -- "1BL
-        key 0x0011... does not appear to be correct!" -- measured. That is the whole of
-        its test, and sealing here takes the one key there is, `sealing.ONE_BL_KEY`:
-        a different key with the same sum would seal differently in the original, and
-        such a key is not one any console has.
-        """
-        key = self.config.one_bl_key
-        if key is None:
-            key = self.material.key_in_file("1blkey.txt")
-        if key is not None and sealing.key_sum(key) != sealing.key_sum(
-                sealing.ONE_BL_KEY):
-            raise ValueError("1BL key 0x%s does not appear to be correct!"
-                             % key.hex().upper())
-        return key
-
-    @property
     def _walk(self) -> tuple:
         """The dump's `Chain.nonce_walk`, read once; nothing read with no dump."""
         if self._walked is None:
@@ -246,7 +214,7 @@ class Build:
         """Whether the CPU key is all zeros, which the original builds as an image for
         no console in particular. The lockdown value is then 0 whatever else says --
         see `ldv` -- and a chain with a CB_B is zero-paired -- see `zero_paired`."""
-        return self.cpu_key == bytes(16)
+        return self.config.cpu_key == bytes(16)
 
     @property
     def zero_paired(self) -> bool:
@@ -395,11 +363,12 @@ class Build:
         """
         if (self._handed_keyvault is None and self.dump is not None
                 and not self.drawing and not self._dvdkey_goes_in
-                and (not self.cpu_key or self._decrypt_console_keyvault() is not None)):
+                and (not self.config.cpu_key
+                     or self._decrypt_console_keyvault() is not None)):
             logger.warning("reading %s failed, using kv.bin from nand dump",
                            os.path.join(self.material.where, "kv.bin"))
             return self.dump.sealed_keyvault
-        return self.plain_keyvault().sealed(self.cpu_key)
+        return self.plain_keyvault().sealed(self.config.cpu_key)
 
     @property
     def _handed_keyvault(self) -> bytes | None:
@@ -419,7 +388,7 @@ class Build:
         sealed = self._console_keyvault
         if sealed is None:
             return None
-        own = Keyvault.opened_if_own(sealed, self.cpu_key)
+        own = Keyvault.opened_if_own(sealed, self.config.cpu_key)
         if own is None:
             logger.warning("keyvault decrypt failed, discarding")
         return own
@@ -445,13 +414,13 @@ class Build:
         No `kv.bin` and no dump is what the original refuses as "critical bootloader
         files are missing".
         """
-        if not self.cpu_key:
+        if not self.config.cpu_key:
             raise ValueError("a keyvault is sealed under the CPU key, and none was "
                              "given")
         own = self._decrypt_console_keyvault()
         given = self._handed_keyvault
         if given is not None:
-            vault = Keyvault.handed_in(given, self.cpu_key)
+            vault = Keyvault.handed_in(given, self.config.cpu_key)
         elif own is not None:
             logger.warning("reading %s failed, using kv.bin from nand dump",
                            os.path.join(self.material.where, "kv.bin"))
@@ -580,10 +549,10 @@ class Build:
         (0x42A4D9, at 0x44A700), whose last three are zeros. Measured on JTAG and
         glitch2m with 0x20, 0x60 and 0x100 bytes.
         """
-        if not self.cpu_key:
+        if not self.config.cpu_key:
             raise ValueError("fuses carry the CPU key, and none was given")
         word = 0 if devkit else fuses.cb_word(self.release.bootloader(listed))
-        out = fuses.virtual(word, self.cpu_key, self.ldv)
+        out = fuses.virtual(word, self.config.cpu_key, self.ldv)
         given = self.material.bytes_in("fuses.bin")
         if given is not None and len(given) == 0x60:
             logger.info("fuses.bin found, adding from file")
@@ -642,7 +611,8 @@ class Build:
         stages = [Stage(out, at) for at in offsets]
         for stage, nonce in zip(stages, self._nonces(stages), strict=True):
             stage.nonce = nonce
-        keys = sealing.keys(stages, self.cpu_key or b"", self._second_pass_at(stages))
+        keys = sealing.keys(stages, self.config.cpu_key or b"",
+                            self._second_pass_at(stages))
         binds = self._wears_console(stages, which)
         if binds >= 0:
             # Under the manufacturing regime the original computes no binding, and the
@@ -650,7 +620,7 @@ class Build:
             # would be. The switch is a bit in CB_A rather than the image type or the
             # file's name, which `Stage.manufacturing` reads.
             bound_to = None if stages[0].manufacturing or self.zero_paired \
-                else self.cpu_key
+                else self.config.cpu_key
             at = offsets[binds] + STAGE_HEADER
             out[at:at + Fields.LENGTH * 2] = Fields.write(
                 self.pairing, bound_to, keys[binds],
@@ -859,7 +829,7 @@ class Build:
 
         Nothing else. CG's plaintext is the release's, byte for byte.
         """
-        if not self.cpu_key:
+        if not self.config.cpu_key:
             raise ValueError("a CF binds itself to the console's CPU key, and none was "
                              "given")
         pairs = self._update_pairs()
@@ -896,7 +866,7 @@ class Build:
             for chain in (0, 1) if self._chain_files(chain)
         )
         update.with_console(cf, which, self.pairing if binds else bytes(3), self.ldv,
-                            self.cpu_key)
+                            self.config.cpu_key)
         return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN)
 
     def _update_pairs(self) -> list:
@@ -1155,19 +1125,20 @@ class Build:
 
         All of it measured against the original with each option and with both.
         """
-        if not self.cpu_key:
+        if not self.config.cpu_key:
             raise ValueError("the security files are sealed for a console's CPU key, "
                              "and none was given")
         config = self.config
         own = None
         if not config.nosecurity:
             own = self._console_file(name)
-            if own is not None and not security.verifies(name, own, self.cpu_key):
+            if own is not None and not security.verifies(name, own,
+                                                         self.config.cpu_key):
                 logger.warning("%s verify failed! Discarding data.", name)
                 own = None
         content, clear, made_clean = self.material.bytes_in(name), False, False
         if content is not None:
-            verdict, clear = security.taken_beside(name, content, self.cpu_key)
+            verdict, clear = security.taken_beside(name, content, self.config.cpu_key)
             if verdict == "as is":
                 logger.error("%s appears to be crypted with the wrong key or damaged",
                              name)
@@ -1192,7 +1163,7 @@ class Build:
             elif name in ("crl.bin", "dae.bin", "fcrt.bin"):
                 logger.warning("%s not found in %s, SUPD or the dump; left out of the "
                                "image", name, self.material.where)
-        cpu, ldv = self.cpu_key, self.ldv
+        cpu, ldv = self.config.cpu_key, self.ldv
         if name == "crl.bin":
             if content is None:
                 return None
@@ -1272,7 +1243,6 @@ class Build:
         # Refused here, before anything is laid, as the original does.
         if self.console is None:
             raise ValueError("you need to specify console type!")
-        _ = self.one_bl_key
         out = Image.blank(self.flash, self.bigffs)
         where, spills = self._system_area(out)
         placed, table_at = self._filesystem(out, where, spills, when)

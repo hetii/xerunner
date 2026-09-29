@@ -6,7 +6,6 @@ keyvault, its SMC, its settings block. The original reads nine kinds of file fro
 and nothing from anywhere else -- the base directory is not searched and neither is the
 release's:
 
-    cpukey.txt  1blkey.txt      the two keys, as text
     options.ini                 settings, which `config.BuildConfig` reads, not this
     nanddump.bin                the console's own flash
     smc.bin  smc_config.bin     an SMC and a settings block to use instead of the dump's
@@ -22,15 +21,12 @@ Every one of them is optional. What a build does when one is missing is the buil
 business: mostly it falls back to the dump, and the original says so -- "reading
 data/kv.bin failed, using kv.bin from nand dump".
 
-**This is the only thing in the package that touches a disk.** Everything above it is
-handed bytes, which is what makes the rest testable without a directory to point at.
+**Apart from the key files and the ini, which `config` reads, this is the only thing
+in the package that touches this directory.** Everything above it is handed bytes,
+which is what makes the rest testable without a directory to point at.
 
-The two keys have four sources in the order the original states, and only the last is a
-refusal: the command line, after which it does not even open the file ("CPU key
-overridden from command line, not looking for cpukey.txt"), then the file here, then
-`options.ini`, then "you need to specify CPU key!". This reads the file; the command
-line and the ini are `config`'s, so putting them in order is the caller's --
-`key_in_file` is the middle step and says plainly when there is nothing in it.
+The keys are settings, not the console's material: `config.BuildConfig` reads
+cpukey.txt from here, and 1blkey.txt from where the tool runs, when it settles them.
 """
 
 import os
@@ -81,40 +77,6 @@ class Material:
                 logger.warning("'%s' is a 0 byte file, loading skipped!", path)
         self._files[name] = body
         return body
-
-    def key_in_file(self, name: str) -> bytes | None:
-        """A key from `cpukey.txt` or `1blkey.txt`, or None when there is none to have.
-
-        Sixteen bytes written as hexadecimal, and whitespace around them is ignored: the
-        files on this bench end in a newline. Anything else is a refusal rather than a
-        shrug -- a key read wrong is a key that seals an image nobody can open.
-        """
-        if ("key", name) in self._files:
-            return self._files[("key", name)]
-        path = beside(self.where, name)
-        if path is None:
-            self._files[("key", name)] = None
-            return None
-        logger.debug("loading %s from %s", name, path)
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            said = handle.read().split()
-        if not said:
-            raise ValueError("%s is empty" % path)
-        try:
-            key = bytes.fromhex(said[0])
-        except ValueError:
-            raise ValueError(
-                "%s holds %r where a key should be" % (path, said[0])
-            ) from None
-        if len(key) != 16:
-            raise ValueError("%s holds %d bytes, and a key is 16" % (path, len(key)))
-        # Kept, since a build asks for its key at every step that seals something --
-        # and kept as the sixteen bytes read out of the file, not the file's text:
-        # the one thing `_files` holds that is not a file's body as it is on disk.
-        self._files[("key", name)] = key
-        logger.warning("%s read from %s",
-                       "CPU key" if name == "cpukey.txt" else "1BL key", path)
-        return key
 
     @property
     def ini(self) -> str | None:

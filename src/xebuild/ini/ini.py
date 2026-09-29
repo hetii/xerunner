@@ -6,7 +6,6 @@ import binascii
 
 from ..files import beside
 from ..chain import sealing
-from ..build import Material
 from ..chain.stage import Stage
 from ..release.recipe import canonical
 from ..release.container import Container, intact
@@ -82,7 +81,7 @@ def write_su_ini(config) -> str:
     does them; a key that passes is the one every console has, and the CF opens under
     no other.
     """
-    key = Material(".").key_in_file("1blkey.txt")
+    key = config.one_bl_key
     if key is not None and sealing.key_sum(key) != sealing.key_sum(sealing.ONE_BL_KEY):
         raise ValueError("1BL key 0x%s does not appear to be correct! 1blkey.txt not "
                          "found or invalid, cannot proceed." % key.hex().upper())

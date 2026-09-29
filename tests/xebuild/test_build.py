@@ -111,34 +111,66 @@ class WhatTheDirectorySupplies(unittest.TestCase):
 
 
 class TheTwoKeys(unittest.TestCase):
+    """Where a key comes from when the command line does not give it, as the
+    original's loader takes it (0x4193F0): its file, then the ini. Measured on the
+    original with the file and the ini holding different keys, each way round."""
 
     KEY = "7E5068DBB3FD03F04E367028D475EEC2"
+    OTHER = "00112233445566778899AABBCCDDEEFF"
+    ONE_BL = "DD88AD0C9ED669E7B56794FB68563EFA"
 
-    def test_a_key_reads_out_of_its_file(self):
-        one = Material(a_directory(self, {"cpukey.txt": self.KEY + "\n"}))
-        self.assertEqual(one.key_in_file("cpukey.txt"), bytes.fromhex(self.KEY))
+    def settled(self, files, **settings):
+        where = a_directory(self, files)
+        ini = os.path.join(where, "options.ini")
+        return BuildConfig(ini=ini if os.path.isfile(ini) else None, per_build=where,
+                           **settings)
+
+    def test_the_file_beats_the_ini(self):
+        made = self.settled({"cpukey.txt": self.KEY + "\n",
+                             "options.ini": "cpukey = %s\n" % self.OTHER})
+        self.assertEqual(made.cpu_key.hex().upper(), self.KEY)
+
+    def test_the_ini_is_taken_with_no_file(self):
+        made = self.settled({"options.ini": "cpukey = %s\n" % self.KEY})
+        self.assertEqual(made.cpu_key.hex().upper(), self.KEY)
+
+    def test_the_command_line_beats_both(self):
+        made = self.settled({"cpukey.txt": self.OTHER}, cpu_key=self.KEY)
+        self.assertEqual(made.cpu_key.hex().upper(), self.KEY)
 
     def test_whitespace_around_it_is_ignored(self):
         """The files on this bench end in a newline and some have spaces."""
-        one = Material(a_directory(self, {"cpukey.txt": "  %s  \n\n" % self.KEY}))
-        self.assertEqual(one.key_in_file("cpukey.txt"), bytes.fromhex(self.KEY))
+        made = self.settled({"cpukey.txt": "  %s  \n\n" % self.KEY})
+        self.assertEqual(made.cpu_key.hex().upper(), self.KEY)
 
-    def test_no_file_is_nothing_rather_than_an_error(self):
-        """Because the command line and the ini are the other two sources."""
-        self.assertIsNone(Material(a_directory(self)).key_in_file("1blkey.txt"))
+    def test_no_file_and_no_ini_is_no_key(self):
+        self.assertIsNone(self.settled({}).cpu_key)
 
-    def test_an_empty_file_is_refused(self):
-        one = Material(a_directory(self, {"cpukey.txt": "\n"}))
-        with self.assertRaises(ValueError):
-            one.key_in_file("cpukey.txt")
-
-    def test_something_that_is_not_a_key_is_refused(self):
-        """A key read wrong seals an image nobody can open, so it is not shrugged at."""
-        for said in ("nonsense", self.KEY[:-1], self.KEY + "00"):
+    def test_a_file_that_fails_the_check_is_said_and_passed_over(self):
+        """The ini's is taken instead, as the original takes it."""
+        for said in ("", "nonsense", self.KEY[:-1], self.KEY + "00"):
             with self.subTest(said=said):
-                one = Material(a_directory(self, {"cpukey.txt": said}))
-                with self.assertRaises(ValueError):
-                    one.key_in_file("cpukey.txt")
+                with self.assertLogs("xebuild", "ERROR"):
+                    made = self.settled({"cpukey.txt": said,
+                                         "options.ini": "cpukey = %s\n" % self.KEY})
+                self.assertEqual(made.cpu_key.hex().upper(), self.KEY)
+
+    def test_an_ini_key_that_fails_the_check_stops_the_build(self):
+        with self.assertRaises(ValueError):
+            self.settled({"options.ini": "cpukey = nonsense\n"})
+
+    def test_an_ini_key_that_fails_is_not_read_when_the_file_gives_one(self):
+        made = self.settled({"cpukey.txt": self.KEY,
+                             "options.ini": "cpukey = nonsense\n"})
+        self.assertEqual(made.cpu_key.hex().upper(), self.KEY)
+
+    def test_1blkey_txt_is_looked_for_where_the_tool_runs(self):
+        """Not in the per build directory: one there with the wrong sum is not read."""
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(a_directory(self, {"1blkey.txt": self.ONE_BL}))
+        made = self.settled({"1blkey.txt": self.OTHER})
+        self.assertEqual(made.one_bl_key.hex().upper(), self.ONE_BL)
 
 
 class WhichBlockEachFileGets(unittest.TestCase):
@@ -562,7 +594,7 @@ class WhatTheSlotForPatchesHolds(unittest.TestCase):
         cbb[0x3B0:0x3B4] = (0x03010001).to_bytes(4, "big")
         one.release.bodies["cbb_1.bin"] = bytes(cbb)
         slot = one.patch_slot()
-        key = one.cpu_key
+        key = one.config.cpu_key
         self.assertEqual(slot[0x00:0x08], bytes.fromhex("C0FFFFFFFFFFFFFF"))
         self.assertEqual(slot[0x08:0x10], bytes.fromhex("0F0F0F0F0F0FF0F0"))
         self.assertEqual(slot[0x10:0x18], bytes.fromhex("F000000000000000"))
@@ -791,7 +823,7 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
             stage = Stage(out, at)
             stages.append(stage)
             at += stage.length
-        keys = sealing.keys(stages, one.cpu_key, one._second_pass_at(stages))
+        keys = sealing.keys(stages, one.config.cpu_key, one._second_pass_at(stages))
         return stages, [rc4(key, stage.body)
                         for stage, key in zip(stages, keys, strict=True)]
 
@@ -994,9 +1026,9 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
 
     def test_a_1bl_key_that_does_not_sum_is_refused(self):
         with self.assertRaises(ValueError):
-            _ = a_build(self, one_bl_key="00112233445566778899AABBCCDDEEFF").one_bl_key
+            BuildConfig(one_bl_key="00112233445566778899AABBCCDDEEFF")
         good = "DD88AD0C9ED669E7B56794FB68563EFA"
-        self.assertEqual(a_build(self, one_bl_key=good).one_bl_key.hex().upper(), good)
+        self.assertEqual(BuildConfig(one_bl_key=good).one_bl_key.hex().upper(), good)
 
     def test_a_dump_of_no_length_a_flash_has_is_ignored_not_refused(self):
         """"is not a correct raw (with ecc) dump size (0x10c2000 bytes), ignoring"."""
