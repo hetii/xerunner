@@ -1730,7 +1730,7 @@ class Build:
         * `boot_options` is 1 for `cygnos` or `demon`, which write the same bit; on a
           JTAG image 2 for `nodvd` and otherwise 4, unless `olddvd` asks for the older
           way
-        * `dualboot_reason` is `dualboot`, on a JTAG image only, zero when it is the
+        * `dualboot_reason` is `dualboot`, on a JTAG image only, zero when it is either
           button XeLL starts on
 
         A retail image carries XeLL on no button at all and the word is zero, which the
@@ -1755,7 +1755,9 @@ class Build:
         head.boot_options = options
         if switch and switch == reason:
             logger.info("dualboot setting ignored!")
-        head.dualboot_reason = 0 if switch == reason else switch
+        # The header writer (0x42B2B0) also drops it when it is the second XeLL button,
+        # silently: only the parse (0x426769) looks at the first and says so.
+        head.dualboot_reason = 0 if switch in (reason, second) else switch
 
     def auto_name(self) -> str:
         """The name the original gives an image when it is given none: the file list's
