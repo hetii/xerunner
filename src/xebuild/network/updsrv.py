@@ -69,16 +69,17 @@ class Server:
         self.hung_up = False
 
     def __enter__(self) -> Server:
+        logger.info("attempting forced connection to %s.", self.host)
         try:
             self.sock = socket.create_connection((self.host, self.port), self.timeout)
         except OSError as why:
             raise ServerError("could not connect to %s: %s"
                               % (self.host, why)) from None
         self.sock.settimeout(self.timeout)
-        logger.info("attempting forced connection to %s...success!", self.host)
         return self
 
     def __exit__(self, *_exc) -> None:
+        logger.info("disconnecting from server.")
         try:
             if self.sock is not None and not self.hung_up:
                 self.command("QUIT")

@@ -139,12 +139,12 @@ def send_avatars(server, where: str, kernel: int) -> None:
     except ServerError:
         _quietly_unmount(server, "SSEP")
         raise ValueError("unable to format sysex partition!") from None
+    logger.debug("mounting \\SEP to SSEP:")
     try:
         server.mount("SSEP", "\\SEP")
     except ServerError:
         _quietly_unmount(server, "SSEP")
         raise ValueError("unable to mount sysex partition!") from None
-    logger.debug("mounting \\SEP to SSEP:...success!")
     sending = None
     try:
         for sending in directories:
@@ -165,8 +165,8 @@ def send_avatars(server, where: str, kernel: int) -> None:
                          % sending) from None
     logger.info("success! Avatar data is successfully sent to the console!")
     logger.info("Completed in %.0fs", time.monotonic() - started)
+    logger.debug("unmounting SSEP:")
     server.unmount("SSEP")
-    logger.debug("unmounting SSEP:...success!")
 
 
 def send_compatibility(server, where: str) -> None:
