@@ -366,11 +366,21 @@ class WhatIsInAnImage(unittest.TestCase):
         self.assertEqual(image.read("one.bin"), body)
 
     def test_an_emmc_image_with_no_sound_anchor_names_no_filesystem(self):
-        """It has no spare to scan, so an anchor is the only thing that could say."""
+        """It has no spare to scan, so an anchor is the only thing that could say; with
+        neither sound it names nothing, and the original builds on without it."""
         board, _ = for_name("corona4g")
         image = Image(b"\x00" * 0x8000, board.flash)
+        self.assertEqual(image.blobs, {})
+        self.assertEqual(image.directory.entries, ())
+
+    def test_a_nand_with_no_table_found_names_no_files(self):
+        """Measured with every table page of a dump erased: "ERROR! Could not find
+        fsroot!", and the build goes on."""
+        image = Image.blank(TinyFlash())
+        self.assertNotIn("fsroot", image.blobs)
+        self.assertEqual(list(image.directory.entries), [])
         with self.assertRaises(ValueError):
-            image.blobs  # noqa: B018
+            image.read("crl.bin")
 
 
 if __name__ == "__main__":

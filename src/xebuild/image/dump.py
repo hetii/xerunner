@@ -198,6 +198,8 @@ class Dump:
             logger.warning("this is likely caused by previously using jaspersb on a "
                            "jasper type console!")
         self.image = Image(logical(raw, board.flash, remap, ecd), board.flash, bigffs)
+        if not self.fsroot_found:
+            logger.error("Could not find fsroot!")
         if not self.header.keyvault_at:
             logger.warning("KeyVault cannot be at 0x0, trying 0x4000")
         if self.header.smc_at not in (0x800, 0x1000):
@@ -272,6 +274,15 @@ class Dump:
     def smc_config_ok(self) -> bool:
         """Whether the dump holds a settings block the original would use."""
         return self.smc_config is not None
+
+    @property
+    def fsroot_found(self) -> bool:
+        """Whether the scan found the filesystem's table. The original finds the
+        mobiles, Statistics.settings and Manufacturing.data in the same scan and takes
+        none of them from a dump where the table is not found -- measured with every
+        table page erased, and on an eMMC dump with both anchors zeroed: "ERROR! Could
+        not find fsroot!", and nothing "adding from previous parse"."""
+        return "fsroot" in self.image.blobs
 
     @property
     def statistics(self) -> bytes:

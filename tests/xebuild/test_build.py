@@ -6,6 +6,7 @@ business.
 """
 
 import os
+import types
 import shutil
 import struct
 import binascii
@@ -1250,3 +1251,29 @@ class AddonsInThePatchSet(unittest.TestCase):
     def test_a_set_that_fills_the_room_exactly_is_taken(self):
         out = self.splice(b"\x11" * 0x3FFC + b"\xff" * 4, {"a": b"\x22" * 4}, ["a"])
         self.assertEqual(len(out), 0x4000 + 8)
+
+
+class ADumpWhoseTableIsNotFound(unittest.TestCase):
+    """Measured: with no fsroot the original takes no mobile, Statistics.settings or
+    Manufacturing.data from the dump -- they come out of the same scan."""
+
+    def stand(self, found: bool):
+        image = types.SimpleNamespace(blobs={"MobileB.dat": {}}, blob=lambda name: b"b")
+        dump = types.SimpleNamespace(fsroot_found=found, image=image,
+                                     statistics=b"s", manufacturing=b"m",
+                                     manufacturing_written=True)
+        material = types.SimpleNamespace(mobiles={})
+        return types.SimpleNamespace(dump=dump, material=material,
+                                     config=types.SimpleNamespace(nomobile=False))
+
+    def test_nothing_is_taken_from_it(self):
+        stand = self.stand(False)
+        self.assertEqual(Build._mobiles(stand), {})
+        self.assertIsNone(Build._console_statistics.fget(stand))
+        self.assertIsNone(Build._console_manufacturing.fget(stand))
+
+    def test_with_the_table_found_all_three_are(self):
+        stand = self.stand(True)
+        self.assertEqual(Build._mobiles(stand), {"MobileB.dat": b"b"})
+        self.assertEqual(Build._console_statistics.fget(stand), b"s")
+        self.assertEqual(Build._console_manufacturing.fget(stand), b"m")
