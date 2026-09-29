@@ -1753,10 +1753,11 @@ class Build:
         head.xell_reason = reason
         head.xell_reason2 = 0 if second == reason else second
         head.boot_options = options
-        if switch and switch == reason:
-            logger.info("dualboot setting ignored!")
         # The header writer (0x42B2B0) also drops it when it is the second XeLL button,
-        # silently: only the parse (0x426769) looks at the first and says so.
+        # but silently: only the parse (0x426769) looks at the first and says so. We say
+        # so for both -- a known divergence.
+        if switch and switch in (reason, second):
+            logger.info("dualboot setting ignored!")
         head.dualboot_reason = 0 if switch in (reason, second) else switch
 
     def auto_name(self) -> str:
