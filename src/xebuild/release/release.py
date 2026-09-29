@@ -47,11 +47,16 @@ class Release:
         return self._files[path]
 
     def recipe(self, image_type, ext: str = "") -> Recipe:
-        """The file list for an image type, which names itself."""
+        """The file list for an image type, which names itself.
+
+        One with no `[version]` label is refused, as the original refuses it: "could
+        not find label [version] in file list ini" (0x40952E), measured.
+        """
         name = image_type.file_list(ext)
-        return Recipe(
-            self._read(self.where, name).decode("utf-8", "replace")
-        )
+        found = Recipe(self._read(self.where, name).decode("utf-8", "replace"))
+        if "version" not in found.sections:
+            raise ValueError("could not find label [version] in file list ini")
+        return found
 
     def bootloader(self, listed) -> bytes:
         """One bootloader the recipe names, from wherever that release keeps it.

@@ -7,12 +7,16 @@ release directory, and it checks every bootloader the release names against the 
 the release states for it, which is a proof that needs no other tool.
 """
 
+import os
+import shutil
 import struct
 import hashlib
 import binascii
+import tempfile
 import unittest
 
 from xebuild.boards import for_name
+from xebuild.imagetypes import for_name as type_for
 from xebuild.release.recipe import Listed, canonical
 from xebuild.release import Container, Patches, Recipe, Release
 
@@ -110,6 +114,23 @@ class AFileList(unittest.TestCase):
     def test_nothing_is_read_as_a_stage_that_is_not_one(self):
         listed = Recipe("[flashfs]\ndash.xex,d2089a4c\n").firmware[0]
         self.assertEqual(listed.kind, "")
+
+
+class AReleaseSFileList(unittest.TestCase):
+    """`Release.recipe`, off a release directory made up in the test."""
+
+    def test_one_with_no_version_label_is_refused(self):
+        """Measured: "could not find label [version] in file list ini" (0x40952E)."""
+        where = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, where)
+        kind = type_for("glitch2")
+        with open(os.path.join(where, kind.file_list("")), "w") as handle:
+            handle.write("[trinitybl]\ncba_9188.bin,5a76752d\n")
+        with self.assertRaisesRegex(ValueError, r"label \[version\]"):
+            Release(where).recipe(kind)
+        with open(os.path.join(where, kind.file_list("")), "w") as handle:
+            handle.write("[version]\n17559\n\n[trinitybl]\ncba_9188.bin,5a76752d\n")
+        self.assertEqual(Release(where).recipe(kind).version, "17559")
 
 
 class TheFormAChecksumCovers(unittest.TestCase):
