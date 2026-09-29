@@ -246,9 +246,9 @@ def logical(raw: bytes, flash, remap: bool = True, ecd: bool = True) -> bytes:
     for block in sorted(wanted):
         stands = standing.get(block)
         if stands is None:
-            logger.info("block %#x has no replacement in the dump", block)
+            logger.warning("block %#x has no replacement in the dump", block)
             continue
-        logger.info("copying block %#x to block %#x", stands, block)
+        logger.debug("copying block %#x to block %#x", stands, block)
         span = step * per
         out[block * span : (block + 1) * span] = raw[
             stands * span : (stands + 1) * span

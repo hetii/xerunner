@@ -181,7 +181,7 @@ class Chain:
         which it did rather than deciding quietly.
         """
         if sealing.looks_open(stage.tag, stage.body):
-            logger.info("%s at %#x is already in the clear", stage.tag, stage.at)
+            logger.debug("%s at %#x is already in the clear", stage.tag, stage.at)
             return stage.body
         return self.opened(stage, key)
 
@@ -221,8 +221,8 @@ class Chain:
     def survey(self, cpu_key: bytes = b"") -> None:
         """Say what this chain is, once."""
         if self.converted:
-            logger.info("this chain carries an inserted bootloader; the original "
-                        "refuses such a dump rather than reading it")
+            logger.warning("this chain carries an inserted bootloader; the original "
+                           "refuses such a dump rather than reading it")
         for stage, key in zip(self.stages, self.keys(cpu_key), strict=True):
             logger.info("%s build %#x at %#x, %#x bytes, %s", stage.tag, stage.build,
                         stage.at, stage.length,

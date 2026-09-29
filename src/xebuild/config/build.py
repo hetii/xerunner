@@ -41,9 +41,19 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
         self.raw_patches = ()
         self.no_random = False
         self.out = None
+        for key, file, label in (("cpu_key", "cpukey.txt", "CPU key"),
+                                 ("one_bl_key", "1blkey.txt", "1BL key")):
+            if settings.get(key) is not None:
+                logger.info("%s overridden from command line, not looking for %s",
+                            label, file)
         if ini is not None:
-            logger.info("read %s", ini)
+            logger.debug("read %s", ini)
             found = self.settings_in_ini(ini)
+            for key, label in (("cpu_key", "CPU key"), ("one_bl_key", "1BL key")):
+                if settings.get(key) is None and found.get(key):
+                    logger.warning("%s read from %s", label, ini)
+            if settings.get("console") is None and found.get("console"):
+                logger.warning("Using %s ctype (options.ini)", found["console"])
             # The original takes the ini's settings first and the command line's after,
             # each `nodvd`/`olddvd` before `xellbutton`, and either of the two clears
             # the button (0x42698E): so a button the ini names survives an ini's
@@ -64,8 +74,8 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
                 if len(name) <= 4:
                     continue
                 if name.lower() in (one.lower() for one in append):
-                    logger.warning("%s was provided both on command line and in ini, "
-                                   "filtered duplicate!", name)
+                    logger.info("%s was provided both on command line and in ini, "
+                                "filtered duplicate!", name)
                     continue
                 append.append(name)
             if append:

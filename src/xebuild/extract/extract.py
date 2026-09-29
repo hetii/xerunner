@@ -20,17 +20,17 @@ def extract_image(config) -> Dump | None:
     name = os.path.basename(config.image)
     with open(config.image, "rb") as handle:
         whole = handle.read()
-    logger.info("%s file size: %#x", name, len(whole))
+    logger.debug("%s file size: %#x", name, len(whole))
     raw = dumps.cut(whole)
     try:
         board = boards.for_dump(raw)
     except ValueError:
-        logger.warning("%s is not a correct raw (with ecc) dump size (%#x bytes)", name,
-                       len(raw))
+        logger.error("%s is not a correct raw (with ecc) dump size (%#x bytes)", name,
+                     len(raw))
         return None
     why = dumps.faulty(raw, board.flash, len(whole))
     if why:
-        logger.warning("%s, discarding %s", why, name)
+        logger.error("%s, discarding %s", why, name)
         return None
     # The shape and not the board: one flash serves several consoles, and nothing in
     # a dump names which -- the SMC below does.
@@ -49,6 +49,6 @@ def _remaps(raw: bytes, flash) -> None:
     for block in order.marked_bad(raw, flash):
         logger.info("bad block at %#x (raw offset %#x)", block, block * per)
     for block in order.failing(raw, flash):
-        logger.info("block %#x fails its code (raw offset %#x)", block, block * per)
+        logger.warning("block %#x fails its code (raw offset %#x)", block, block * per)
     for block, stand_in in order.stand_ins(raw, flash, total=len(raw) // per).items():
         logger.info("block %#x is remapped to block %#x", block, stand_in)

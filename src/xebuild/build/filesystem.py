@@ -96,8 +96,8 @@ class Filesystem:
             return None
         entry = Entry.for_file(name, at, len(body), stamp)
         self.placed.append((entry, blocks, bytes(body)))
-        logger.info("%s at block %#x, %#x bytes, %d blocks",
-                    name, at, len(body), blocks)
+        logger.debug("%s at block %#x, %#x bytes, %d blocks",
+                     name, at, len(body), blocks)
         return entry
 
     @property

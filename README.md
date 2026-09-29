@@ -67,6 +67,17 @@ the code makes the decision:
   0x1000 buffers it never clears and writes those whole, so the rest is whatever its
   heap last held -- the text of the release's file list, an HMAC pad -- and differs from
   run to run. -- `update/update.py`, `BuildUpdate._console_statistics`
+- **A message's level is what it means, not whether the original needs `-v` for it.**
+  The levels, shown from INFO up unless `-v` is given:
+  - DEBUG: the ordinary path.
+  - INFO: progress, results, and a file the user added being taken.
+  - WARNING: input dropped, replaced or corrected.
+  - ERROR: something failed and the result lacks it or is flawed, but the run goes on.
+  - CRITICAL: the run ends.
+
+  So some lines the original keeps for `-v` show by default, e.g. "keyvault decrypt
+  failed, discarding" and "dualboot setting ignored!". -- `cli/command.py`, and each
+  message where it happens
 - **"dualboot setting ignored!" is said for either XeLL button.** The original drops a
   `dualboot` that is the same button as `xellbutton` or `xellbutton2` (0x42B2B0), but says
   so only for the first (0x426769); for the second the setting disappears without a word.

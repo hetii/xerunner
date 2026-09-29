@@ -106,9 +106,11 @@ class ExtractModeSLine(unittest.TestCase):
         path = os.path.join(where, "nanddump.bin")
         with open(path, "wb") as handle:
             handle.write(bytes(0x1000))
-        code, said = self.run_main(["extract", "-noenter", path])
+        # A refusal ends the run, so it is logged CRITICAL.
+        with self.assertLogs("xebuild", "CRITICAL") as said:
+            code, _ = self.run_main(["extract", "-noenter", path])
         self.assertEqual(code, 1)
-        self.assertIn("Loading dump failed", said)
+        self.assertIn("Loading dump failed", "\n".join(said.output))
 
 if __name__ == "__main__":
     unittest.main()
