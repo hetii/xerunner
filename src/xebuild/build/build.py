@@ -508,6 +508,10 @@ class Build:
         word after it says how many bytes the files brought -- their own lengths added
         up, 00 00 0C F8 for `xl_usb`'s 3320 and 00 00 0D 14 with `hvFixKeys` as well.
         Nothing else in the image moves. A file is `bin/<name>.bin` of the release.
+
+        The set is built in a buffer of 0x4000 bytes, and a file that would take it past
+        that is left out and the rest still go in (0x428BB4) -- measured with twelve
+        `xl_usb`: five fit, seven are refused room.
         """
         if not self.config.append:
             return listed
@@ -516,8 +520,12 @@ class Build:
         brought = 0
         for name in self.config.append:
             extra = self.release.option(name).raw
+            extra = extra[:-4] if extra.endswith(end) else extra
+            if len(body) + len(extra) > 0x4000:
+                logger.error("could not append %s into patches, not enough room!", name)
+                continue
             brought += len(extra)
-            body += extra[:-4] if extra.endswith(end) else extra
+            body += extra
         return body + end + brought.to_bytes(4, "big")
 
     def _slot_lead(self) -> bytes:

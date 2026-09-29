@@ -1210,3 +1210,43 @@ class WhichDumpsAreThrownAway(unittest.TestCase):
 
     def test_noecdremap_takes_the_failing_ones_out_of_the_count(self):
         self.assertEqual(self.faulty(self.a_dump(failing=range(1, 34)), ecd=False), "")
+
+
+class AddonsInThePatchSet(unittest.TestCase):
+    """`-a` files spliced into the patch set, which has 0x4000 bytes of room."""
+
+    def splice(self, listed, files, names):
+        class Option:
+            def __init__(self, raw):
+                self.raw = raw
+
+        class Release:
+            def option(self, name):
+                return Option(files[name])
+
+        class Config:
+            append = tuple(names)
+
+        class Stand:
+            config, release = Config(), Release()
+
+        return Build._with_addons(Stand(), listed)
+
+    def test_each_file_goes_in_before_one_terminator_and_the_count(self):
+        files = {"a": b"\x22" * 4, "b": b"\x33" * 8}
+        out = self.splice(b"\x11" * 8 + b"\xff" * 4, files, ["a", "b"])
+        self.assertEqual(out, b"\x11" * 8 + b"\x22" * 4 + b"\x33" * 8 + b"\xff" * 4
+                         + (12).to_bytes(4, "big"))
+
+    def test_a_file_that_would_pass_the_room_is_left_out_and_the_rest_go_in(self):
+        big, small = b"\x22" * 0x2000, b"\x33" * 4
+        with self.assertLogs("xebuild.build.build", "ERROR") as said:
+            out = self.splice(b"\x11" * 0x1000 + b"\xff" * 4,
+                              {"big": big, "small": small}, ["big", "big", "small"])
+        self.assertEqual(out, b"\x11" * 0x1000 + big + small + b"\xff" * 4
+                         + (0x2004).to_bytes(4, "big"))
+        self.assertIn("not enough room", said.output[0])
+
+    def test_a_set_that_fills_the_room_exactly_is_taken(self):
+        out = self.splice(b"\x11" * 0x3FFC + b"\xff" * 4, {"a": b"\x22" * 4}, ["a"])
+        self.assertEqual(len(out), 0x4000 + 8)
