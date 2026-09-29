@@ -65,7 +65,8 @@ def run_client(config, port: int = PORT) -> None:
             _save(config.file, server.flash(), "system area")
         elif action == "read-blocks":
             _save(config.file, server.read_blocks(config.block, config.length),
-                  "%#x blocks from block %#x" % (config.length, config.block))
+                  "%#x (%d) blocks from block %#x (%d)" % (config.length, config.length,
+                                                           config.block, config.block))
         elif action == "keys":
             _keys(info, ".")
         elif action == "write":
@@ -103,7 +104,7 @@ def run_client(config, port: int = PORT) -> None:
 def _save(path: str, body: bytes, what: str) -> None:
     with open(path, "wb") as handle:
         handle.write(body)
-    logger.info("wrote %s to %s, %#x bytes", what, path, len(body))
+    logger.info("wrote %s to %s, %#x (%d) bytes", what, path, len(body), len(body))
 
 
 def _info(server, info: ConsoleInfo, directory: str | None) -> None:
@@ -243,9 +244,10 @@ def _write_blocks(server, info: ConsoleInfo, path: str, first: int) -> None:
         raise ValueError("%s is %#x bytes, not a whole number of %#x byte blocks"
                          % (path, len(body), step))
     count = len(body) // step
-    logger.info("writing %#x blocks to the console from block %#x", count, first)
+    logger.info("writing %#x (%d) blocks to the console from block %#x (%d)", count,
+                count, first, first)
     server.write_blocks(first, body, count)
-    logger.info("wrote %#x bytes to the console's flash", len(body))
+    logger.info("wrote %#x (%d) bytes to the console's flash", len(body), len(body))
 
 
 def _patches(server, info: ConsoleInfo, path: str | None) -> None:
