@@ -16,7 +16,11 @@ on a real console's answer, whose every field the original's report agrees with:
     0x440 six stage nonces, 0x10 each: CB_A, CB_B, CD, CE, CF, CG
 """
 
+import logging
+
 from ..crypto.keys import hammingweight, uideccencode
+
+logger = logging.getLogger(__name__)
 
 # Board names by the original's table at 0x44A6E0, which its index 0 calls Unknown.
 BOARDS = ("Unknown", "Xenon", "Zephyr", "Falcon", "Jasper", "Trinity", "Corona",
@@ -46,6 +50,10 @@ class ConsoleInfo:
             raise ValueError("a console's info is at least 0x4a0 bytes, and this is "
                              "%#x" % len(body))
         self.body = bytes(body)
+        # As the original's parser ends (0x41F6EB): an eMMC's 0x3000000 has no spare.
+        logger.debug("NAND image size: 0x%x Block size: 0x%x Spare Data: %s",
+                     self.flash_length, self.block_length,
+                     "No" if self.flash_length == 0x3000000 else "Yes")
 
     def word(self, at: int) -> int:
         return int.from_bytes(self.body[at:at + 4], "big")
