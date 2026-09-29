@@ -310,7 +310,8 @@ def main(argv=None) -> int:
     except (ValueError, OSError) as why:
         logger.critical("FATAL BUILD ERROR: %s", why)
         return 1
-    logger.info("%s image built", out)
+    logger.info("image built path: %s", os.path.relpath(
+        os.path.abspath(out), os.path.dirname(os.path.abspath(sys.argv[0]))))
     if not config.no_enter and sys.stdin.isatty():
         input("press <enter> to quit...")
     return 0
@@ -543,7 +544,8 @@ def _update(argv) -> int:
         logger.critical("FATAL UPDATE ERROR: %s", why)
         return 1
     if kept:
-        logger.info("%s image built", kept)
+        logger.info("image built path: %s", os.path.relpath(
+            os.path.abspath(kept), os.path.dirname(os.path.abspath(sys.argv[0]))))
     if not config.no_enter and sys.stdin.isatty():
         input("press <enter> to quit...")
     return 0
