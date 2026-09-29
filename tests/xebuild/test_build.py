@@ -649,6 +649,10 @@ class WhatTheHeaderSays(unittest.TestCase):
         self.assertEqual(self.a_page(**jtag, olddvd=True).boot_flags, 0)
         self.assertEqual(self.a_page(**jtag, dualboot="power").boot_flags, 0x11040012)
         self.assertEqual(self.a_page(**jtag, dualboot="eject").boot_flags, 0x40012)
+        # The second XeLL button drops it too, measured against the original.
+        self.assertEqual(self.a_page(**jtag, xellbutton2="power",
+                                     dualboot="power").boot_flags, 0x41112)
+
     def test_the_erase_block_is_the_console_s_own_and_not_every_board_states_it(self):
         self.assertEqual(self.a_page(board="trinity").block_size, 0x10000)
         self.assertEqual(self.a_page(board="falcon").block_size, 0)
