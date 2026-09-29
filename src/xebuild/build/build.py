@@ -1376,8 +1376,12 @@ class Build:
         # The file list's own `[rawpatch]` first -- a devkit list names two, "(1)" and
         # "(2)" in the original's log -- and then `-8`'s. Each line is a name and an
         # offset, which the list keeps where a checksum would be.
-        listed = [(one.name, one.crc) for one in self.recipe.raw_patches]
-        for name, at in listed + list(self.config.raw_patches):
+        patches = list(self.recipe.raw_patches) + list(self.config.raw_patches)
+        # Sixteen slots between the list and `-8`, and one more is refused: "16 of 16
+        # [rawpatch] slots are already full!", measured from either side.
+        if len(patches) > 16:
+            raise ValueError("16 of 16 [rawpatch] slots are already full!")
+        for name, at in patches:
             # "[rawpatch]": raw bytes into the flat image, "just before combining spare
             # and finalizing ecc". The spare's fields are already settled by then, so a
             # patch over erased flash leaves its pages' fields erased and only the code

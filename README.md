@@ -81,7 +81,9 @@ the code makes the decision:
   speed or temperature outside its range unused ("out of range ... not using"), clamps
   `cfldv` to 32 -- `cfldv=288` passes silently as 32 -- and writes `-o cputemp=abc`
   through as whatever it makes of it. A value nobody asked for is a fault nobody can see
-  afterwards. -- `config/base.py`, `check_number`
+  afterwards. So is a `[rawpatch]` offset in a file list that is not a number: the
+  original reads `f0000` as 0 and writes the file over the flash header. --
+  `config/base.py`, `check_number`; `release/recipe.py`, `Recipe.raw_patches`
 - **A kv.bin that is neither 0x4000 nor 0x3FF0 bytes is refused.** The original says
   "kv.bin is not the correct size! Skipping verification and encryption!" and writes the
   file into the image unsealed, which gives the console a keyvault it cannot open.
