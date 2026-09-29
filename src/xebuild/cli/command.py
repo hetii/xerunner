@@ -243,6 +243,9 @@ def parse(argv) -> tuple:
 def main(argv=None) -> int:
     """Build mode from a command line; the exit status the shell gets back."""
     argv = sys.argv[1:] if argv is None else argv
+    # INFO for every mode, before any switch is read -- some say things themselves;
+    # `-v` then takes it a level down, to what the original shows only with it.
+    logging.basicConfig(format="%(message)s", level=logging.INFO)
     if argv and argv[0] == "client":
         return _client(argv[1:])
     if argv and argv[0] == "update":
@@ -263,10 +266,8 @@ def main(argv=None) -> int:
     if mode != "build":
         print("ERROR: %s mode is not implemented here" % mode, file=sys.stderr)
         return 2
-    logging.basicConfig(
-        format="%(message)s",
-        level=logging.INFO if settings.get("verbose") else logging.WARNING,
-    )
+    if settings.get("verbose"):
+        logging.getLogger().setLevel(logging.DEBUG)
     where = settings.get("per_build") or "data"
     ini = os.path.join(where, "options.ini")
     if "console" not in settings and os.path.isdir(where):
@@ -300,7 +301,8 @@ def _extract(settings: dict, flags: dict) -> int:
         print("ERROR: %s" % why, file=sys.stderr)
         print(EXTRACT_USAGE, file=sys.stderr)
         return 2
-    logging.basicConfig(format="%(message)s", level=logging.INFO)
+    if settings.get("verbose"):
+        logging.getLogger().setLevel(logging.DEBUG)
     try:
         config = ExtractConfig(image=settings["out"],
                                verbose=settings.get("verbose", 0),
@@ -404,10 +406,6 @@ def parse_client(argv) -> tuple:
 
 def _client(argv) -> int:
     """Client mode from its own switches."""
-    # Configured before the switches are read, which say some things themselves; `-v`
-    # then shows what the original shows only with it -- each file sent, each
-    # directory made -- which is logged a level down.
-    logging.basicConfig(format="%(message)s", level=logging.INFO)
     try:
         settings, flags = parse_client(argv)
     except UsageError as why:
@@ -484,7 +482,6 @@ def _ini(argv) -> int:
     if len(argv) != 1:
         print(INI_USAGE, file=sys.stderr)
         return 2
-    logging.basicConfig(format="%(message)s", level=logging.INFO)
     try:
         write_su_ini(IniConfig(system_update=argv[0]))
     except (ValueError, OSError) as why:
@@ -506,9 +503,8 @@ def _update(argv) -> int:
     if flags["help"]:
         print(UPDATE_USAGE)
         return 0
-    logging.basicConfig(format="%(message)s",
-                        level=logging.INFO if settings.get("verbose")
-                        else logging.WARNING)
+    if settings.get("verbose"):
+        logging.getLogger().setLevel(logging.DEBUG)
     try:
         config = UpdateConfig(**settings)
         kept = run_update(config)
