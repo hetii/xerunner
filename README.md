@@ -67,3 +67,7 @@ the code makes the decision:
   0x1000 buffers it never clears and writes those whole, so the rest is whatever its
   heap last held -- the text of the release's file list, an HMAC pad -- and differs from
   run to run. -- `update/update.py`, `BuildUpdate._console_statistics`
+- **"dualboot setting ignored!" is said for either XeLL button.** The original drops a
+  `dualboot` that is the same button as `xellbutton` or `xellbutton2` (0x42B2B0), but says
+  so only for the first (0x426769); for the second the setting disappears without a word.
+  -- `build/build.py`, `boot_options`
