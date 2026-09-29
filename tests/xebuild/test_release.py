@@ -150,6 +150,8 @@ class WhatAListSaysBeyondItsFiles(unittest.TestCase):
         self.assertEqual(len(Recipe("[flashfs]\n%s.xex,0\n" % ("b" * 17)).firmware), 1)
         with self.assertRaisesRegex(ValueError, "greater than 21 chars"):
             Recipe("[flashfs]\n%s.xex,0\n" % ("c" * 18)).firmware  # noqa: B018
+        listed = Recipe("[flashfs]\n1838-fs\\deviceselector.xex,0\n").firmware
+        self.assertEqual(len(listed), 1)
 
 
 class TheFormAChecksumCovers(unittest.TestCase):

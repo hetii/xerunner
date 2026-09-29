@@ -227,10 +227,12 @@ class Recipe:
 
         A name of more than 21 characters stops the build as the list is read, whether
         or not the file is there: "file in [flashfs] has greater than 21 chars in it's
-        name!" (0x40A965), measured with 22 and with 34.
+        name!" (0x40A965), measured with 22 and with 34. The name is the file's own,
+        without the directory before it: 1838's devkit list names `1838-fs\
+        deviceselector.xex`, 26 in all, and builds.
         """
         found = self._listed("flashfs")
-        if any(len(one.name) > 21 for one in found):
+        if any(len(one.plain) > 21 for one in found):
             raise ValueError("file in [flashfs] has greater than 21 chars in it's "
                              "name!")
         return found
