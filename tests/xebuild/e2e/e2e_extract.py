@@ -33,8 +33,11 @@ def said(report: str) -> dict:
     stages = [(tag, int(build), int(at, 16), int(length, 16))
               for tag, build, at, length in re.findall(
                   r"^(\w\w) v(\d+) at %s size %s" % (HEX, HEX), report, re.M)]
-    remaps = {int(source, 16): int(dest, 16) for source, dest in re.findall(
-        r"^\d+: source: %s dest: %s" % (HEX, HEX), report, re.M)}
+    # A bad block in the pool has no stand-in: "dest: (NONE/BAD)".
+    remaps = {int(source, 16): int(dest, 16) if dest else None
+              for source, dest in re.findall(
+                  r"^\d+: source: %s dest: (?:%s|\(NONE/BAD\))" % (HEX, HEX),
+                  report, re.M)}
     end = re.search(r"final truncated bootloader size %s" % HEX, report)
     config = re.search(r"seeking smc config in dump\.\.\.found at offset %s" % HEX,
                        report)
