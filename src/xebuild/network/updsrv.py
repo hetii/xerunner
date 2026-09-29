@@ -17,6 +17,7 @@ wine against a stand-in server that records every byte, and this sends the same.
   anything else a failure -- measured: two zeros made it say "Failed to erase block".
 """
 
+import time
 import socket
 import struct
 import logging
@@ -146,8 +147,12 @@ class Server:
         return body
 
     def flash(self) -> bytes:
-        """`GTFL`: the whole system area, spare included."""
-        return self._ask("GTFL")
+        """`GTFL`: the whole system area, spare included, and how long it took, as the
+        original's reader says (0x41FF3B)."""
+        started = time.monotonic()
+        body = self._ask("GTFL")
+        logger.info("Completed in %.0fs", time.monotonic() - started)
+        return body
 
     def bootloaders(self) -> bytes:
         """`GTBL`: the bootloaders, from the start of the flash to the first slot."""
@@ -198,7 +203,10 @@ class Server:
         return self._ask("RBLK%04x%04x" % (first, count))
 
     def write_flash(self, body: bytes) -> None:
+        """`WRFL` and the whole system area, and how long it took (0x4200D0)."""
+        started = time.monotonic()
         self._write("WRFL", body)
+        logger.info("Completed in %.0fs", time.monotonic() - started)
 
     def write_blocks(self, first: int, body: bytes, count: int) -> None:
         self._write("WBLK%04x%04x" % (first, count), body)
