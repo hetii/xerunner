@@ -12,6 +12,7 @@ import unittest
 
 from xebuild.boards import ALL
 from xebuild.network import ConsoleInfo
+from xebuild.cli.command import parse_client
 from xebuild.client.client import _binary_patch
 
 SPARE = next(one.flash.spare for one in ALL if one.flash.spare is not None)
@@ -96,6 +97,21 @@ class ABinaryPatch(unittest.TestCase):
         self.patch(flash, info(0x3000000, 0x4000), 0x4000 + 0x1F0, body)
         self.assertEqual(flash.asked, [("read", 1, 1), ("write", 1, 1)])
         self.assertEqual(bytes(flash.raw[0x41F0:0x4230]), body)
+
+
+class ShutdownAndReboot(unittest.TestCase):
+    """A reboot supersedes a shutdown whichever comes first -- measured, both orders
+    ending in REEB -- and says which it saw first."""
+
+    def test_either_order_reboots(self):
+        for argv, said in ((["-s", "-reboot"], "shutdown superseded by reboot"),
+                           (["-reboot", "-s"], "reboot has already been set")):
+            with self.subTest(argv=argv):
+                with self.assertLogs("xebuild", "INFO") as logged:
+                    settings, _flags = parse_client(argv)
+                self.assertTrue(settings.get("reboot"))
+                self.assertFalse(settings.get("shutdown"))
+                self.assertTrue(any(said in line for line in logged.output))
 
 
 if __name__ == "__main__":
