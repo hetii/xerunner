@@ -339,8 +339,16 @@ def parse_client(argv) -> tuple:
         elif one == "-noenter":
             settings["no_enter"] = True
         elif one == "-s":
-            settings["shutdown"] = True
+            # A reboot supersedes a shutdown in either order, and says which it saw
+            # first -- measured, both orders, the wire ending in REEB.
+            if settings.get("reboot"):
+                logger.info("reboot has already been set on command line, ignoring -s")
+            else:
+                settings["shutdown"] = True
         elif one == "-reboot":
+            if settings.pop("shutdown", False):
+                logger.info("shutdown superseded by reboot, ignoring -s in favor of "
+                            "-reboot")
             settings["reboot"] = True
         elif one == "-?":
             flags["help"] = True
@@ -396,6 +404,10 @@ def parse_client(argv) -> tuple:
 
 def _client(argv) -> int:
     """Client mode from its own switches."""
+    # Configured before the switches are read, which say some things themselves; `-v`
+    # then shows what the original shows only with it -- each file sent, each
+    # directory made -- which is logged a level down.
+    logging.basicConfig(format="%(message)s", level=logging.INFO)
     try:
         settings, flags = parse_client(argv)
     except UsageError as why:
@@ -405,10 +417,8 @@ def _client(argv) -> int:
     if flags["help"]:
         print(CLIENT_USAGE)
         return 0
-    # What the original shows only with `-v` -- each file sent, each directory made --
-    # is logged a level down.
-    logging.basicConfig(format="%(message)s", level=logging.DEBUG
-                        if settings.get("verbose") else logging.INFO)
+    if settings.get("verbose"):
+        logging.getLogger().setLevel(logging.DEBUG)
     try:
         config = ClientConfig(**settings)
         run_client(config)
