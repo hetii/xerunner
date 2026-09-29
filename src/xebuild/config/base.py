@@ -25,6 +25,11 @@ so a value that is really missing is never quietly turned into one that is not.
 """
 
 import os
+import logging
+
+from ..files import beside
+
+logger = logging.getLogger(__name__)
 
 
 class BaseConfig(dict):
@@ -41,6 +46,20 @@ class BaseConfig(dict):
                     "%s is not a setting of %s" % (name, type(self).__name__)
                 )
             setattr(self, name, value)
+
+    @staticmethod
+    def key_in_file(where: str, name: str) -> tuple | None:
+        """`(path, key)` out of a key file in `where`, or None where there is none: the
+        file's first word, whitespace around it ignored -- the files on this bench end
+        in a newline and some have spaces. The key is the text as it stands; the
+        setter it goes to is what checks it."""
+        path = beside(where, name)
+        if path is None:
+            return None
+        logger.debug("loading %s from %s", name, path)
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            said = handle.read().split()
+        return path, said[0] if said else ""
 
     # --- the checks; not settings, which is why they are named apart ----------
     def check_truth(self, what, given) -> bool:

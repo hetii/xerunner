@@ -141,7 +141,7 @@ class EachCopyAsTheOriginalChoseIt(unittest.TestCase):
                 with open(os.path.join(data, "nanddump.bin"), "wb") as handle:
                     handle.write(raw)
                 config = BuildConfig(image_type="glitch2", console="trinity",
-                                     cpu_key=CPU_KEY)
+                                     cpu_key=CPU_KEY, per_build=data)
                 image = Build(config, Material(data),
                               Release(os.path.join(work, "17559"))).image(0x5A123457)
                 self.assertEqual(self.chosen(image.raw, copies), self.expected[case])

@@ -14,7 +14,22 @@ class IniConfig(BaseConfig):
 
     def __init__(self, **settings):
         self.system_update = None
+        self.one_bl_key = None
         super().__init__(**settings)
+        # Its one source: 1blkey.txt where the tool runs.
+        found = self.key_in_file(".", "1blkey.txt")
+        if found is not None:
+            self.one_bl_key = found[1]
+
+    @property
+    def one_bl_key(self) -> bytes | None:
+        """The 1BL key, sixteen bytes; its sum is ini mode's own question."""
+        return self["one_bl_key"]
+
+    @one_bl_key.setter
+    def one_bl_key(self, key):
+        self["one_bl_key"] = (None if key is None
+                              else self.check_hex("one_bl_key", key, 16))
 
     @property
     def system_update(self) -> str | None:

@@ -199,7 +199,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         self.release = Release(release, os.path.join(beside, "common"))
 
     def _build(self, kind, board):
-        config = BuildConfig(image_type=kind, console=board)
+        config = BuildConfig(image_type=kind, console=board, per_build=self.where)
         return Build(config, Material(self.where), self.release)
 
     def _reference(self, path, board):
@@ -300,7 +300,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                                os.path.join(where, name))
                 with open(os.path.join(where, "smc.bin"), "xb") as handle:
                     handle.write(decrypt_smc(sealed))
-                one = Build(BuildConfig(image_type=kind, console=board),
+                one = Build(BuildConfig(image_type=kind, console=board,
+                                        per_build=where),
                             Material(where), self.release)
                 self.assertEqual(one.smc(), sealed)
                 ours = one.chain()
@@ -382,12 +383,13 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
             for kind, board in (("glitch2", "trinity"), ("jtag", "falcon"),
                                 ("retail", "trinity")):
                 with self.subTest(smc=label, kind=kind):
-                    refused = Build(BuildConfig(image_type=kind, console=board),
+                    refused = Build(BuildConfig(image_type=kind, console=board,
+                                                per_build=where),
                                     Material(where), self.release)
                     with self.assertRaisesRegex(ValueError, "decryptable"):
                         refused.image()
                     config = BuildConfig(image_type=kind, console=board,
-                                         smcnocheck=True)
+                                         smcnocheck=True, per_build=where)
                     image = Build(config, Material(where), self.release).image()
                     head = image.header
                     self.assertEqual(
@@ -443,7 +445,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 for waived in (False, True):
                     with self.subTest(smc=label, kind=kind, smcnocheck=waived):
                         config = BuildConfig(image_type=kind, console=board,
-                                             smcnocheck=waived)
+                                             smcnocheck=waived, per_build=where)
                         one = Build(config, Material(where), self.release)
                         with self.assertRaisesRegex(ValueError, "does not decrypt"):
                             one.image()
@@ -456,7 +458,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                             ("0xFF", b"\xff" * 0x3000)):
             with self.subTest(label):
                 where = self._spoilt({0x1000: body}, {"smc.bin": plain})
-                config = BuildConfig(image_type="glitch2", console="trinity")
+                config = BuildConfig(image_type="glitch2", console="trinity",
+                                     per_build=where)
                 image = Build(config, Material(where), self.release).image()
                 sealed = bytes(image.flat[0x1000:0x4000])
                 self.assertEqual(decrypt_smc(sealed)[:4], bytes.fromhex("8e0375cc"))
@@ -469,7 +472,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
             with self.subTest(hex(stated)):
                 page[0x7C:0x80] = stated.to_bytes(4, "big")
                 where = self._spoilt({0: bytes(page)})
-                config = BuildConfig(image_type="glitch2", console="trinity")
+                config = BuildConfig(image_type="glitch2", console="trinity",
+                                     per_build=where)
                 one = Build(config, Material(where), self.release)
                 image = one.image()
                 self.assertEqual(bytes(image.flat[0x1000:0x4000]),
@@ -482,7 +486,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
     def test_an_smc_bin_longer_than_0x3800_is_refused(self):
         """ "SMC size 0x3900 not supported!!!", smcnocheck or not."""
         where = self._with_smc(random.Random(2).randbytes(0x3900))
-        config = BuildConfig(image_type="glitch2", console="trinity", smcnocheck=True)
+        config = BuildConfig(image_type="glitch2", console="trinity", smcnocheck=True,
+                             per_build=where)
         with self.assertRaisesRegex(ValueError, "not supported"):
             Build(config, Material(where), self.release).image()
 
@@ -496,7 +501,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         for above in (0x200, 0x400):
             with self.subTest(above=hex(above)):
                 where = self._spoilt({0xF7C000: bytes(spoilt), 0xF7C000 + above: block})
-                config = BuildConfig(image_type="glitch2", console="trinity")
+                config = BuildConfig(image_type="glitch2", console="trinity",
+                                     per_build=where)
                 image = Build(config, Material(where), self.release).image()
                 self.assertEqual(bytes(image.flat[0xF7C000:0xF7C400]), block)
                 self.assertEqual(bytes(image.flat[0xF7C400:0xF7D000]),
@@ -506,7 +512,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 with self.subTest(label, smcnocheck=waived):
                     where = self._spoilt({0xF7C000: body})
                     config = BuildConfig(image_type="glitch2", console="trinity",
-                                         smcnocheck=waived)
+                                         smcnocheck=waived, per_build=where)
                     with self.assertRaisesRegex(ValueError, "no settings block"):
                         Build(config, Material(where), self.release).image()
 
@@ -516,7 +522,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         block[0x220:0x226] = bytes.fromhex("0022481234ab")
         block[0:2] = checksum(block).to_bytes(2, "little")
         where = self._spoilt({}, {"config.bin": bytes(block)})
-        config = BuildConfig(image_type="glitch2", console="trinity")
+        config = BuildConfig(image_type="glitch2", console="trinity", per_build=where)
         image = Build(config, Material(where), self.release).image()
         self.assertEqual(bytes(image.flat[0xF7C220:0xF7C226]),
                          bytes.fromhex("0022481234ab"))
@@ -531,7 +537,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
 
     def _serial_built(self, files: dict) -> str:
         where = self._spoilt({}, files)
-        config = BuildConfig(image_type="glitch2", console="trinity")
+        config = BuildConfig(image_type="glitch2", console="trinity", per_build=where)
         image = Build(config, Material(where), self.release).image()
         cpu = bytes.fromhex(os.environ["XEBUILD_CPUKEY"])
         vault = Keyvault.opened_if_own(bytes(image.flat[0x4000:0x8000]), cpu)
@@ -568,7 +574,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         page = bytearray(self._own(0, 0x200))
         page[0x6C:0x70] = bytes(4)
         where = self._spoilt({0: bytes(page)})
-        config = BuildConfig(image_type="glitch2", console="trinity")
+        config = BuildConfig(image_type="glitch2", console="trinity", per_build=where)
         one = Build(config, Material(where), self.release)
         image = one.image()
         self.assertEqual(bytes(image.flat[0x4000:0x8000]), self._own(0x4000, 0x4000))
@@ -580,7 +586,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
     def test_an_empty_file_beside_the_build_is_one_that_is_not_there(self):
         """Measured with crl.bin, dae.bin and extended.bin: the image is the one built
         with no such file at all."""
-        config = BuildConfig(image_type="glitch2", console="trinity")
+        config = BuildConfig(image_type="glitch2", console="trinity",
+                             per_build=self.where)
         when = 0x5A123457
         without = Build(config, Material(self._spoilt({})), self.release).image(when)
         for name in ("crl.bin", "dae.bin", "extended.bin"):
@@ -597,7 +604,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         for body in (noise[:0xAD30], noise):
             with self.subTest(hex(len(body))):
                 where = self._spoilt({}, {"dae.bin": body})
-                config = BuildConfig(image_type="glitch2", console="trinity")
+                config = BuildConfig(image_type="glitch2", console="trinity",
+                                     per_build=where)
                 image = Build(config, Material(where), self.release).image()
                 self.assertEqual(image.read("dae.bin"), body)
 
@@ -636,7 +644,7 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         in_bin, in_base = marked(b"FROM-RELEASE-BIN"), marked(b"FROM-BASE-PATH")
         where = self._spoilt({})
         os.remove(os.path.join(where, name))
-        config = BuildConfig(image_type="glitch2", console="trinity")
+        config = BuildConfig(image_type="glitch2", console="trinity", per_build=where)
         for files, tag in (({"RELEASE/bin/" + name: in_bin}, b"FROM-RELEASE-BIN"),
                            ({name: in_base}, b"FROM-BASE-PATH"),
                            ({"RELEASE/bin/" + name: in_bin, name: in_base},
@@ -650,11 +658,13 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
     def test_a_glitch_image_over_an_smc_of_zeros_is_refused_unless_waived(self):
         """The one case where refusing a blank SMC is ours: the original builds it."""
         where = self._with_smc(bytes(0x3000))
-        refused = Build(BuildConfig(image_type="glitch2", console="trinity"),
+        refused = Build(BuildConfig(image_type="glitch2", console="trinity",
+                                    per_build=where),
                         Material(where), self.release)
         with self.assertRaisesRegex(ValueError, "blank"):
             refused.image()
-        config = BuildConfig(image_type="glitch2", console="trinity", smcnocheck=True)
+        config = BuildConfig(image_type="glitch2", console="trinity", smcnocheck=True,
+                             per_build=where)
         image = Build(config, Material(where), self.release).image()
         head = image.header
         sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
@@ -708,7 +718,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 with open(os.path.join(where, "smc.bin"), "xb") as handle:
                     handle.write(decrypt_smc(sealed))
                 plain = formats.decrypt_crl(image.read("crl.bin"), cpu)[0]
-                one = Build(BuildConfig(image_type=kind, console=board),
+                one = Build(BuildConfig(image_type=kind, console=board,
+                                        per_build=where),
                             Material(where), self.release)
                 self.assertEqual(one.image(security.when_in(plain)).raw, raw)
 
@@ -839,7 +850,7 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
                 data = os.path.join(here, "data")
                 config = BuildConfig(ini=os.path.join(data, "options.ini"),
                                      image_type=told["type"], console=told["board"],
-                                     **told["settings"])
+                                     **told["settings"], per_build=data)
                 release = self.release
                 if "release" in told:
                     release = Release(told["release"], os.path.join(

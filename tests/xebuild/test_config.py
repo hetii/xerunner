@@ -149,15 +149,18 @@ class WhatBuildModeTakes(unittest.TestCase):
         self.assertFalse(BuildConfig().bigffs)
 
     def test_a_key_arrives_as_sixteen_bytes(self):
-        for field in ("cpu_key", "one_bl_key"):
+        # A 1BL key has to sum as the one there is; the CPU key has no such test.
+        for field, key in (("cpu_key", "00112233445566778899aabbccddeeff"),
+                           ("one_bl_key", "dd88ad0c9ed669e7b56794fb68563efa")):
             with self.subTest(field=field):
-                key = "00112233445566778899aabbccddeeff"
                 made = BuildConfig(**{field: key})
                 self.assertEqual(getattr(made, field), bytes.fromhex(key))
                 self.assertIsNone(getattr(BuildConfig(), field))
                 for wrong in ("ff", "zz" * 16, b"\x00" * 15):
                     with self.assertRaises(ValueError):
                         BuildConfig(**{field: wrong})
+        with self.assertRaisesRegex(ValueError, "does not appear to be correct"):
+            BuildConfig(one_bl_key="00112233445566778899aabbccddeeff")
 
     def test_a_directory_that_is_read_has_to_be_there(self):
         made = BuildConfig(data=self.where, per_build=self.where)
@@ -411,11 +414,13 @@ class TheIni(unittest.TestCase):
         self.assertIsNone(BuildConfig(ini=self.ini).cpu_key)
 
     def test_the_command_line_beats_it(self):
+        # The 1BL key's bytes the other way round: the same sum, another key.
+        other = bytes.fromhex("DD88AD0C9ED669E7B56794FB68563EFA")[::-1].hex()
         made = BuildConfig(ini=self.ini, patchsmc=False, console="corona",
-                           one_bl_key="11" * 16, cfldv=1)
+                           one_bl_key=other, cfldv=1)
         self.assertFalse(made.patchsmc)
         self.assertEqual(made.console.name, "corona")
-        self.assertEqual(made.one_bl_key, bytes.fromhex("11" * 16))
+        self.assertEqual(made.one_bl_key, bytes.fromhex(other))
         self.assertEqual(made.cfldv, 1)
 
     def test_what_it_does_not_name_keeps_its_default(self):
