@@ -212,6 +212,10 @@ def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
     if ecd:
         bad |= set(failing(raw, flash))
     standing = replacements(raw, flash)
+    # A block the pool already stands in for is moved again whether or not it is
+    # marked: measured, "copying 0x4200 bytes of LBA 0x100 to block 0x3ff...zero fill
+    # origin" for a block the chip had not written off.
+    bad |= set(standing)
     taken = bad | set(standing.values())
     free, out = total - 1, {}
     for block in sorted(bad):
@@ -250,12 +254,15 @@ def logical(raw: bytes, flash, remap: bool = True, ecd: bool = True) -> bytes:
     if flash.spare is None:
         return bytes(raw)
     bad = marked_bad(raw, flash)
-    wanted = set(bad) if remap else set()
+    standing = replacements(raw, flash) if remap else {}
+    # A block the pool stands in for is read from there, marked or not -- measured:
+    # "copying nanddump data from block 0x3ff to block 0x100 for file extraction
+    # integrity" for a block the chip had not written off.
+    wanted = set(bad) | set(standing) if remap else set()
     if remap and ecd:
         wanted |= set(failing(raw, flash))
     if not bad and not wanted:
         return bytes(raw)
-    standing = replacements(raw, flash) if remap else {}
     step, per = PAGE + flash.spare.length, flash.spare.pages_a_block
     span = step * per
     out = bytearray(raw)
