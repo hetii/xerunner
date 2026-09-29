@@ -395,6 +395,18 @@ class TheIni(unittest.TestCase):
             BuildConfig(ini=self.ini, nodvd=True, xellbutton="remox").xellbutton,
             "remox")
 
+    def test_the_ini_s_addons_follow_the_command_line_s_and_repeat_nothing(self):
+        """Colon-separated, after `-a`, a name of four characters or fewer passed
+        over, and one already there -- in any case -- dropped. Measured (0x427340)."""
+        ini = os.path.join(self.where, "addons.ini")
+        with open(ini, "w") as handle:
+            handle.write("addon = nohdd:abc:NOFCRT:nohdd\n")
+        self.assertEqual(BuildConfig(ini=ini).append, ("nohdd", "NOFCRT"))
+        self.assertEqual(BuildConfig(ini=ini, append=("nofcrt", "nolan")).append,
+                         ("nofcrt", "nolan", "nohdd"))
+        self.assertEqual(BuildConfig(ini=ini, append="nolan").append,
+                         ("nolan", "nohdd", "NOFCRT"))
+
     def test_a_blank_value_sets_nothing(self):
         self.assertIsNone(BuildConfig(ini=self.ini).cpu_key)
 
