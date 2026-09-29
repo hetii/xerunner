@@ -98,7 +98,6 @@ def run_client(config, port: int = PORT) -> None:
         elif config.reboot:
             logger.info("sending reboot command")
             server.reboot()
-    logger.info("disconnecting from server...OK")
 
 
 def _save(path: str, body: bytes, what: str) -> None:
@@ -230,7 +229,7 @@ def _write(server, info: ConsoleInfo, path: str) -> None:
     """`-w`: the whole system area sent back, as the file holds it."""
     with open(path, "rb") as handle:
         body = handle.read()
-    logger.info("reading file %s...success, read %#x bytes", path, len(body))
+    logger.info("read %#x bytes from %s.", len(body), path)
     server.write_flash(body)
     logger.info("file sent OK, the console answered OK")
 
