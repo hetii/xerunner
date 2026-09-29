@@ -539,6 +539,17 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         out = order.logical(raw, flash)
         self.assertEqual(out[3 * span : 4 * span], raw[7 * span : 8 * span])
 
+    def test_a_pool_block_stands_in_even_for_a_block_not_written_off(self):
+        """Measured: "copying nanddump data from block 0x3ff to block 0x100 for file
+        extraction integrity" with block 0x100 unmarked."""
+        raw, flash, step, per = self.a_dump()
+        raw = self.stand_in(raw, flash, 3, 7, step, per)
+        span = step * per
+        self.assertEqual(order.logical(raw, flash)[3 * span : 4 * span],
+                         raw[7 * span : 8 * span])
+        self.assertEqual(order.logical(raw, flash, remap=False), raw)
+        self.assertEqual(order.stand_ins(raw, flash, total=8), {3: 7})
+
     def test_a_block_claiming_another_s_number_outside_the_pool_is_no_replacement(self):
         """The original turns one away: "bad LBA at block 0x387, block LBA ignored"."""
         raw, flash, step, per = self.a_dump()
