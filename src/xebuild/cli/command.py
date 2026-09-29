@@ -20,6 +20,7 @@ the original warns.
 
 import os
 import sys
+import time
 import logging
 
 from ..ini import write_su_ini
@@ -240,12 +241,41 @@ def parse(argv) -> tuple:
     return mode, settings, flags
 
 
+class LogFormatter(logging.Formatter):
+    """Every line as `[ 15:45:28 ] (w): message`, the level by its first letter. On a
+    terminal the brackets and parentheses are light yellow, the time light green, and
+    the letter and the message the level's own colour; in a file or a pipe there is no
+    colour at all."""
+
+    def __init__(self, colour: bool):
+        super().__init__("%(stamp)s %(text)s")
+        self.colour = colour
+
+    def format(self, record) -> str:
+        when = self.formatTime(record, "%H:%M:%S")
+        letter, said = record.levelname[0].lower(), record.getMessage()
+        if self.colour:
+            shade = {"DEBUG": "\033[2m", "INFO": "\033[32m", "WARNING": "\033[33m",
+                     "ERROR": "\033[31m", "CRITICAL": "\033[1;31m"}
+            level = shade.get(record.levelname, "")
+            record.stamp = ("\033[93m[\033[0m \033[92m%s\033[0m \033[93m] (\033[0m"
+                            "%s%s\033[0m\033[93m):\033[0m" % (when, level, letter))
+            record.text = "%s%s\033[0m" % (level, said)
+        else:
+            record.stamp, record.text = "[ %s ] (%s):" % (when, letter), said
+        return super().format(record)
+
+
 def main(argv=None) -> int:
     """Build mode from a command line; the exit status the shell gets back."""
     argv = sys.argv[1:] if argv is None else argv
     # INFO for every mode, before any switch is read -- some say things themselves;
     # `-v` then takes it a level down, to what the original shows only with it.
-    logging.basicConfig(format="%(message)s", level=logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(LogFormatter(handler.stream.isatty()))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    logger.info("started %s", time.strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("cmd: %s", " ".join([os.path.basename(sys.argv[0]), *argv]))
     if argv and argv[0] == "client":
         return _client(argv[1:])
     if argv and argv[0] == "update":
@@ -280,7 +310,7 @@ def main(argv=None) -> int:
     except (ValueError, OSError) as why:
         logger.critical("FATAL BUILD ERROR: %s", why)
         return 1
-    print("%s image built" % out)
+    logger.info("%s image built", out)
     if not config.no_enter and sys.stdin.isatty():
         input("press <enter> to quit...")
     return 0
@@ -513,7 +543,7 @@ def _update(argv) -> int:
         logger.critical("FATAL UPDATE ERROR: %s", why)
         return 1
     if kept:
-        print("%s image built" % kept)
+        logger.info("%s image built", kept)
     if not config.no_enter and sys.stdin.isatty():
         input("press <enter> to quit...")
     return 0
