@@ -227,6 +227,12 @@ def parse(argv) -> tuple:
                 raw.append(value)
             else:
                 settings[named[one]] = value
+                if one == "-p":
+                    logger.info("CPU key overridden from command line, not looking for "
+                                "cpukey.txt")
+                elif one == "-b":
+                    logger.info("1BL key overridden from command line, not looking for "
+                                "1blkey.txt")
         elif one.startswith("-"):
             raise UsageError("%s is not a switch" % one)
         else:

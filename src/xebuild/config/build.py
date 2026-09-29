@@ -41,11 +41,6 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
         self.raw_patches = ()
         self.no_random = False
         self.out = None
-        for key, file, label in (("cpu_key", "cpukey.txt", "CPU key"),
-                                 ("one_bl_key", "1blkey.txt", "1BL key")):
-            if settings.get(key) is not None:
-                logger.info("%s overridden from command line, not looking for %s",
-                            label, file)
         if ini is not None:
             logger.debug("read %s", ini)
             found = self.settings_in_ini(ini)
