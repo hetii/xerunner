@@ -470,9 +470,14 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 page[0x7C:0x80] = stated.to_bytes(4, "big")
                 where = self._spoilt({0: bytes(page)})
                 config = BuildConfig(image_type="glitch2", console="trinity")
-                image = Build(config, Material(where), self.release).image()
+                one = Build(config, Material(where), self.release)
+                image = one.image()
                 self.assertEqual(bytes(image.flat[0x1000:0x4000]),
                                  self._own(0x1000, 0x3000))
+                # And the report says where it was read, not what the header states.
+                with self.assertLogs("xebuild", "INFO") as said:
+                    one.dump.survey()
+                self.assertIn("smc at 0x1000 ", "\n".join(said.output))
 
     def test_an_smc_bin_longer_than_0x3800_is_refused(self):
         """ "SMC size 0x3900 not supported!!!", smcnocheck or not."""
@@ -564,8 +569,13 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
         page[0x6C:0x70] = bytes(4)
         where = self._spoilt({0: bytes(page)})
         config = BuildConfig(image_type="glitch2", console="trinity")
-        image = Build(config, Material(where), self.release).image()
+        one = Build(config, Material(where), self.release)
+        image = one.image()
         self.assertEqual(bytes(image.flat[0x4000:0x8000]), self._own(0x4000, 0x4000))
+        # And the report says where it was read, not what the header states.
+        with self.assertLogs("xebuild", "INFO") as said:
+            one.dump.survey()
+        self.assertIn("keyvault at 0x4000 ", "\n".join(said.output))
 
     def test_an_empty_file_beside_the_build_is_one_that_is_not_there(self):
         """Measured with crl.bin, dae.bin and extended.bin: the image is the one built

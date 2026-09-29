@@ -126,13 +126,12 @@ def send_avatars(server, where: str, kernel: int) -> None:
     a format, a mount, a directory or a file that failed, and so does this.
     """
     started = time.monotonic()
-    logger.info("loading avatar data...")
+    logger.info("loading avatar data.")
     try:
         manifest, directories, items = avatar_items(where, kernel)
     except ValueError as why:
         raise ValueError("%s; avatar data skipped, unable to load data!"
                          % why) from None
-    logger.info("success!")
     logger.info("Formatting HDD partition...")
     try:
         server.format_extended()
@@ -150,7 +149,6 @@ def send_avatars(server, where: str, kernel: int) -> None:
         for sending in directories:
             server.make_directory(sending)
             logger.debug("created dir: %s", sending)
-        logger.info("success!")
         logger.info("Sending avatar files to HDD partition...")
         for number, (sending, body) in enumerate(items, 1):
             logger.debug("sending %03d: 0x%08x (%d) bytes, %s", number, len(body),

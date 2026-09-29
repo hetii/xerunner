@@ -209,33 +209,40 @@ class Dump:
         return self.image.header
 
     @property
+    def keyvault_at(self) -> int:
+        """Where the keyvault is read: where the header says, or 0x4000 where it states
+        0 -- "KeyVault cannot be at 0x0, trying 0x4000" (0x413F62), measured; any other
+        address is taken as stated."""
+        return self.header.keyvault_at or 0x4000
+
+    @property
     def sealed_keyvault(self) -> bytes:
-        """The keyvault as it lies in flash, where the header says it is."""
-        # 0x4000 whatever the header states. A xenon or zephyr image leaves the length
-        # at zero, and one stating 0x8000 has a second keyvault behind the first --
-        # "decrypting KeyVault at address 0x4000 of size 0x4000", then "decrypting alt
-        # KeyVault at address 0x8000" -- measured on a dump whose header said 0x8000.
-        # And at 0x4000 where the header states 0 -- "KeyVault cannot be at 0x0, trying
-        # 0x4000" (0x413F62), measured; any other address is taken as stated.
-        at = self.header.keyvault_at or 0x4000
-        return self.image.flat[at : at + 0x4000]
+        """The keyvault as it lies in flash, at `keyvault_at`."""
+        # 0x4000 long whatever the header states. A xenon or zephyr image leaves the
+        # length at zero, and one stating 0x8000 has a second keyvault behind the
+        # first -- "decrypting KeyVault at address 0x4000 of size 0x4000", then
+        # "decrypting alt KeyVault at address 0x8000" -- measured on a dump whose
+        # header said 0x8000.
+        return self.image.flat[self.keyvault_at : self.keyvault_at + 0x4000]
 
     def keyvault(self, cpu_key: bytes) -> Keyvault:
         """The console's keyvault, opened with its CPU key."""
         return Keyvault.opened(self.sealed_keyvault, cpu_key)
 
     @property
-    def smc(self) -> bytes:
-        """The SMC as the console holds it, sealed, where the header says it is.
+    def smc_at(self) -> int:
+        """Where the SMC is read: at 0x800 or 0x1000, the only two places an SMC is ever
+        laid, as the header says; a header stating anything else is read at 0x1000 all
+        the same -- "smc.bin should not be at 0x%x, trying 0x1000" (0x413B4B), measured
+        with 0x2000 and with 0."""
+        at = self.header.smc_at
+        return at if at in (0x800, 0x1000) else 0x1000
 
-        At 0x800 or 0x1000, the only two places an SMC is ever laid; a header stating
-        anything else is read at 0x1000 all the same -- "smc.bin should not be at 0x%x,
-        trying 0x1000" (0x413B4B), measured with 0x2000 and with 0. The length is
-        always one of the two the header check lets through, 0x3000 or 0x3800.
-        """
-        head = self.header
-        at = head.smc_at if head.smc_at in (0x800, 0x1000) else 0x1000
-        return self.image.flat[at : at + head.smc_size]
+    @property
+    def smc(self) -> bytes:
+        """The SMC as the console holds it, sealed, at `smc_at`. The length is always
+        one of the two the header check lets through, 0x3000 or 0x3800."""
+        return self.image.flat[self.smc_at : self.smc_at + self.header.smc_size]
 
     @property
     def smc_opens(self) -> bool:
@@ -367,7 +374,7 @@ class Dump:
         the same dump -- see `tests/xebuild/e2e/e2e_extract.py`.
         """
         head = self.header
-        logger.info("keyvault at %#x of size 0x4000", head.keyvault_at)
+        logger.info("keyvault at %#x of size 0x4000", self.keyvault_at)
         if cpu_key is None:
             logger.info("no cpu key given, so the keyvault stays sealed")
         else:
@@ -378,7 +385,7 @@ class Dump:
             else:
                 logger.warning("keyvault did not open with this cpu key")
         smc = Smc(decrypt_smc(self.smc))
-        logger.info("smc at %#x of size %#x: %s%s", head.smc_at, head.smc_size,
+        logger.info("smc at %#x of size %#x: %s%s", self.smc_at, head.smc_size,
                     smc.named, ", a stock image" if smc.clean else "")
         logger.info("smc config at %#x of size %#x, %s", self.flash.smc_config,
                     CONFIG_LENGTH, "sound" if self.smc_config_ok else "not sound")
