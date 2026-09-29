@@ -278,7 +278,7 @@ def main(argv=None) -> int:
         config = BuildConfig(ini=ini if os.path.isfile(ini) else None, **settings)
         out = build_image(config)
     except (ValueError, OSError) as why:
-        print("FATAL BUILD ERROR: %s" % why, file=sys.stderr)
+        logger.critical("FATAL BUILD ERROR: %s", why)
         return 1
     print("%s image built" % out)
     if not config.no_enter and sys.stdin.isatty():
@@ -309,10 +309,10 @@ def _extract(settings: dict, flags: dict) -> int:
                                no_enter=settings.get("no_enter", False))
         found = extract_image(config)
     except (ValueError, OSError) as why:
-        print("Loading dump failed: %s" % why, file=sys.stderr)
+        logger.critical("Loading dump failed: %s", why)
         return 1
     if found is None:
-        print("Loading dump failed!", file=sys.stderr)
+        logger.critical("Loading dump failed!")
         return 1
     if not config.no_enter and sys.stdin.isatty():
         input("press <enter> to quit...")
@@ -344,13 +344,14 @@ def parse_client(argv) -> tuple:
             # A reboot supersedes a shutdown in either order, and says which it saw
             # first -- measured, both orders, the wire ending in REEB.
             if settings.get("reboot"):
-                logger.info("reboot has already been set on command line, ignoring -s")
+                logger.warning("reboot has already been set on command line, "
+                               "ignoring -s")
             else:
                 settings["shutdown"] = True
         elif one == "-reboot":
             if settings.pop("shutdown", False):
-                logger.info("shutdown superseded by reboot, ignoring -s in favor of "
-                            "-reboot")
+                logger.warning("shutdown superseded by reboot, ignoring -s in favor of "
+                               "-reboot")
             settings["reboot"] = True
         elif one == "-?":
             flags["help"] = True
@@ -421,7 +422,7 @@ def _client(argv) -> int:
         config = ClientConfig(**settings)
         run_client(config)
     except (ValueError, OSError, ServerError) as why:
-        print("ERROR: %s" % why, file=sys.stderr)
+        logger.critical("ERROR: %s", why)
         return 1
     if not config.no_enter and sys.stdin.isatty():
         input("press <enter> to quit...")
@@ -485,7 +486,7 @@ def _ini(argv) -> int:
     try:
         write_su_ini(IniConfig(system_update=argv[0]))
     except (ValueError, OSError) as why:
-        print("Error loading SU! %s" % why, file=sys.stderr)
+        logger.critical("Error loading SU! %s", why)
         return 1
     if sys.stdin.isatty():
         input("press <enter> to quit...")
@@ -509,7 +510,7 @@ def _update(argv) -> int:
         config = UpdateConfig(**settings)
         kept = run_update(config)
     except (ValueError, OSError, ServerError) as why:
-        print("FATAL UPDATE ERROR: %s" % why, file=sys.stderr)
+        logger.critical("FATAL UPDATE ERROR: %s", why)
         return 1
     if kept:
         print("%s image built" % kept)

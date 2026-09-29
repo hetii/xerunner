@@ -316,8 +316,8 @@ class Build:
             if not self.dump.smc_opens:
                 raise ValueError("the dump's SMC does not decrypt and there is no "
                                  "smc.bin to use instead")
-            logger.info("reading %s failed, using smc.bin from nand dump",
-                        os.path.join(self.material.where, "smc.bin"))
+            logger.warning("reading %s failed, using smc.bin from nand dump",
+                           os.path.join(self.material.where, "smc.bin"))
             carried = self.dump.smc
             plain = decrypt_smc(carried)
         if self.image_type.number in (2, 3, 4, 5):
@@ -396,8 +396,8 @@ class Build:
         if (self._handed_keyvault is None and self.dump is not None
                 and not self.drawing and not self._dvdkey_goes_in
                 and (not self.cpu_key or self._decrypt_console_keyvault() is not None)):
-            logger.info("reading %s failed, using kv.bin from nand dump",
-                        os.path.join(self.material.where, "kv.bin"))
+            logger.warning("reading %s failed, using kv.bin from nand dump",
+                           os.path.join(self.material.where, "kv.bin"))
             return self.dump.sealed_keyvault
         return self.plain_keyvault().sealed(self.cpu_key)
 
@@ -453,8 +453,8 @@ class Build:
         if given is not None:
             vault = Keyvault.handed_in(given, self.cpu_key)
         elif own is not None:
-            logger.info("reading %s failed, using kv.bin from nand dump",
-                        os.path.join(self.material.where, "kv.bin"))
+            logger.warning("reading %s failed, using kv.bin from nand dump",
+                           os.path.join(self.material.where, "kv.bin"))
             vault = own
         else:
             raise ValueError("could not read kv.bin, and no keyvault the CPU key opens "
@@ -479,17 +479,22 @@ class Build:
         # Beside the build, then the release's bin/, then the base directory, and none
         # at all stops the build (0x42A455) -- each measured, with a copy marked for
         # each place so the image says which it took.
-        body = self.material.xell(name)
+        body, where = self.material.xell(name), None
         if body is None:
-            logger.info("xell not found in perbuild directory, checking firmware /bin "
-                        "folder")
-            body = self.release.in_bin(name)
+            logger.debug("xell not found in perbuild directory, checking firmware /bin "
+                         "folder")
+            body, where = self.release.in_bin(name), os.path.join(self.release.where,
+                                                                  "bin")
         if body is None:
-            logger.info("xell not found in firmware /bin folder, checking base path")
+            logger.debug("xell not found in firmware /bin folder, checking base path")
             body = self.release.in_base(name)
+            where = os.path.dirname(os.path.normpath(self.release.where))
         if body is None:
             raise ValueError("could not read %s: critical bootloader files are "
                              "missing" % name)
+        if where is not None:
+            logger.warning("%s not found in %s, using %s", name, self.material.where,
+                           os.path.join(where, name))
         return body
 
     def patch_slot(self) -> bytes:
@@ -581,7 +586,12 @@ class Build:
         out = fuses.virtual(word, self.cpu_key, self.ldv)
         given = self.material.bytes_in("fuses.bin")
         if given is not None and len(given) == 0x60:
+            logger.info("fuses.bin found, adding from file")
             out = out[:0x48] + given[0x48:]
+        elif given is not None:
+            logger.warning("%s is %#x bytes, not 0x60; ignored, using the built-in "
+                           "fuses", os.path.join(self.material.where, "fuses.bin"),
+                           len(given))
         return out
 
     def chain(self, which: int = 0) -> bytes:
@@ -1088,6 +1098,8 @@ class Build:
             found = self._firmware_from(name, listed.crc, container=number == 0,
                                         common=True)
             if found is not None:
+                if number:
+                    logger.warning("%s not found, using %s", listed.name, name)
                 return found
         return None
 
@@ -1110,15 +1122,18 @@ class Build:
         if container:
             body = self.release.container_file(plain)
             if crc and self._firmware_fits(body, plain, crc):
-                logger.info("extracted SUPD/%s (%#x bytes)", plain, len(body))
+                logger.warning("extracted SUPD/%s (%#x bytes)", plain, len(body))
                 return body, None
         body = self._console_firmware(plain, crc)
         if body is not None:
-            logger.info("%s found, adding from previous parse", plain)
+            logger.warning("%s found, adding from previous parse", plain)
             return body, None
         if common:
             body = read(self.release.common_file(plain), plain)
             if self._firmware_fits(body, plain, crc):
+                logger.warning("%s not found in %s or SUPD, using %s", name,
+                               self.release.where, os.path.join(self.release.common,
+                                                                plain))
                 return body, self.release.common_meta(plain)
         return None
 
@@ -1164,13 +1179,19 @@ class Build:
         if content is None and name in ("crl.bin", "dae.bin") and \
                 not config.nosusecurity and self.release.container is not None and \
                 name in self.release.container.held:
-            logger.info("could not read %s, using data from SUPD...", name)
+            logger.warning("could not read %s, using data from SUPD...", name)
             content = self.release.container.read(name)
         if content is None and not made_clean:
             if own is not None:
-                logger.info("could not read %s, using data from previous parse...",
-                            name)
+                logger.warning("could not read %s, using data from previous parse...",
+                               name)
             content = own
+        if content is None and not made_clean:
+            if name in ("extended.bin", "secdata.bin"):
+                logger.warning("Making up an clean/empty %s!", name)
+            elif name in ("crl.bin", "dae.bin", "fcrt.bin"):
+                logger.warning("%s not found in %s, SUPD or the dump; left out of the "
+                               "image", name, self.material.where)
         cpu, ldv = self.cpu_key, self.ldv
         if name == "crl.bin":
             if content is None:
@@ -1329,7 +1350,7 @@ class Build:
             # was measured, so a longer one is left out rather than laid over whatever
             # follows it.
             if 0x80 + len(net_kd) <= PAGE:
-                logger.info("Inserting netKd data from dump into header")
+                logger.debug("Inserting netKd data from dump into header")
                 out.put(0x80, net_kd)
             else:
                 logger.warning("the dump's netKd block states %#x bytes, more than the "
@@ -1408,11 +1429,11 @@ class Build:
         if where is None:
             return
         if dump.flash.blocks != self.flash.blocks:
-            logger.info("nandmu: the dump is not from a part like this one; nothing "
-                        "to keep")
+            logger.warning("nandmu: the dump is not from a part like this one; nothing "
+                           "to keep")
             return
-        logger.warning("nanddump.bin has NAND memory unit data; keeping blocks 0x10 "
-                       "to 0x15B of it")
+        logger.info("nanddump.bin has NAND memory unit data; keeping blocks 0x10 "
+                    "to 0x15B of it")
         out.carry(dump.image, *where)
 
     def _remap(self, out: Image) -> None:
@@ -1444,7 +1465,7 @@ class Build:
                            "another flash; nothing is remapped")
             return
         for block, stand_in in moves.items():
-            logger.info("remapping block %#x to block %#x", block, stand_in)
+            logger.debug("remapping block %#x to block %#x", block, stand_in)
             out.retire(block, stand_in)
 
     def _jtag_regions(self, out: Image, where: dict, second: bytes) -> None:
@@ -1492,7 +1513,7 @@ class Build:
         own = self.release.in_bin(name)
         if own is not None:
             return own
-        logger.info("could not read %s, using built in %s", name, name)
+        logger.warning("could not read %s, using built in %s", name, name)
         return jtag.builtin(name)
 
     def _fs_fields(self, slots: int) -> bytes:
@@ -1524,7 +1545,7 @@ class Build:
         if self.dump is not None and not self.config.nomobile:
             for name in self.dump.image.blobs:
                 if name.startswith("Mobile") and name not in out:
-                    logger.info("%s found, adding from previous parse", name)
+                    logger.warning("%s found, adding from previous parse", name)
                     out[name] = self.dump.image.blob(name)
         return out
 
@@ -1559,7 +1580,7 @@ class Build:
                 logger.info("%s found, adding from file", name)
                 body = body[:span] + bytes(max(0, span - len(body)))
             elif own and console is not None:
-                logger.info("%s found, adding from previous parse", name)
+                logger.warning("%s found, adding from previous parse", name)
                 body = console
             if body is not None:
                 out.append((at, body, span))
@@ -1589,10 +1610,15 @@ class Build:
         for other in ("config.bin", "config_raw.bin"):
             if given is not None:
                 break
+            logger.debug("reading %s failed, trying %s",
+                         os.path.join(self.material.where, name), other)
             given, name = self.material.bytes_in(other), other
+        if given is not None and name != "smc_config.bin":
+            logger.warning("smc_config.bin not found in %s, using %s",
+                           self.material.where, os.path.join(self.material.where, name))
         if given is None and self.dump is not None:
-            logger.info("reading %s failed, using smc_config.bin from nand dump",
-                        os.path.join(self.material.where, "smc_config.bin"))
+            logger.warning("reading %s failed, using smc_config.bin from nand dump",
+                           os.path.join(self.material.where, "smc_config.bin"))
             given, name = self.dump.smc_config, "the dump"
         if given is None:
             raise ValueError("could not read smc_config.bin, and the dump holds no "
@@ -1757,7 +1783,7 @@ class Build:
         # but silently: only the parse (0x426769) looks at the first and says so. We say
         # so for both -- a known divergence.
         if switch and switch in (reason, second):
-            logger.info("dualboot setting ignored!")
+            logger.warning("dualboot setting ignored!")
         head.dualboot_reason = 0 if switch in (reason, second) else switch
 
     def auto_name(self) -> str:
@@ -1789,7 +1815,7 @@ def build_image(config, when: int | None = None) -> str:
     Returns where the image went. `when` is the build's clock, for reproducing one.
     """
     if config.per_build is None:
-        logger.warning("you did not specify per build directory! Using ./data/")
+        logger.info("you did not specify per build directory! Using ./data/")
     release = Release(config.data or "data")
     one = Build(config, Material(config.per_build or "data"), release)
     image = one.image(when)

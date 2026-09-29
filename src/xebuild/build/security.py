@@ -262,8 +262,8 @@ def fcrt(own: bytes, cpu_key: bytes) -> bytes:
     if _fcrt_hashed(own):
         return encrypt_fcrt(own, cpu_key)
     if not verifies("fcrt.bin", own, cpu_key):
-        logger.warning("FCRT data appears to be crypted or damaged!! Skipping "
-                       "encryption.")
+        logger.error("FCRT data appears to be crypted or damaged!! Skipping "
+                     "encryption.")
     return own
 
 

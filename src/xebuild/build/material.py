@@ -74,7 +74,7 @@ class Material:
         if path is not None:
             size = os.path.getsize(path)
             if size:
-                logger.info("reading %s (%#x bytes)", path, size)
+                logger.debug("reading %s (%#x bytes)", path, size)
                 with open(path, "rb") as handle:
                     body = handle.read()
             else:
@@ -95,7 +95,7 @@ class Material:
         if path is None:
             self._files[("key", name)] = None
             return None
-        logger.info("loading %s from %s", name, path)
+        logger.debug("loading %s from %s", name, path)
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             said = handle.read().split()
         if not said:
@@ -112,6 +112,8 @@ class Material:
         # and kept as the sixteen bytes read out of the file, not the file's text:
         # the one thing `_files` holds that is not a file's body as it is on disk.
         self._files[("key", name)] = key
+        logger.warning("%s read from %s",
+                       "CPU key" if name == "cpukey.txt" else "1BL key", path)
         return key
 
     @property
@@ -179,7 +181,7 @@ class Material:
                      "trinitybigffs", "corona", "coronabb", "coronabigffs", "corona4g",
                      "winchester", "winchester4g", "winchesterbb", "winchesterbigffs"):
             if beside(self.where, name) or beside(self.where, name + ".txt"):
-                logger.info("Using %s ctype (perbox file)", name)
+                logger.warning("Using %s ctype (perbox file)", name)
                 return name
         return None
 

@@ -111,8 +111,8 @@ class Keyvault:
         own = cls.opened_if_own(given, cpu_key)
         if own is not None:
             return own
-        logger.warning("kv.bin appears to be decrypted already, but the hash does not "
-                       "match the CPU key")
+        logger.error("kv.bin appears to be decrypted already, but the hash does not "
+                     "match the CPU key")
         return cls(given)
 
     @property

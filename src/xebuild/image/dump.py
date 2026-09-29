@@ -83,16 +83,16 @@ def cut(raw: bytes | None) -> bytes | None:
     spare = next(one.flash.spare for one in ALL
                  if one.flash.spare is not None)
     if raw[0x3000000:0x3000004] == b"FATX":
-        logger.info("FATX magic found, truncating load size to 0x3000000 bytes for "
-                    "mmc consoles")
+        logger.debug("FATX magic found, truncating load size to 0x3000000 bytes for "
+                     "mmc consoles")
         return raw[:0x3000000]
     if not spare.ecc_ok(raw[:PAGE + spare.length]):
-        logger.info("First page does not contain a valid ECC, assuming this is an "
-                    "mmc dump and truncating load size to 0x3000000 bytes")
+        logger.debug("First page does not contain a valid ECC, assuming this is an "
+                     "mmc dump and truncating load size to 0x3000000 bytes")
         return raw[:0x3000000]
     if len(raw) > 0x4200000:
-        logger.info("First page contains a valid ECC, assuming this is a big block "
-                    "flash overdump and truncating load size to 0x4200000 bytes")
+        logger.debug("First page contains a valid ECC, assuming this is a big block "
+                     "flash overdump and truncating load size to 0x4200000 bytes")
         return raw[:0x4200000]
     return raw
 
@@ -376,7 +376,7 @@ class Dump:
                 logger.info("keyvault opened: console %s, made %s",
                             keyvault.serial, keyvault.made_on)
             else:
-                logger.info("keyvault did not open with this cpu key")
+                logger.warning("keyvault did not open with this cpu key")
         smc = Smc(decrypt_smc(self.smc))
         logger.info("smc at %#x of size %#x: %s%s", head.smc_at, head.smc_size,
                     smc.named, ", a stock image" if smc.clean else "")
@@ -428,7 +428,7 @@ class Dump:
         try:
             console = found.console
         except ValueError as why:
-            logger.info("no console block read off the CF: %s", why)
+            logger.warning("no console block read off the CF: %s", why)
             return
         logger.info("pairing %s, lockdown %d, from the CF", console.pairing.hex(),
                     console.ldv)

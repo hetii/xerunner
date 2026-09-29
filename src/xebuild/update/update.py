@@ -155,13 +155,13 @@ def collect(server, info: ConsoleInfo, recipe, base: str,
     server.mount("usv", "\\SystemRoot")
     jtag = info.image_type[1] == "JTAG"
     if jtag:
-        logger.info("Skipping getting bootloaders on non-glitch machine!")
+        logger.debug("Skipping getting bootloaders on non-glitch machine!")
     found = ConsoleMaterial(base, None if jtag else server.bootloaders())
     found.flash_header = header
     found.nonces = info.nonces
     found.pairing = info.pairing
     if found.pairing:
-        logger.info("pairing set to: %s", found.pairing.to_bytes(3, "big").hex(" "))
+        logger.debug("pairing set to: %s", found.pairing.to_bytes(3, "big").hex(" "))
     for name in (one.plain for one in recipe.security):
         if clean and name in ("extended.bin", "secdata.bin"):
             continue
@@ -186,14 +186,14 @@ def collect(server, info: ConsoleInfo, recipe, base: str,
     # original asks (0x4039BA, 0x403BE4) -- measured on a stand-in console with the
     # two bits set in its answer to GTIN.
     if not info.offers_blmod:
-        logger.info("console has no available blmod")
+        logger.debug("console has no available blmod")
     elif server.file("blmod") is None:
         logger.warning("Unable to retrieve blmod.bin data from console!")
     # Asked for and not used: it goes on a chain a build lays, and an update lays none
     # of its own but puts the console's bootloaders back as they came, which the
     # original does too -- measured, "Adding ... blmod.bin data" is never said.
     if not info.offers_addons:
-        logger.info("console has no available addons")
+        logger.debug("console has no available addons")
     elif append:
         logger.info("skipping USVR\\addons, addons have been specified on command "
                     "line")
@@ -288,7 +288,7 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
         if not config.no_write:
             server.write_flash(image.raw)
         if config.no_write or config.no_avatar:
-            logger.info("avatar data skipped, -noava or -nowrite used")
+            logger.debug("avatar data skipped, -noava or -nowrite used")
         elif not info.hdd:
             logger.info("avatar data skipped, no HDD detected")
         else:
@@ -298,7 +298,7 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
             try:
                 send_avatars(server, config.data or "data", info.word(4))
             except ValueError as why:
-                logger.warning("%s", why)
+                logger.error("%s", why)
         if not config.no_write and not config.no_reboot:
             server.reboot()
     return kept

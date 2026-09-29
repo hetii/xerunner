@@ -41,7 +41,7 @@ class Release:
         """
         path = os.path.join(*parts)
         if path not in self._files:
-            logger.info("reading %s (%#x bytes)", path, os.path.getsize(path))
+            logger.debug("reading %s (%#x bytes)", path, os.path.getsize(path))
             with open(path, "rb") as handle:
                 self._files[path] = handle.read()
         return self._files[path]
@@ -228,8 +228,8 @@ class Release:
                         logger.warning("checks failed! Container corrupt!")
                     break
             else:
-                logger.info("system update container not found in %s, skipping load",
-                            self.where)
+                logger.debug("system update container not found in %s, skipping load",
+                             self.where)
         return self._container
 
     def __repr__(self) -> str:
