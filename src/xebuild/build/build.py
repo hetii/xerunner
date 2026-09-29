@@ -1443,7 +1443,6 @@ class Build:
                            "another flash; nothing is remapped")
             return
         for block, stand_in in moves.items():
-            logger.debug("remapping block %#x to block %#x", block, stand_in)
             out.retire(block, stand_in)
 
     def _jtag_regions(self, out: Image, where: dict, second: bytes) -> None:

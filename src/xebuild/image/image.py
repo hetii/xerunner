@@ -149,14 +149,18 @@ class Image:
             self.spares[start // PAGE:end // PAGE] = other.spares[start // PAGE:
                                                                   end // PAGE]
 
-    def retire(self, block: int, stand_in: int) -> None:
+    def retire(self, block: int, stand_in: int | None) -> None:
         """Move one block's bytes and spare to the block standing in for it.
 
         What the original writes for a console whose flash has written a block off,
         measured on a dump with one block marked bad and one failing its code: the
         stand-in carries the block's data and its spare verbatim -- the block's own
         number included, which is how the console finds it -- and the block itself is
-        zeros, data and spare alike.
+        zeros, data and spare alike. A page the build left erased still has the
+        stand-in say whose it is: a written spare with the block's number, over erased
+        data -- measured with the dump's fsroot block failing its code. With no
+        stand-in the block is only zeroed: "Remapping block 0x3ff is not required,
+        zerofilling", measured with the last block marked bad.
         """
         if not self.writable:
             raise ValueError("this image was read in from a file and is material; "
@@ -165,11 +169,17 @@ class Image:
         # on a big block one -- the unit `order` counts bad blocks in.
         per = self.flash.spare.pages_a_block
         length = per * PAGE
-        at, to = block * length, stand_in * length
-        self.flat[to:to + length] = self.flat[at:at + length]
+        at = block * length
+        if stand_in is not None:
+            to = stand_in * length
+            self.flat[to:to + length] = self.flat[at:at + length]
+            for page in range(per):
+                moved = self.spares[block * per + page]
+                if set(moved) == {0xFF}:
+                    moved = self.flash.spare.write(block)
+                self.spares[stand_in * per + page] = moved
         self.flat[at:at + length] = bytes(length)
         for page in range(per):
-            self.spares[stand_in * per + page] = self.spares[block * per + page]
             self.spares[block * per + page] = bytes(self.flash.spare.length)
 
     def put(self, at: int, data: bytes) -> None:

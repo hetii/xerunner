@@ -204,7 +204,9 @@ def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
     for it, and otherwise to the highest one nothing else holds, counting down from
     `total` -- "block 0x100 had no remap, assigning remap block 0x3ff". Measured on a
     dump with one block marked bad and one failing its code: 0x3FF and 0x3FE, in that
-    order.
+    order. One past the last block a build may use is in the pool itself: it has no
+    stand-in, None here, and is only zeroed -- "block 0x3ff had no need of remap, it's
+    in the wear area", measured.
     """
     bad = set(marked_bad(raw, flash))
     if ecd:
@@ -213,6 +215,10 @@ def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
     taken = bad | set(standing.values())
     free, out = total - 1, {}
     for block in sorted(bad):
+        if block > flash.last_block:
+            logger.debug("block %#x had no need of remap, it's in the wear area", block)
+            out[block] = None
+            continue
         stand_in = standing.get(block)
         if stand_in is None:
             while free in taken:
@@ -222,6 +228,8 @@ def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
                                  "block %#x" % block)
             stand_in = free
             taken.add(stand_in)
+            logger.debug("block %#x had no remap, assigning remap block %#x", block,
+                         stand_in)
         out[block] = stand_in
     return out
 
@@ -232,24 +240,36 @@ def logical(raw: bytes, flash, remap: bool = True, ecd: bool = True) -> bytes:
     Handed a dump whose blocks are all where their numbers say -- which is every dump
     off a console that has never replaced one -- this gives the same bytes back, so it
     costs nothing to put in front of any read.
+
+    A block the chip marked bad is not read at all, whatever the options: it is left
+    erased unless a block standing in for it fills it. Measured with the dump's fsroot
+    block marked bad, plain and under `noremap` and `noecdremap`: "bad block at 0x398
+    (raw offset 0xed3000), block ignored", and the older fsroot is the one found. A
+    block failing its code is still read where nothing stands in for it.
     """
-    if flash.spare is None or not remap:
+    if flash.spare is None:
         return bytes(raw)
-    wanted = set(marked_bad(raw, flash))
-    if ecd:
+    bad = marked_bad(raw, flash)
+    wanted = set(bad) if remap else set()
+    if remap and ecd:
         wanted |= set(failing(raw, flash))
-    if not wanted:
+    if not bad and not wanted:
         return bytes(raw)
-    standing = replacements(raw, flash)
+    standing = replacements(raw, flash) if remap else {}
     step, per = PAGE + flash.spare.length, flash.spare.pages_a_block
+    span = step * per
     out = bytearray(raw)
+    for block in bad:
+        logger.warning("bad block at %#x (raw offset %#x), block ignored", block,
+                       block * span)
+        out[block * span : (block + 1) * span] = b"\xff" * span
     for block in sorted(wanted):
         stands = standing.get(block)
         if stands is None:
-            logger.warning("block %#x has no replacement in the dump", block)
+            if block not in bad:
+                logger.warning("block %#x has no replacement in the dump", block)
             continue
         logger.debug("copying block %#x to block %#x", stands, block)
-        span = step * per
         out[block * span : (block + 1) * span] = raw[
             stands * span : (stands + 1) * span
         ]

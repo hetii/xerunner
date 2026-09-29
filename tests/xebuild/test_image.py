@@ -545,7 +545,22 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         raw = self.mark_bad(raw, flash, 3, step, per)
         raw = self.stand_in(raw, flash, 3, 4, step, per)  # 4 is inside the usable area
         self.assertEqual(order.replacements(raw, flash), {})
-        self.assertEqual(order.logical(raw, flash), raw)
+        span = step * per
+        self.assertEqual(order.logical(raw, flash),
+                         raw[: 3 * span] + b"\xff" * span + raw[4 * span :])
+
+    def test_a_block_written_off_with_nothing_standing_in_is_not_read(self):
+        """Measured with the fsroot block marked bad: "bad block at 0x398 (raw offset
+        0xed3000), block ignored", under `noremap` too, and the older fsroot found."""
+        raw, flash, step, per = self.a_dump()
+        raw = self.mark_bad(raw, flash, 3, step, per)
+        span = step * per
+        for remap in (True, False):
+            with self.assertLogs("xebuild.image.order", "WARNING") as said:
+                out = order.logical(raw, flash, remap=remap)
+            self.assertEqual(out[3 * span : 4 * span], b"\xff" * span)
+            wanted = "bad block at 0x3 (raw offset %#x), block ignored" % (3 * span)
+            self.assertIn(wanted, said.output[0])
 
     def test_a_page_whose_code_no_longer_fits_its_data_moves_the_block(self):
         """One flipped byte: "ECD error at block 0x2a, block will be remapped"."""
@@ -558,8 +573,11 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         raw, flash, step, per = self.a_dump()
         with_bad = self.stand_in(self.mark_bad(raw, flash, 3, step, per),
                                  flash, 3, 7, step, per)
-        self.assertNotEqual(order.logical(with_bad, flash), with_bad)
-        self.assertEqual(order.logical(with_bad, flash, remap=False), with_bad)
+        span = step * per
+        self.assertEqual(order.logical(with_bad, flash)[3 * span : 4 * span],
+                         with_bad[7 * span : 8 * span])
+        self.assertEqual(order.logical(with_bad, flash, remap=False),
+                         with_bad[: 3 * span] + b"\xff" * span + with_bad[4 * span :])
         broken = bytearray(raw)
         broken[(3 * per + 1) * step + 100] ^= 0x01
         self.assertEqual(order.logical(bytes(broken), flash, ecd=False), bytes(broken))
@@ -596,6 +614,11 @@ class BlocksStandingInWhenAnImageIsWritten(unittest.TestCase):
                          {2: 7, 3: 6})
         self.assertEqual(order.stand_ins(bytes(broken), self.flash, ecd=False,
                                          total=8), {2: 7})
+
+    def test_one_in_the_pool_has_no_stand_in(self):
+        """"block 0x3ff had no need of remap, it's in the wear area" -- zeroed only."""
+        raw = self.made.mark_bad(self.raw, self.flash, 7, self.step, self.per)
+        self.assertEqual(order.stand_ins(raw, self.flash, total=8), {7: None})
 
     def test_no_block_left_is_refused(self):
         raw = self.made.mark_bad(self.raw, self.flash, 2, self.step, self.per)
@@ -1026,6 +1049,23 @@ class AnImageBeingWritten(unittest.TestCase):
         self.assertEqual(image.spares[96:128], before)
         self.assertEqual(set(image.flat[0x4000:0x8000]), {0})
         self.assertEqual(set(b"".join(image.spares[32:64])), {0})
+
+    def test_a_retired_block_left_erased_still_has_its_stand_in_say_whose_it_is(self):
+        """Measured with the dump's fsroot block failing: its number, over 0xFF."""
+        image = Image.blank(TinyFlash())
+        image.retire(1, 3)
+        self.assertEqual(set(image.flat[0xC000:0x10000]), {0xFF})
+        self.assertEqual(image.spares[96], image.flash.spare.write(1))
+        self.assertEqual(set(b"".join(image.spares[32:64])), {0})
+
+    def test_a_retired_block_with_no_stand_in_is_only_zeroed(self):
+        """"Remapping block 0x3ff is not required, zerofilling"."""
+        image = Image.blank(TinyFlash())
+        image.put(0x4000, b"block one")
+        image.retire(1, None)
+        self.assertEqual(set(image.flat[0x4000:0x8000]), {0})
+        self.assertEqual(set(image.flat[0xC000:0x10000]), {0xFF})
+        self.assertEqual(set(b"".join(image.spares[96:128])), {0xFF})
 
     def test_carrying_takes_bytes_and_spare_as_they_are(self):
         source = Image.blank(TinyFlash())
