@@ -195,8 +195,11 @@ class Release:
         return self._read(path) if path else None
 
     def option(self, name: str) -> Patches:
-        """The patch set one option carries, as `bin/<name>.bin`."""
-        return Patches(self._read(self.where, "bin", "%s.bin" % name))
+        """The patch set one option carries, as `bin/<name>.bin`, in any case --
+        `addon = NOFCRT` reads `nofcrt.bin`, measured."""
+        where = os.path.join(self.where, "bin")
+        return Patches(self._read(beside(where, "%s.bin" % name)
+                                  or os.path.join(where, "%s.bin" % name)))
 
     @property
     def container(self) -> Container | None:

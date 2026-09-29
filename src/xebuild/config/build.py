@@ -53,6 +53,23 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
                     self.check_truth(name, settings[name])
                     for name in ("nodvd", "olddvd") if name in settings):
                 found.pop("xellbutton", None)
+            # The ini's `addon` -- names separated by colons -- goes on after the
+            # command line's `-a` (0x427340): a name of four characters or fewer is
+            # passed over, and one already there, in any case, is dropped with the
+            # original's warning. Measured: order, case, repeats and a short name.
+            given = settings.get("append") or ()
+            append = [given] if isinstance(given, str) else list(given)
+            for name in found.pop("addon", "").split(":"):
+                name = name.strip()
+                if len(name) <= 4:
+                    continue
+                if name.lower() in (one.lower() for one in append):
+                    logger.warning("%s was provided both on command line and in ini, "
+                                   "filtered duplicate!", name)
+                    continue
+                append.append(name)
+            if append:
+                settings["append"] = tuple(append)
             settings = {**found, **settings}
         super().__init__(**settings)
 
