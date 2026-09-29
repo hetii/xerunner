@@ -1122,7 +1122,7 @@ class Build:
         if container:
             body = self.release.container_file(plain)
             if crc and self._firmware_fits(body, plain, crc):
-                logger.warning("extracted SUPD/%s (%#x bytes)", plain, len(body))
+                logger.info("extracted SUPD/%s (%#x bytes)", plain, len(body))
                 return body, None
         body = self._console_firmware(plain, crc)
         if body is not None:
