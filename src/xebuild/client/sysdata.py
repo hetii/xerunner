@@ -69,14 +69,17 @@ def avatar_items(where: str, kernel: int) -> tuple:
         manifest = Manifest(handle.read())
     if not manifest.raw:
         raise ValueError("could not read manifest data for sysex!")
+    logger.debug("loaded system.manifest, %#x bytes", len(manifest.raw))
     said = manifest.refusal()
     if said:
         raise ValueError(said)
+    logger.debug("header ok!")
     version = manifest.version
     logger.debug("Manifest flash version: %d.%d.%d.%d", version >> 28,
                  (version >> 24) & 0xF, (version >> 8) & 0xFFFF, version & 0xF)
     if version != kernel:
         raise ValueError("this system extended data is not the correct version!")
+    logger.debug("parsing %d entries in system.manifest", len(manifest.entries))
     beside = os.path.dirname(path)
     versions, items = [kernel], []
     for entry in manifest.entries:
@@ -127,7 +130,8 @@ def send_avatars(server, where: str, kernel: int) -> None:
     except ValueError as why:
         raise ValueError("%s; avatar data skipped, unable to load data!"
                          % why) from None
-    logger.info("formatting HDD partition...")
+    logger.info("success!")
+    logger.info("Formatting HDD partition...")
     try:
         server.format_extended()
     except ServerError:
@@ -138,17 +142,20 @@ def send_avatars(server, where: str, kernel: int) -> None:
     except ServerError:
         _quietly_unmount(server, "SSEP")
         raise ValueError("unable to mount sysex partition!") from None
+    logger.debug("mounting \\SEP to SSEP:...success!")
     sending = None
     try:
         for sending in directories:
             server.make_directory(sending)
             logger.debug("created dir: %s", sending)
-        logger.info("sending avatar files to HDD partition...")
+        logger.info("success!")
+        logger.info("Sending avatar files to HDD partition...")
         for number, (sending, body) in enumerate(items, 1):
             logger.debug("sending %03d: 0x%08x (%d) bytes, %s", number, len(body),
                          len(body), sending)
             server.send_file(sending, body)
         sending = "SSEP:\\system.manifest"
+        logger.debug("sending manifest to %s", sending)
         server.send_file(sending, manifest.raw)
     except ServerError:
         _quietly_unmount(server, "SSEP")
@@ -156,6 +163,7 @@ def send_avatars(server, where: str, kernel: int) -> None:
                          % sending) from None
     logger.info("success! Avatar data is successfully sent to the console!")
     server.unmount("SSEP")
+    logger.debug("unmounting SSEP:...success!")
 
 
 def send_compatibility(server, where: str) -> None:
