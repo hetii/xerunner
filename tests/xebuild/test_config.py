@@ -338,15 +338,17 @@ class TheOptions(unittest.TestCase):
         self.assertIsNone(BuildConfig().xellbutton2)
         self.assertIsNone(BuildConfig().dualboot)
 
-    def test_a_mac_address_is_six_bytes_however_it_is_written(self):
-        # The original takes `:` and refuses `-`; a dash reads as a colon here.
+    def test_a_mac_address_is_written_one_of_three_ways(self):
+        # The original takes the first two and refuses `-`, which reads the same.
         wanted = bytes.fromhex("002248F10102")
         for written in ("00:22:48:F1:01:02", "002248F10102", "00-22-48-f1-01-02"):
             with self.subTest(written=written):
                 self.assertEqual(BuildConfig(macid=written).macid, wanted)
         self.assertIsNone(BuildConfig().macid)
-        for wrong in ("0022", "zz" * 6, "00:22:48:F1:01"):
-            with self.assertRaises(ValueError):
+        for wrong in ("0022", "zz" * 6, "00:22:48:F1:01", "0022:48F1:0102",
+                      "00:22-48:F1:01:02", "00 22 48 F1 01 02", "00.22.48.F1.01.02",
+                      "002248F1010203", ":00:22:48:F1:01:02"):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
                 BuildConfig(macid=wrong)
 
     def test_a_dvd_key_is_sixteen(self):

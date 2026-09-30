@@ -130,11 +130,9 @@ class BaseConfig(dict):
         return wanted
 
     def check_hex(self, what, given, length) -> bytes:
-        """A fixed run of bytes written as hexadecimal, separators allowed.
-
-        The original takes `:` between the bytes of a MAC address and refuses `-`. A
-        dash means the same thing to a reader, so it is read as a colon here.
-        """
+        """A fixed run of bytes written as hexadecimal, with `:`, `-` or spaces
+        between them allowed. A MAC address is held to stricter forms -- see
+        `OptionsConfig.macid`."""
         if isinstance(given, (bytes, bytearray)):
             if len(given) != length:
                 raise ValueError("%s is %d bytes, not %d" % (what, length, len(given)))
