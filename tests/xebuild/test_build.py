@@ -1042,7 +1042,7 @@ class TheSmallerRulesOfABuild(unittest.TestCase):
         from .test_security import OTHER, a_crl
         foreign = a_crl(OTHER)
         one = a_build(self, dump=False, files={"crl.bin": foreign},
-                      cpu_key=bytes(range(0x10)).hex())
+                      cpu_key=bytes(range(0x10)).hex(), one_bl_key=ONE_BL_KEY)
         self.assertEqual(one.security_file("crl.bin", 0x5A000000), foreign)
 
     def test_a_secdata_of_the_wrong_length_is_made_up_clean(self):
