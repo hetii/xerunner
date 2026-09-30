@@ -5,7 +5,6 @@ import logging
 import binascii
 
 from ..files import beside
-from ..chain import sealing
 from ..chain.stage import Stage
 from ..release.recipe import canonical
 from ..release.container import Container, intact
@@ -35,7 +34,7 @@ def locate(path: str) -> tuple:
     raise ValueError("system update container not found at or near %s!!" % path)
 
 
-def listing(container: Container) -> str:
+def listing(container: Container, one_bl_key: bytes) -> str:
     """The list, line by line as the original writes it (0x418680, 0x418450).
 
     `[bl]` holds the CF and the CG, each checksummed as a release's list checksums
@@ -47,7 +46,7 @@ def listing(container: Container) -> str:
     matched without regard to case: 7258 holds `$flash_XenonCLatin.xttp`, and its
     line is added.
     """
-    cf, cg = container.stages
+    cf, cg = container.stages(one_bl_key)
     build = Stage(cf, 0).build
     lines = ["[version]", "%d" % build, "", "[bl]",
              "cf_%d.bin,%08x" % (build, _crc(canonical(cf, "CF"))),
@@ -74,17 +73,14 @@ def listing(container: Container) -> str:
 def write_su_ini(config) -> str:
     """Ini mode, whole: the list written beside the container. Returns where it went.
 
-    The 1BL key comes from `1blkey.txt` where the tool runs. A key that fails its sum
-    is refused before anything is read -- "1blkey.txt not found or invalid, cannot
-    proceed" -- and with none at all the container is still read and checked, and the
-    CF is what fails: "could not get CF data from SU!". Measured, both, as the original
-    does them; a key that passes is the one every console has, and the CF opens under
-    no other.
+    The 1BL key comes from `1blkey.txt` where the tool runs, checked as every 1BL key
+    is -- see `OneBlKeyConfig`. With none the original reads the container and fails on
+    the CF it cannot open, "could not get CF data from SU!"; here it is said for what it
+    is, before anything is read.
     """
-    key = config.one_bl_key
-    if key is not None and sealing.key_sum(key) != sealing.key_sum(sealing.ONE_BL_KEY):
-        raise ValueError("1BL key 0x%s does not appear to be correct! 1blkey.txt not "
-                         "found or invalid, cannot proceed." % key.hex().upper())
+    if config.one_bl_key is None:
+        raise ValueError("you need to specify 1BL key! (1blkey.txt where the tool "
+                         "runs)")
     where, out = locate(config.system_update)
     logger.info("SU container found! Loading '%s'", where)
     with open(where, "rb") as handle:
@@ -92,9 +88,7 @@ def write_su_ini(config) -> str:
     if not intact(raw, content_type=0x000B0000, title=0xFFFE07D1, magic=b"SUPD"):
         raise ValueError("checks failed! Container corrupt! could not load container "
                          "'%s'!" % where)
-    if key != sealing.ONE_BL_KEY:
-        raise ValueError("could not get CF data from SU!")
-    text = listing(Container(raw))
+    text = listing(Container(raw), config.one_bl_key)
     logger.info("output set to file '%s'", out)
     with open(out, "wb") as handle:
         handle.write(text.encode("latin-1"))

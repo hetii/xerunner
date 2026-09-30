@@ -19,7 +19,8 @@ from xebuild.config.base import BaseConfig
 from xebuild.config.network import NetworkConfig
 from xebuild.config.options import OptionsConfig
 from xebuild.config.release import ReleaseConfig
-from xebuild.config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
+from xebuild.config import IniConfig, UpdateConfig
+from xebuild.config import BuildConfig, ClientConfig, ExtractConfig
 
 OPTIONS = sorted(set(OptionsConfig()) - set(BaseConfig()))
 SWITCHES = ("nodvd", "olddvd", "cygnos", "demon", "nomobile", "smcnocheck", "noremap",
@@ -161,6 +162,18 @@ class WhatBuildModeTakes(unittest.TestCase):
                         BuildConfig(**{field: wrong})
         with self.assertRaisesRegex(ValueError, "does not appear to be correct"):
             BuildConfig(one_bl_key="00112233445566778899aabbccddeeff")
+
+    def test_a_1bl_key_passes_both_of_the_original_s_checks_or_none(self):
+        """The sum, and the sum of the xex key made from it (0x41B740): two bytes
+        swapped keep the first and fail the second, measured."""
+        real = "DD88AD0C9ED669E7B56794FB68563EFA"
+        for config in (BuildConfig, IniConfig):
+            with self.subTest(config=config.__name__):
+                made = config(one_bl_key=real)
+                self.assertEqual(made.one_bl_key, bytes.fromhex(real))
+                for wrong in ("88DDAD0C9ED669E7B56794FB68563EFA", real[::-1]):
+                    with self.assertRaisesRegex(ValueError, "does not appear"):
+                        config(one_bl_key=wrong)
 
     def test_a_directory_that_is_read_has_to_be_there(self):
         made = BuildConfig(data=self.where, per_build=self.where)
@@ -416,14 +429,22 @@ class TheIni(unittest.TestCase):
         self.assertIsNone(BuildConfig(ini=self.ini).cpu_key)
 
     def test_the_command_line_beats_it(self):
-        # The 1BL key's bytes the other way round: the same sum, another key.
-        other = bytes.fromhex("DD88AD0C9ED669E7B56794FB68563EFA")[::-1].hex()
-        made = BuildConfig(ini=self.ini, patchsmc=False, console="corona",
-                           one_bl_key=other, cfldv=1)
+        made = BuildConfig(ini=self.ini, patchsmc=False, console="corona", cfldv=1)
         self.assertFalse(made.patchsmc)
         self.assertEqual(made.console.name, "corona")
-        self.assertEqual(made.one_bl_key, bytes.fromhex(other))
         self.assertEqual(made.cfldv, 1)
+
+    def test_a_1bl_key_on_the_command_line_leaves_the_ini_s_unread(self):
+        """There is one real key, so the command line's winning is shown by an ini whose
+        key would be refused: it is never looked at."""
+        ini = os.path.join(self.where, "bad1bl.ini")
+        with open(ini, "w") as handle:
+            handle.write("1blkey = 88DDAD0C9ED669E7B56794FB68563EFA\n")
+        real = "DD88AD0C9ED669E7B56794FB68563EFA"
+        self.assertEqual(BuildConfig(ini=ini, one_bl_key=real).one_bl_key,
+                         bytes.fromhex(real))
+        with self.assertRaisesRegex(ValueError, "does not appear to be correct"):
+            BuildConfig(ini=ini)
 
     def test_what_it_does_not_name_keeps_its_default(self):
         self.assertEqual(BuildConfig(ini=self.ini).image_type.name, "retail")

@@ -7,10 +7,9 @@ the previous stage was opened with -- which makes this a chain rather than a lis
 Four exceptions, and no others were found -- the fourth, a development chain's SC
 starting over from sixteen zero bytes, is noted where it happens in `keys`:
 
-**The first CB opens with a key that is public.** It is burned into every console ever
-made, so nothing about one console is needed to read its first stage. The original
-says it with a checksum beside it -- "1BL Key set to : 0xDD88... sum: 0x983 (expects:
-0x983)" -- which `key_sum` reproduces.
+**The first CB opens with the 1BL key.** It is burned into every retail console ever
+made, so nothing about one console is needed to read its first stage; like the original,
+this takes it from the configuration -- see `OneBlKeyConfig` -- rather than holding it.
 
 **The stage that binds the chain to one console** folds that console's key into the
 message. Which stage that is depends on the chain rather than on a kind: a split CB
@@ -43,17 +42,7 @@ import collections
 
 from ..crypto.keys import hmacsha
 
-ONE_BL_KEY = bytes.fromhex("DD88AD0C9ED669E7B56794FB68563EFA")
 KEY_LENGTH = 0x10
-
-
-def key_sum(key: bytes) -> int:
-    """The checksum the original states beside the 1BL key: its bytes added up.
-
-    Measured against the number the original prints for the key above, 0x983. Nothing
-    is masked, because nothing needs to be at sixteen bytes.
-    """
-    return sum(bytes(key))
 
 
 def binding_at(stages) -> int:
@@ -78,8 +67,10 @@ def message_for(stage, cpu_key: bytes, first) -> bytes:
     return stage.nonce + bytes(cpu_key)
 
 
-def keys(stages, cpu_key: bytes = b"", second_pass_at: int = -1) -> tuple:
-    """One key per stage, in order, each following from the one before it.
+def keys(stages, one_bl_key: bytes, cpu_key: bytes = b"",
+         second_pass_at: int = -1) -> tuple:
+    """One key per stage, in order, each following from the one before it, the first
+    from the 1BL key.
 
     `stages` is the chain with any inserted payload already dropped -- keying through
     one gets everything after it wrong. A stage whose secret needs a CPU key that was
@@ -92,7 +83,7 @@ def keys(stages, cpu_key: bytes = b"", second_pass_at: int = -1) -> tuple:
     the stage behind it derives from.
     """
     binds = binding_at(stages)
-    out, secret = [], ONE_BL_KEY
+    out, secret = [], bytes(one_bl_key)
     for index, stage in enumerate(stages):
         if stage.tag == "SC":
             # A development chain starts over at its SC, from sixteen zeros: measured
