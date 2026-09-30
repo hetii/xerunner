@@ -64,16 +64,16 @@ def when_in(plain: bytes) -> int:
     return int.from_bytes(plain[:8], "big") // 10_000_000 - 11644473600 - 2
 
 
-def crl_parameters(own: bytes, cpu_key: bytes) -> tuple:
+def crl_parameters(own: bytes, cpu_key: bytes, xex_key: bytes) -> tuple:
     """The vector and file key a console's own crl.bin was sealed under."""
-    _body, master, file_key = decrypt_crl(own, cpu_key)
+    _body, master, file_key = decrypt_crl(own, cpu_key, xex_key)
     if master != cpu_key:
         raise ValueError("the console's own crl.bin does not open under its own key, "
                          "so its sealing parameters cannot be carried")
     return own[IV_AT:IV_AT + aes.BLOCK], file_key
 
 
-def crl(content: bytes, cpu_key: bytes, when: int, ldv: int, iv: bytes,
+def crl(content: bytes, cpu_key: bytes, xex_key: bytes, when: int, ldv: int, iv: bytes,
         file_key: bytes, clear: bool = False) -> bytes:
     """crl.bin: a body opened, restamped and sealed under a vector and file key.
 
@@ -84,14 +84,14 @@ def crl(content: bytes, cpu_key: bytes, when: int, ldv: int, iv: bytes,
     vector and file key sitting in the copy the console already had" -- or the ones
     compiled into the original, under `nosecurity`.
     """
-    body = content[BODY_AT:] if clear else decrypt_crl(content, cpu_key)[0]
+    body = content[BODY_AT:] if clear else decrypt_crl(content, cpu_key, xex_key)[0]
     plain = bytearray(body)
     plain[0:8] = stamp(when)
     plain[0x0F] = ldv & 0xFF
     return encrypt_crl(content, bytes(plain), cpu_key, iv, file_key)
 
 
-def dae_parameters(own: bytes, cpu_key: bytes) -> tuple:
+def dae_parameters(own: bytes, cpu_key: bytes, xex_key: bytes) -> tuple:
     """The seven bytes of head and sixteen of field a console's own dae.bin carries.
 
     Read out of the original: at 0x40D298 it takes the copy it has just
@@ -101,15 +101,15 @@ def dae_parameters(own: bytes, cpu_key: bytes) -> tuple:
     found = records(own)
     if not found:
         raise ValueError("this is no dae.bin")
-    _header, plain, master = decrypt_dae(own[:found[0][1]], cpu_key)[0]
+    _header, plain, master = decrypt_dae(own[:found[0][1]], cpu_key, xex_key)[0]
     if master != cpu_key:
         raise ValueError("the console's own dae.bin does not open under its own key, "
                          "so its head and field cannot be carried")
     return plain[0x08:0x0F], own[0x120:0x130]
 
 
-def dae(content: bytes, cpu_key: bytes, when: int, ldv: int, head: bytes,
-        field: bytes) -> bytes:
+def dae(content: bytes, cpu_key: bytes, xex_key: bytes, when: int, ldv: int,
+        head: bytes, field: bytes) -> bytes:
     """dae.bin: a chain of records, each resealed under the console's key.
 
     Record by record, because each has its own zero vector. The first 0x20 bytes of
@@ -129,7 +129,7 @@ def dae(content: bytes, cpu_key: bytes, when: int, ldv: int, head: bytes,
     field = bytearray(field)
     field[1] |= 0x01
     out = []
-    for header, body, _master in decrypt_dae(content, cpu_key):
+    for header, body, _master in decrypt_dae(content, cpu_key, xex_key):
         plain = bytearray(body)
         plain[0:8] = stamp(when)
         plain[0x08:0x0F] = head
@@ -261,7 +261,8 @@ def fcrt(own: bytes, cpu_key: bytes) -> bytes:
         return own
     if _fcrt_hashed(own):
         return encrypt_fcrt(own, cpu_key)
-    if not verifies("fcrt.bin", own, cpu_key):
+    # fcrt.bin opens under the CPU key alone; no xex key is asked for.
+    if not verifies("fcrt.bin", own, cpu_key, None):
         logger.error("FCRT data appears to be crypted or damaged!! Skipping "
                      "encryption.")
     return own
@@ -285,22 +286,22 @@ def in_the_clear(name: str, blob: bytes, cpu_key: bytes) -> bool:
     return name == "secdata.bin"
 
 
-def opens(name: str, blob: bytes, cpu_key: bytes) -> bool:
+def opens(name: str, blob: bytes, cpu_key: bytes, xex_key: bytes) -> bool:
     """Whether a file handed in beside the build opens under a key this build has:
     the console's, or for the two a release ships, the shipped one."""
     try:
         if name == "crl.bin":
-            decrypt_crl(blob, cpu_key)
+            decrypt_crl(blob, cpu_key, xex_key)
         elif name == "dae.bin":
-            decrypt_dae(blob, cpu_key)
+            decrypt_dae(blob, cpu_key, xex_key)
         elif name in ("extended.bin", "secdata.bin"):
-            return verifies(name, blob, cpu_key)
+            return verifies(name, blob, cpu_key, xex_key)
     except (ValueError, IndexError):
         return False
     return True
 
 
-def verifies(name: str, own: bytes, cpu_key: bytes) -> bool:
+def verifies(name: str, own: bytes, cpu_key: bytes, xex_key: bytes) -> bool:
     """Whether a console's own copy of a security file opens under this CPU key.
 
     What the original asks of each before it will take anything from one -- "crl.bin
@@ -311,9 +312,9 @@ def verifies(name: str, own: bytes, cpu_key: bytes) -> bool:
     """
     try:
         if name == "crl.bin":
-            decrypt_crl(own, cpu_key)
+            decrypt_crl(own, cpu_key, xex_key)
         elif name == "dae.bin":
-            dae_parameters(own, cpu_key)
+            dae_parameters(own, cpu_key, xex_key)
         elif name in ("extended.bin", "secdata.bin"):
             plain = (decrypt_extended(own, cpu_key) if name == "extended.bin"
                      else decrypt_secdata(own, cpu_key))
@@ -334,7 +335,7 @@ def verifies(name: str, own: bytes, cpu_key: bytes) -> bool:
     return True
 
 
-def taken_beside(name: str, blob: bytes, cpu_key: bytes) -> tuple:
+def taken_beside(name: str, blob: bytes, cpu_key: bytes, xex_key: bytes) -> tuple:
     """What a build does with a security file handed in beside it: `(verdict, clear)`.
 
     Each kind by its own test, all measured with files made for the purpose:
@@ -356,6 +357,6 @@ def taken_beside(name: str, blob: bytes, cpu_key: bytes) -> tuple:
         return "clean", False
     clear = in_the_clear(name, blob, cpu_key)
     if not clear and name in ("crl.bin", "dae.bin", "extended.bin") and \
-            not opens(name, blob, cpu_key):
+            not opens(name, blob, cpu_key, xex_key):
         return ("clean" if name == "extended.bin" else "as is"), False
     return "use", clear

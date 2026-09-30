@@ -15,6 +15,7 @@ import hmac
 import hashlib
 import unittest
 
+from xebuild.build import security
 from xebuild.crypto import aes, formats, keys, rc4, smc
 
 
@@ -258,6 +259,13 @@ class TheSmcSCipher(unittest.TestCase):
             with self.subTest(seed=seed), self.assertRaises(ValueError):
                 formats.encrypt_smc(bytes(0x40), seed)
 
+    def test_the_compiled_in_seed_seals_to_what_the_original_writes(self):
+        """8E0375CC in the clear is the cc7ac1e7 the original writes under -norandom
+        with no console SMC -- measured on a trinity, a falcon JTAG and a corona build
+        with three different SMCs, twice over."""
+        self.assertEqual(formats.sealed_seed(security.COMPILED_IN["smc.bin"]),
+                         hexed("cc7ac1e7"))
+
     def test_something_shorter_than_its_own_seed_is_refused(self):
         with self.assertRaises(ValueError):
             formats.encrypt_smc(b"\x00\x00", hexed("cc7ac1e7"))
@@ -326,11 +334,11 @@ class ADaeThatIsNotAChainOfRecords(unittest.TestCase):
 
     def test_no_record_at_all_does_not_open(self):
         with self.assertRaisesRegex(ValueError, "expected header"):
-            formats.decrypt_dae(bytes(range(256)) * 0x40, bytes(16))
+            formats.decrypt_dae(bytes(range(256)) * 0x40, bytes(16), bytes(16))
 
     def test_bytes_left_after_the_records_do_not_open(self):
         with self.assertRaisesRegex(ValueError, "expected header"):
-            formats.decrypt_dae(self.a_record() + b"junk" * 0x60, bytes(16))
+            formats.decrypt_dae(self.a_record() + b"junk" * 0x60, bytes(16), bytes(16))
 
     def test_where_the_records_tile_the_file_the_walk_finds_them_all(self):
         blob = self.a_record() + self.a_record(0x170)

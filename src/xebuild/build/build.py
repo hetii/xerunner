@@ -29,7 +29,7 @@ from ..image import dump as dumps, order
 from ..chain import Fields, fuses, sealing, update
 from ..image.settings import TEMPERATURES, SmcConfig
 from ..chain.stage import LENGTH as STAGE_HEADER, Stage
-from ..crypto.formats import decrypt_smc, encrypt_bootloader, encrypt_smc
+from ..crypto.formats import decrypt_smc, encrypt_bootloader, encrypt_smc, sealed_seed
 from ..image import Dump, Entry, Header, Image, Keyvault, anchor as anchors
 
 # The copyright line every image carries, with the year a build replaces. Read off the
@@ -194,7 +194,7 @@ class Build:
 
         Off the dump's CF whenever there is a dump -- "setting pairing data from image
         to 0x780227". With none, `-norandom` leaves the three bytes the original stores
-        one at a time at 0x41BA43, "initializing static pairing value", and otherwise
+        one at a time at 0x41AA43, "initializing static pairing value", and otherwise
         they are drawn with everything else.
 
         Zeros for a zero-paired build -- see `zero_paired` -- whatever the dump says.
@@ -310,10 +310,9 @@ class Build:
             # alone -- measured with the dump's SMC spoilt and a good smc.bin given.
             own = self._console_smc[:4] if self._console_smc else None
             if own is None and not self.drawing:
-                # The staging buffer's 8E0375CC (0x44A640) as it comes out sealed:
-                # measured on a trinity, a falcon JTAG and a corona build with three
-                # different SMCs, twice over.
-                seed = bytes.fromhex("cc7ac1e7")
+                # The staging buffer's 8E0375CC (0x44A640), sealed as the original
+                # seals it.
+                seed = sealed_seed(security.COMPILED_IN["smc.bin"])
             else:
                 seed = self._buffer("smc.bin", own)
         return encrypt_smc(plain, seed)
@@ -1146,12 +1145,14 @@ class Build:
         if not config.nosecurity:
             own = self._console_file(name)
             if own is not None and not security.verifies(name, own,
-                                                         self.config.cpu_key):
+                                                         self.config.cpu_key,
+                                                         self.config.xex_key):
                 logger.warning("%s verify failed! Discarding data.", name)
                 own = None
         content, clear, made_clean = self.material.bytes_in(name), False, False
         if content is not None:
-            verdict, clear = security.taken_beside(name, content, self.config.cpu_key)
+            verdict, clear = security.taken_beside(name, content, self.config.cpu_key,
+                                                  self.config.xex_key)
             if verdict == "as is":
                 logger.error("%s appears to be crypted with the wrong key or damaged",
                              name)
@@ -1176,19 +1177,19 @@ class Build:
             elif name in ("crl.bin", "dae.bin", "fcrt.bin"):
                 logger.warning("%s not found in %s, SUPD or the dump; left out of the "
                                "image", name, self.material.where)
-        cpu, ldv = self.config.cpu_key, self.ldv
+        cpu, xex, ldv = self.config.cpu_key, self.config.xex_key, self.ldv
         if name == "crl.bin":
             if content is None:
                 return None
-            own_params = None if own is None else security.crl_parameters(own, cpu)
+            own_params = None if own is None else security.crl_parameters(own, cpu, xex)
             iv, key = self._buffer(name, own_params)
-            return security.crl(content, cpu, when, ldv, iv, key, clear)
+            return security.crl(content, cpu, xex, when, ldv, iv, key, clear)
         if name == "dae.bin":
             if content is None:
                 return None
-            own_params = None if own is None else security.dae_parameters(own, cpu)
+            own_params = None if own is None else security.dae_parameters(own, cpu, xex)
             head, field = self._buffer(name, own_params)
-            return security.dae(content, cpu, when, ldv, head, field)
+            return security.dae(content, cpu, xex, when, ldv, head, field)
         if name == "extended.bin":
             return security.extended(content, self.plain_keyvault().head, cpu,
                                      clear)
