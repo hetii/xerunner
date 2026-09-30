@@ -24,8 +24,8 @@ from xebuild.release.recipe import Listed
 from xebuild.image.directory import CHAIN_END
 from xebuild.chain import Chain, Fields, sealing
 from xebuild.imagetypes import for_name as type_for
-from .test_chain import a_stage, opened_under_the_1bl_key
 from xebuild.crypto.formats import decrypt_smc, encrypt_smc
+from .test_chain import ONE_BL_KEY, a_stage, opened_under_the_1bl_key
 from xebuild.build import Build, Filesystem, Material, layout, security
 from xebuild.image import Directory, Header, Image, Keyvault, dump as dumps
 
@@ -727,6 +727,7 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
         )
         one._dump = ADumpThatOnlyAnswersWhatIsAsked(tags=tags)
         one.config.cpu_key = bytes(range(0x10))
+        one.config.one_bl_key = ONE_BL_KEY
         return one
 
     def test_the_list_is_followed_until_ce_and_an_empty_slot_is_skipped(self):
@@ -824,7 +825,8 @@ class WhichStagesTheChainIsMadeOf(unittest.TestCase):
             stage = Stage(out, at)
             stages.append(stage)
             at += stage.length
-        keys = sealing.keys(stages, one.config.cpu_key, one._second_pass_at(stages))
+        keys = sealing.keys(stages, ONE_BL_KEY, one.config.cpu_key,
+                            one._second_pass_at(stages))
         return stages, [rc4(key, stage.body)
                         for stage, key in zip(stages, keys, strict=True)]
 

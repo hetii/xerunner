@@ -142,7 +142,8 @@ class Build:
                 self._dump = False
                 return None
             bigffs = self.config.bigffs if own is self.console else False
-            self._dump = Dump(raw, own, bigffs, ecd=not self.config.noecdremap)
+            self._dump = Dump(raw, own, bigffs, ecd=not self.config.noecdremap,
+                              one_bl_key=self.config.one_bl_key)
         return self._dump or None
 
     @property
@@ -618,7 +619,7 @@ class Build:
         stages = [Stage(out, at) for at in offsets]
         for stage, nonce in zip(stages, self._nonces(stages), strict=True):
             stage.nonce = nonce
-        keys = sealing.keys(stages, self.config.cpu_key or b"",
+        keys = sealing.keys(stages, self.config.one_bl_key, self.config.cpu_key or b"",
                             self._second_pass_at(stages))
         binds = self._wears_console(stages, which)
         if binds >= 0:
@@ -862,7 +863,7 @@ class Build:
         # out with nothing of the console in it, measured.
         jtag_first = self.image_type.name == "jtag" and which == 0
         if which < len(pairs) - 1 or jtag_first:
-            return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN)
+            return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN, self.config.one_bl_key)
         # The pairing goes in only where a chain binds to the console. A chain with
         # no CB_B binds nowhere, and its CF carries three zeros there and the lockdown
         # value all the same -- measured on a fat glitch image, the one such chain this
@@ -873,8 +874,8 @@ class Build:
             for chain in (0, 1) if self._chain_files(chain)
         )
         update.with_console(cf, which, self.pairing if binds else bytes(3), self.ldv,
-                            self.config.cpu_key)
-        return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN)
+                            self.config.cpu_key, self.config.one_bl_key)
+        return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN, self.config.one_bl_key)
 
     def _update_pairs(self) -> list:
         """The CF/CG pairs the file list names, in order: one, or a JTAG image's two.
@@ -1255,6 +1256,12 @@ class Build:
         # Refused here, before anything is laid, as the original does.
         if self.console is None:
             raise ValueError("you need to specify console type!")
+        # The original has no 1BL key of its own; with none handed in it cannot open a
+        # bootloader and stops at "critical bootloader files are missing". Said here
+        # for what it is.
+        if self.config.one_bl_key is None:
+            raise ValueError("you need to specify 1BL key! (-b, 1blkey.txt where the "
+                             "tool runs, or 1blkey in options.ini)")
         out = Image.blank(self.flash, self.bigffs)
         where, spills = self._system_area(out)
         placed, table_at = self._filesystem(out, where, spills, when)
@@ -1807,7 +1814,7 @@ def build_image(config, when: int | None = None) -> str:
     """
     if config.per_build is None:
         logger.warning("you did not specify per build directory! Using ./data/")
-    release = Release(config.data or "data")
+    release = Release(config.data or "data", one_bl_key=config.one_bl_key)
     one = Build(config, Material(config.per_build or "data"), release)
     image = one.image(when)
     out = config.out or one.auto_name()

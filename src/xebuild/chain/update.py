@@ -15,7 +15,6 @@ The CF is sealed under the 1BL key every console has, and the CG under the key t
 carries at 0x330. Update mode lays the same pair over a console that is running.
 """
 
-from . import sealing
 from .stage import Stage
 from ..crypto.keys import hmacsha
 from ..crypto.formats import encrypt_bootloader
@@ -40,7 +39,7 @@ def with_tail(cf: bytearray, first_block: int, count: int) -> None:
 
 
 def with_console(cf: bytearray, slot: int, pairing: bytes, ldv: int,
-                 cpu_key: bytes) -> None:
+                 cpu_key: bytes, one_bl_key: bytes) -> None:
     """Make `cf` the console's: its slot number, pairing, lockdown value and binding.
 
     The binding is an HMAC under the CPU key over everything before it, with the nonce
@@ -52,11 +51,12 @@ def with_console(cf: bytearray, slot: int, pairing: bytes, ldv: int,
     cf[0x21C:0x21F] = pairing
     cf[0x21F] = ldv & 0xFF
     message = bytearray(cf[:0x220])
-    message[0x20:0x30] = hmacsha(sealing.ONE_BL_KEY, bytes(cf[0x20:0x30]))
+    message[0x20:0x30] = hmacsha(one_bl_key, bytes(cf[0x20:0x30]))
     cf[0x220:0x230] = hmacsha(cpu_key, bytes(message))
 
 
-def sealed(cf: bytes, cg: bytes, cg_nonce: bytes, align: int) -> bytes:
+def sealed(cf: bytes, cg: bytes, cg_nonce: bytes, align: int,
+           one_bl_key: bytes) -> bytes:
     """CF under the 1BL key, and CG under the key CF carries at 0x330, as one run.
 
     CG is sealed over its padding to `align` too, as every stage is: its tail file is
@@ -64,7 +64,7 @@ def sealed(cf: bytes, cg: bytes, cg_nonce: bytes, align: int) -> bytes:
     """
     stage = Stage(bytes(cf), 0)
     sealed_cf = stage.head + encrypt_bootloader(
-        stage.body, hmacsha(sealing.ONE_BL_KEY, stage.nonce))
+        stage.body, hmacsha(one_bl_key, stage.nonce))
     cg = bytes(cg) + bytes(-len(cg) % align)
     head = len(Stage(cg, 0).head)
     key = hmacsha(bytes(cf[0x330:0x340]), cg_nonce)

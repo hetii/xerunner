@@ -33,7 +33,6 @@ well, twenty-two of twenty-two.
 import struct
 import hashlib
 
-from ..chain import sealing
 from ..chain.stage import Stage
 from ..crypto.keys import hmacsha
 from ..crypto.formats import decrypt_bootloader
@@ -243,17 +242,16 @@ class Container(Package):
             raise ValueError("%s is not in this package" % name)
         return self.read(held)
 
-    @property
-    def stages(self) -> tuple:
+    def stages(self, one_bl_key: bytes) -> tuple:
         """The CF and the CG, opened, in that order.
 
-        They are sealed and they are not independent: the CF opens under the key every
-        console carries, and holds the key the CG opens under.
+        They are sealed and they are not independent: the CF opens under the 1BL key,
+        and holds the key the CG opens under.
         """
         raw = self.read("xboxupd.bin")
         cf = Stage(raw, 0)
         opened = cf.head + decrypt_bootloader(
-            cf.body, hmacsha(sealing.ONE_BL_KEY, cf.nonce))
+            cf.body, hmacsha(one_bl_key, cf.nonce))
         cg = Stage(raw, cf.length)
         # Sixteen bytes at 0x330 of the opened CF are what the CG is keyed from.
         return opened, cg.head + decrypt_bootloader(

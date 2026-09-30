@@ -185,8 +185,11 @@ def faulty(raw: bytes, flash, whole: int | None = None, ecd: bool = True) -> str
 class Dump:
     """One console's flash, with its blocks in the order the console reads them."""
 
-    def __init__(self, raw: bytes, board, bigffs: bool = False, ecd: bool = True):
+    def __init__(self, raw: bytes, board, bigffs: bool = False, ecd: bool = True,
+                 one_bl_key: bytes | None = None):
         self.board = board
+        # What its CFs open under; with none its pairing and lockdown value stay sealed.
+        self.one_bl_key = one_bl_key
         self.flash = board.flash
         # The original drops these blocks and this keeps them -- see `image.order`.
         step = PAGE + board.flash.spare.length if board.flash.spare is not None else 0
@@ -356,7 +359,7 @@ class Dump:
     def chain(self):
         """This console's bootloader chain."""
         from ..chain import Chain
-        return Chain(self.image, self.board)
+        return Chain(self.image, self.board, self.one_bl_key)
 
     @property
     def pairing(self) -> bytes:
