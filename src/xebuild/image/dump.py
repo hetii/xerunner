@@ -198,7 +198,11 @@ class Dump:
                            "jasper type console!")
         self.image = Image(logical(raw, board.flash), board.flash, bigffs)
         if not self.fsroot_found:
-            logger.error("Could not find fsroot!")
+            logger.error("Could not find fsroot! The dump's filesystem table is "
+                         "gone, so none of this console's own files are taken from "
+                         "it: crl.bin, dae.bin, extended.bin, fcrt.bin, secdata.bin, "
+                         "Mobile*.dat, Statistics.settings and Manufacturing.data come "
+                         "from the update, are made up clean or are left out")
         if not self.header.keyvault_at:
             logger.warning("KeyVault cannot be at 0x0, trying 0x4000")
         if self.header.smc_at not in (0x800, 0x1000):
