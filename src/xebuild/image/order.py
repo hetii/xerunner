@@ -104,12 +104,18 @@ def _spares(raw: bytes, flash) -> list:
 
 
 def marked_bad(raw: bytes, flash) -> tuple:
-    """Every block the chip itself has written off, by its mark byte."""
+    """Every block the chip itself has written off, by its mark byte.
+
+    Read where the original reads it (0x415B00): on the block's first page and on the
+    page halfway through it -- 0 and 16 of a small block part's 32 (0x415B30,
+    0x415C30), 0 and 128 of a big block's 256 (0x415B45, 0x415B4E). A mark on any other
+    page does not write the block off.
+    """
     spares, per = _spares(raw, flash), flash.spare.pages_a_block
     out = []
     for block in range(len(spares) // per):
-        pages = spares[block * per : (block + 1) * per]
-        if any(not flash.spare.is_good(one) for one in pages):
+        if any(not flash.spare.is_good(spares[block * per + page])
+               for page in (0, per // 2)):
             out.append(block)
     return tuple(out)
 
@@ -184,15 +190,19 @@ def mixed_controller(raw: bytes, flash, ecd: bool = True) -> tuple:
 def replacements(raw: bytes, flash) -> dict:
     """Which block in the pool stands in for which, by the number it carries.
 
-    The pool is what lies past the last block a build may use. A block claiming
-    another's number from anywhere else is not a replacement -- the original turns one
-    away as a bad LBA -- so nothing outside the pool is looked at.
+    The pool is the dump's last 0x20 blocks: the original takes a block's number from
+    one of them (0x416229), passes over the two below with "ignoring possible remap"
+    (0x41645A), and calls any lower one that carries another's number a bad LBA
+    (0x415D06). A number of the dump's last block or past it is a bad LBA too
+    (0x415B74). A later claim on the same block wins, as the original copies each in
+    turn.
     """
     spares, per = _spares(raw, flash), flash.spare.pages_a_block
+    count = len(spares) // per
     out = {}
-    for block in range(flash.last_block + 1, len(spares) // per):
+    for block in range(max(count - 0x20, 0), count):
         claimed = flash.spare.block_number(spares[block * per])
-        if claimed != block and claimed <= flash.last_block:
+        if claimed != block and claimed < count - 1:
             out[claimed] = block
     return out
 
@@ -206,9 +216,9 @@ def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
     for it, and otherwise to the highest one nothing else holds, counting down from
     `total` -- "block 0x100 had no remap, assigning remap block 0x3ff". Measured on a
     dump with one block marked bad and one failing its code: 0x3FF and 0x3FE, in that
-    order. One past the last block a build may use is in the pool itself: it has no
-    stand-in, None here, and is only zeroed -- "block 0x3ff had no need of remap, it's
-    in the wear area", measured.
+    order. A block of the pool itself -- the last 0x20 -- has no stand-in, None here,
+    and is only zeroed (0x415F3F, 0x4129A3): "block 0x3ff had no need of remap, it's in
+    the wear area", measured.
     """
     bad = set(marked_bad(raw, flash))
     if ecd:
@@ -221,15 +231,20 @@ def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
     taken = bad | set(standing.values())
     free, out = total - 1, {}
     for block in sorted(bad):
-        if block > flash.last_block:
+        stand_in = standing.get(block)
+        # A pool block with nothing standing in for it is not moved (0x415F2E only
+        # looks at those, 0x415F3F): "had no need of remap".
+        if stand_in is None and block >= total - 0x20:
             logger.debug("block %#x had no need of remap, it's in the wear area", block)
             out[block] = None
             continue
-        stand_in = standing.get(block)
         if stand_in is None:
             while free in taken:
                 free -= 1
-            if free < 0:
+            # Only the pool's blocks stand in (0x415F8E). Where none is left the
+            # original says "had no remap, and I could not assign one!" and writes the
+            # block unmoved; that is refused here.
+            if free < total - 0x20:
                 raise ValueError("this flash has no good block left to stand in for "
                                  "block %#x" % block)
             stand_in = free
@@ -240,30 +255,27 @@ def stand_ins(raw: bytes, flash, ecd: bool = True, total: int = 0) -> dict:
     return out
 
 
-def logical(raw: bytes, flash, remap: bool = True, ecd: bool = True) -> bytes:
+def logical(raw: bytes, flash) -> bytes:
     """The dump with every replaced block's contents back where they belong.
 
     Handed a dump whose blocks are all where their numbers say -- which is every dump
     off a console that has never replaced one -- this gives the same bytes back, so it
     costs nothing to put in front of any read.
 
-    A block the chip marked bad is not read at all, whatever the options: it is left
-    erased unless a block standing in for it fills it. Measured with the dump's fsroot
-    block marked bad, plain and under `noremap` and `noecdremap`: "bad block at 0x398
-    (raw offset 0xed3000), block ignored", and the older fsroot is the one found. A
-    block failing its code is still read where nothing stands in for it.
+    The original reads a dump block by block into a buffer it first fills with 0xFF
+    (0x4178F6, 0x41790E): a block marked bad is not copied -- "bad block at 0x398 (raw
+    offset 0xed3000), block ignored" (0x41649B) -- and each pool block is copied over
+    the block whose number it carries -- "copying nanddump data from block 0x3ff to
+    block 0x398 for file extraction integrity" (0x41623D). A block failing its code is
+    copied where it lies (0x4165D8). None of it depends on `noremap` or `noecdremap`:
+    the first only drops the remap table after the read (0x416403) and the second only
+    whether a failing block is counted as one.
     """
     if flash.spare is None:
         return bytes(raw)
     bad = marked_bad(raw, flash)
-    standing = replacements(raw, flash) if remap else {}
-    # A block the pool stands in for is read from there, marked or not -- measured:
-    # "copying nanddump data from block 0x3ff to block 0x100 for file extraction
-    # integrity" for a block the chip had not written off.
-    wanted = set(bad) | set(standing) if remap else set()
-    if remap and ecd:
-        wanted |= set(failing(raw, flash))
-    if not bad and not wanted:
+    standing = replacements(raw, flash)
+    if not bad and not standing:
         return bytes(raw)
     step, per = PAGE + flash.spare.length, flash.spare.pages_a_block
     span = step * per
@@ -272,12 +284,7 @@ def logical(raw: bytes, flash, remap: bool = True, ecd: bool = True) -> bytes:
         logger.warning("bad block at %#x (raw offset %#x), block ignored", block,
                        block * span)
         out[block * span : (block + 1) * span] = b"\xff" * span
-    for block in sorted(wanted):
-        stands = standing.get(block)
-        if stands is None:
-            if block not in bad:
-                logger.warning("block %#x has no replacement in the dump", block)
-            continue
+    for block, stands in sorted(standing.items(), key=lambda one: one[1]):
         logger.debug("copying block %#x to block %#x", stands, block)
         out[block * span : (block + 1) * span] = raw[
             stands * span : (stands + 1) * span

@@ -185,8 +185,7 @@ def faulty(raw: bytes, flash, whole: int | None = None, ecd: bool = True) -> str
 class Dump:
     """One console's flash, with its blocks in the order the console reads them."""
 
-    def __init__(self, raw: bytes, board, bigffs: bool = False,
-                 remap: bool = True, ecd: bool = True):
+    def __init__(self, raw: bytes, board, bigffs: bool = False, ecd: bool = True):
         self.board = board
         self.flash = board.flash
         # The original drops these blocks and this keeps them -- see `image.order`.
@@ -197,7 +196,7 @@ class Dump:
                            block * step * board.flash.spare.pages_a_block)
             logger.warning("this is likely caused by previously using jaspersb on a "
                            "jasper type console!")
-        self.image = Image(logical(raw, board.flash, remap, ecd), board.flash, bigffs)
+        self.image = Image(logical(raw, board.flash), board.flash, bigffs)
         if not self.fsroot_found:
             logger.error("Could not find fsroot!")
         if not self.header.keyvault_at:

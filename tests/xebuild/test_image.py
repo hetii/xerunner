@@ -484,18 +484,18 @@ class AKeyvaultHandedIn(unittest.TestCase):
 
 
 class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
-    """Every rule here was measured by handing the original a dump made for the purpose.
+    """Every rule here was measured by handing the original a dump made for the purpose,
+    and read out of its code (0x416150, 0x415B00).
 
-    A tiny flash again, but one with a pool: eight blocks of which five may be used, so
-    blocks 6 and 7 are where a replacement may live.
+    A small flash with a pool: 0x40 blocks, the last 0x20 of which are where a
+    replacement may live; 0x1E and 0x1F are the two the original passes over.
     """
 
     class PooledFlash(SmallNand):
-        blocks = 8
-        last_block = 5
+        blocks = 0x40
 
     def a_dump(self):
-        """Eight blocks, each holding its own number and claiming it in its spare."""
+        """0x40 blocks, each holding its own number and claiming it in its spare."""
         flash = self.PooledFlash()
         step, per = PAGE + flash.spare.length, flash.spare.pages_a_block
         out = bytearray()
@@ -505,9 +505,9 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
             out += (data + flash.spare.with_ecc(data, fields)) * per
         return bytes(out), flash, step, per
 
-    def mark_bad(self, raw, flash, block, step, per):
+    def mark_bad(self, raw, flash, block, step, per, pages=None):
         out = bytearray(raw)
-        for page in range(per):
+        for page in range(per) if pages is None else pages:
             at = (block * per + page) * step
             fields = bytearray(out[at + PAGE : at + step])
             fields[flash.spare.mark_at] = 0x00
@@ -520,7 +520,7 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         out = bytearray(raw)
         for page in range(per):
             at = (pool * per + page) * step
-            data = bytes([bad]) * PAGE
+            data = bytes([0x80 | bad]) * PAGE
             fields = flash.spare.write(bad, sequence=1, kind=0)
             out[at : at + PAGE] = data
             out[at + PAGE : at + step] = flash.spare.with_ecc(data, fields)
@@ -534,54 +534,60 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         self.assertEqual(order.failing(raw, flash), ())
         self.assertEqual(order.replacements(raw, flash), {})
 
-    def test_a_block_the_chip_wrote_off_is_found(self):
+    def test_a_block_is_written_off_by_its_first_or_middle_page_only(self):
+        """0x415B30 and 0x415C30: the mark byte of pages 0 and 16 of 32."""
         raw, flash, step, per = self.a_dump()
-        raw = self.mark_bad(raw, flash, 3, step, per)
-        self.assertEqual(order.marked_bad(raw, flash), (3,))
+        for pages, wanted in (([0], (3,)), ([per // 2], (3,)), ([1, 5, per - 1], ())):
+            with self.subTest(pages=pages):
+                marked = self.mark_bad(raw, flash, 3, step, per, pages)
+                self.assertEqual(order.marked_bad(marked, flash), wanted)
 
     def test_its_contents_come_from_the_pool(self):
         """What the original does: "copying nanddump data from block X to block Y"."""
         raw, flash, step, per = self.a_dump()
         raw = self.mark_bad(raw, flash, 3, step, per)
-        raw = self.stand_in(raw, flash, 3, 7, step, per)
-        self.assertEqual(order.replacements(raw, flash), {3: 7})
+        raw = self.stand_in(raw, flash, 3, 0x3F, step, per)
+        self.assertEqual(order.replacements(raw, flash), {3: 0x3F})
         span = step * per
         out = order.logical(raw, flash)
-        self.assertEqual(out[3 * span : 4 * span], raw[7 * span : 8 * span])
+        self.assertEqual(out[3 * span : 4 * span], raw[0x3F * span : 0x40 * span])
 
     def test_a_pool_block_stands_in_even_for_a_block_not_written_off(self):
         """Measured: "copying nanddump data from block 0x3ff to block 0x100 for file
         extraction integrity" with block 0x100 unmarked."""
         raw, flash, step, per = self.a_dump()
-        raw = self.stand_in(raw, flash, 3, 7, step, per)
+        raw = self.stand_in(raw, flash, 3, 0x3F, step, per)
         span = step * per
         self.assertEqual(order.logical(raw, flash)[3 * span : 4 * span],
-                         raw[7 * span : 8 * span])
-        self.assertEqual(order.logical(raw, flash, remap=False), raw)
-        self.assertEqual(order.stand_ins(raw, flash, total=8), {3: 7})
+                         raw[0x3F * span : 0x40 * span])
+        self.assertEqual(order.stand_ins(raw, flash, total=0x40), {3: 0x3F})
 
-    def test_a_block_claiming_another_s_number_outside_the_pool_is_no_replacement(self):
-        """The original turns one away: "bad LBA at block 0x387, block LBA ignored"."""
+    def test_only_the_last_0x20_blocks_are_the_pool(self):
+        """0x416229 honours the pool's claims, 0x41645A passes over the two below it
+        ("ignoring possible remap"), 0x415D06 calls a lower one a bad LBA."""
         raw, flash, step, per = self.a_dump()
-        raw = self.mark_bad(raw, flash, 3, step, per)
-        raw = self.stand_in(raw, flash, 3, 4, step, per)  # 4 is inside the usable area
-        self.assertEqual(order.replacements(raw, flash), {})
-        span = step * per
-        self.assertEqual(order.logical(raw, flash),
-                         raw[: 3 * span] + b"\xff" * span + raw[4 * span :])
+        for pool, wanted in ((0x20, {3: 0x20}), (0x1F, {}), (0x1E, {}), (4, {})):
+            with self.subTest(pool=pool):
+                claimed = self.stand_in(raw, flash, 3, pool, step, per)
+                self.assertEqual(order.replacements(claimed, flash), wanted)
+
+    def test_a_claim_on_the_last_block_or_past_it_is_no_replacement(self):
+        """0x415B74: a number of the dump's last block or more is a bad LBA."""
+        raw, flash, step, per = self.a_dump()
+        self.assertEqual(order.replacements(
+            self.stand_in(raw, flash, 0x3F, 0x3E, step, per), flash), {})
 
     def test_a_block_written_off_with_nothing_standing_in_is_not_read(self):
         """Measured with the fsroot block marked bad: "bad block at 0x398 (raw offset
-        0xed3000), block ignored", under `noremap` too, and the older fsroot found."""
+        0xed3000), block ignored", and the older fsroot found."""
         raw, flash, step, per = self.a_dump()
         raw = self.mark_bad(raw, flash, 3, step, per)
         span = step * per
-        for remap in (True, False):
-            with self.assertLogs("xebuild.image.order", "WARNING") as said:
-                out = order.logical(raw, flash, remap=remap)
-            self.assertEqual(out[3 * span : 4 * span], b"\xff" * span)
-            wanted = "bad block at 0x3 (raw offset %#x), block ignored" % (3 * span)
-            self.assertIn(wanted, said.output[0])
+        with self.assertLogs("xebuild.image.order", "WARNING") as said:
+            out = order.logical(raw, flash)
+        self.assertEqual(out[3 * span : 4 * span], b"\xff" * span)
+        wanted = "bad block at 0x3 (raw offset %#x), block ignored" % (3 * span)
+        self.assertIn(wanted, said.output[0])
 
     def test_a_page_whose_code_no_longer_fits_its_data_moves_the_block(self):
         """One flipped byte: "ECD error at block 0x2a, block will be remapped"."""
@@ -589,19 +595,7 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
         broken = bytearray(raw)
         broken[(3 * per + 1) * step + 100] ^= 0x01
         self.assertEqual(order.failing(bytes(broken), flash), (3,))
-
-    def test_what_the_two_options_turn_off(self):
-        raw, flash, step, per = self.a_dump()
-        with_bad = self.stand_in(self.mark_bad(raw, flash, 3, step, per),
-                                 flash, 3, 7, step, per)
-        span = step * per
-        self.assertEqual(order.logical(with_bad, flash)[3 * span : 4 * span],
-                         with_bad[7 * span : 8 * span])
-        self.assertEqual(order.logical(with_bad, flash, remap=False),
-                         with_bad[: 3 * span] + b"\xff" * span + with_bad[4 * span :])
-        broken = bytearray(raw)
-        broken[(3 * per + 1) * step + 100] ^= 0x01
-        self.assertEqual(order.logical(bytes(broken), flash, ecd=False), bytes(broken))
+        self.assertEqual(order.logical(bytes(broken), flash), bytes(broken))
 
     def test_an_emmc_image_has_nothing_to_put_in_order(self):
         board, _ = for_name("corona4g")
@@ -610,7 +604,7 @@ class PuttingBlocksBackWhereTheyBelong(unittest.TestCase):
 
 
 class BlocksStandingInWhenAnImageIsWritten(unittest.TestCase):
-    """`order.stand_ins`, the other direction from `logical`."""
+    """`order.stand_ins`, the other direction from `logical` (0x415EF0)."""
 
     helper = PuttingBlocksBackWhereTheyBelong
 
@@ -619,32 +613,47 @@ class BlocksStandingInWhenAnImageIsWritten(unittest.TestCase):
         self.raw, self.flash, self.step, self.per = self.made.a_dump()
 
     def test_a_dump_with_nothing_written_off_moves_nothing(self):
-        self.assertEqual(order.stand_ins(self.raw, self.flash, total=8), {})
+        self.assertEqual(order.stand_ins(self.raw, self.flash, total=0x40), {})
 
     def test_a_block_with_a_stand_in_already_keeps_it(self):
         raw = self.made.mark_bad(self.raw, self.flash, 3, self.step, self.per)
-        raw = self.made.stand_in(raw, self.flash, 3, 6, self.step, self.per)
-        self.assertEqual(order.stand_ins(raw, self.flash, total=8), {3: 6})
+        raw = self.made.stand_in(raw, self.flash, 3, 0x3E, self.step, self.per)
+        self.assertEqual(order.stand_ins(raw, self.flash, total=0x40), {3: 0x3E})
 
     def test_otherwise_the_highest_free_block_counting_down(self):
         """"block 0x100 had no remap, assigning remap block 0x3ff", then 0x3fe."""
         raw = self.made.mark_bad(self.raw, self.flash, 2, self.step, self.per)
         broken = bytearray(raw)
         broken[(3 * self.per + 1) * self.step + 100] ^= 0x01
-        self.assertEqual(order.stand_ins(bytes(broken), self.flash, total=8),
-                         {2: 7, 3: 6})
+        self.assertEqual(order.stand_ins(bytes(broken), self.flash, total=0x40),
+                         {2: 0x3F, 3: 0x3E})
         self.assertEqual(order.stand_ins(bytes(broken), self.flash, ecd=False,
-                                         total=8), {2: 7})
+                                         total=0x40), {2: 0x3F})
 
     def test_one_in_the_pool_has_no_stand_in(self):
         """"block 0x3ff had no need of remap, it's in the wear area" -- zeroed only."""
-        raw = self.made.mark_bad(self.raw, self.flash, 7, self.step, self.per)
-        self.assertEqual(order.stand_ins(raw, self.flash, total=8), {7: None})
+        for block in (0x3F, 0x20):
+            with self.subTest(block=block):
+                raw = self.made.mark_bad(self.raw, self.flash, block, self.step,
+                                         self.per)
+                self.assertEqual(order.stand_ins(raw, self.flash, total=0x40),
+                                 {block: None})
 
-    def test_no_block_left_is_refused(self):
-        raw = self.made.mark_bad(self.raw, self.flash, 2, self.step, self.per)
+    def test_a_pool_block_another_pool_block_stands_in_for_is_moved(self):
+        """Measured: block 0x3f0 claiming 0x3fe moves 0x3fe to it on writing."""
+        raw = self.made.stand_in(self.raw, self.flash, 0x3E, 0x30, self.step, self.per)
+        self.assertEqual(order.stand_ins(raw, self.flash, total=0x40), {0x3E: 0x30})
+
+    def test_no_block_left_in_the_pool_is_refused(self):
+        """The pool gives its 0x20 blocks, 0x3F down to 0x20 (0x415F8E) -- measured
+        with 32 bad blocks, the last going to 0x3e0 -- less any it has lost itself."""
+        raw = self.raw
+        for block in range(0x20):
+            raw = self.made.mark_bad(raw, self.flash, block, self.step, self.per, [0])
+        self.assertEqual(order.stand_ins(raw, self.flash, total=0x40)[0x1F], 0x20)
+        raw = self.made.mark_bad(raw, self.flash, 0x3F, self.step, self.per, [0])
         with self.assertRaises(ValueError):
-            order.stand_ins(raw, self.flash, total=0)
+            order.stand_ins(raw, self.flash, total=0x40)
 
 
 class TheNetworkDebuggingBlock(unittest.TestCase):

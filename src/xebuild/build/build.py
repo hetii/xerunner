@@ -142,8 +142,7 @@ class Build:
                 self._dump = False
                 return None
             bigffs = self.config.bigffs if own is self.console else False
-            self._dump = Dump(raw, own, bigffs, remap=not self.config.noremap,
-                              ecd=not self.config.noecdremap)
+            self._dump = Dump(raw, own, bigffs, ecd=not self.config.noecdremap)
         return self._dump or None
 
     @property
