@@ -1806,7 +1806,7 @@ def build_image(config, when: int | None = None) -> str:
     Returns where the image went. `when` is the build's clock, for reproducing one.
     """
     if config.per_build is None:
-        logger.info("you did not specify per build directory! Using ./data/")
+        logger.warning("you did not specify per build directory! Using ./data/")
     release = Release(config.data or "data")
     one = Build(config, Material(config.per_build or "data"), release)
     image = one.image(when)
