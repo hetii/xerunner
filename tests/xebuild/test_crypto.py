@@ -15,6 +15,7 @@ import hmac
 import hashlib
 import unittest
 
+from xebuild.build import security
 from xebuild.crypto import aes, formats, keys, rc4, smc
 
 
@@ -257,6 +258,13 @@ class TheSmcSCipher(unittest.TestCase):
         for seed in (b"", b"\x01\x02\x03", b"\x01\x02\x03\x04\x05"):
             with self.subTest(seed=seed), self.assertRaises(ValueError):
                 formats.encrypt_smc(bytes(0x40), seed)
+
+    def test_the_compiled_in_seed_seals_to_what_the_original_writes(self):
+        """8E0375CC in the clear is the cc7ac1e7 the original writes under -norandom
+        with no console SMC -- measured on a trinity, a falcon JTAG and a corona build
+        with three different SMCs, twice over."""
+        self.assertEqual(formats.sealed_seed(security.COMPILED_IN["smc.bin"]),
+                         hexed("cc7ac1e7"))
 
     def test_something_shorter_than_its_own_seed_is_refused(self):
         with self.assertRaises(ValueError):

@@ -290,6 +290,17 @@ def encrypt_smc(plain: bytes, seed: bytes) -> bytes:
     return bytes(out)
 
 
+def sealed_seed(clear: bytes) -> bytes:
+    """The four bytes a sealed SMC opens with, out of the four in the clear they
+    seal. The original's staging buffer (0x44A640) holds the clear form and seals it
+    with the rest of the image (0x41BCC7); `encrypt_smc` takes the sealed form."""
+    keys, out = list(SMC_KEY), bytearray(SEED_LENGTH)
+    for index in range(SEED_LENGTH):
+        out[index] = clear[index] ^ (keys[index & 3] & 0xFF)
+        _advanced(keys, index, out[index])
+    return bytes(out)
+
+
 # --- bootloader stages -------------------------------------------------------------
 
 def decrypt_bootloader(body: bytes, key: bytes) -> bytes:

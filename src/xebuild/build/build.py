@@ -29,7 +29,7 @@ from ..image import dump as dumps, order
 from ..chain import Fields, fuses, sealing, update
 from ..image.settings import TEMPERATURES, SmcConfig
 from ..chain.stage import LENGTH as STAGE_HEADER, Stage
-from ..crypto.formats import decrypt_smc, encrypt_bootloader, encrypt_smc
+from ..crypto.formats import decrypt_smc, encrypt_bootloader, encrypt_smc, sealed_seed
 from ..image import Dump, Entry, Header, Image, Keyvault, anchor as anchors
 
 # The copyright line every image carries, with the year a build replaces. Read off the
@@ -310,10 +310,9 @@ class Build:
             # alone -- measured with the dump's SMC spoilt and a good smc.bin given.
             own = self._console_smc[:4] if self._console_smc else None
             if own is None and not self.drawing:
-                # The staging buffer's 8E0375CC (0x44A640) as it comes out sealed:
-                # measured on a trinity, a falcon JTAG and a corona build with three
-                # different SMCs, twice over.
-                seed = bytes.fromhex("cc7ac1e7")
+                # The staging buffer's 8E0375CC (0x44A640), sealed as the original
+                # seals it.
+                seed = sealed_seed(security.COMPILED_IN["smc.bin"])
             else:
                 seed = self._buffer("smc.bin", own)
         return encrypt_smc(plain, seed)
