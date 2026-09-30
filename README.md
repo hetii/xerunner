@@ -84,6 +84,11 @@ the code makes the decision:
   afterwards. So is a `[rawpatch]` offset in a file list that is not a number: the
   original reads `f0000` as 0 and writes the file over the flash header. --
   `config/base.py`, `check_number`; `release/recipe.py`, `Recipe.raw_patches`
+- **A MAC address is taken in three written forms and no other:** `002248F10102`,
+  `00:22:48:F1:01:02` and `00-22-48-F1-01-02`, the same in options.ini and after `-o`.
+  The original refuses the dashes on the command line, garbles them in options.ini
+  ("invalid length macid '00:-2:2-:48:...'") and builds without the address, and takes
+  forms like `0022:48F1:0102`. -- `config/options.py`, `OptionsConfig.macid`
 - **A kv.bin that is neither 0x4000 nor 0x3FF0 bytes is refused.** The original says
   "kv.bin is not the correct size! Skipping verification and encryption!" and writes the
   file into the image unsealed, which gives the console a keyvault it cannot open.
