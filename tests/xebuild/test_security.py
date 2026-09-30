@@ -12,10 +12,13 @@ import unittest
 from xebuild.build import security
 from xebuild.crypto import formats
 from xebuild.crypto.rc4 import rc4
+from .test_chain import ONE_BL_KEY
+from xebuild.config import BuildConfig
 from xebuild.crypto.keys import hmacsha
 
 KEY = bytes(range(0x10))
 OTHER = bytes(range(0x10, 0x20))
+XEX = BuildConfig(one_bl_key=ONE_BL_KEY).xex_key
 WHEN = 0x5A123457
 
 
@@ -34,15 +37,15 @@ def a_crl(cpu_key: bytes = KEY, clear: bool = False) -> bytes:
     plain = a_record(b"CRLP", 0xA00, 1)
     if clear:
         return plain
-    return security.crl(plain, cpu_key, WHEN, 14, bytes(0x10), bytes(range(3, 0x13)),
-                        clear=True)
+    return security.crl(plain, cpu_key, XEX, WHEN, 14, bytes(0x10),
+                        bytes(range(3, 0x13)), clear=True)
 
 
 def a_dae(cpu_key: bytes = KEY, clear: bool = False) -> bytes:
     plain = a_record(b"DAEP", 0x400, 2) + a_record(b"DAEP", 0x300, 3)
     if clear:
         return plain
-    return security.dae(plain, cpu_key, WHEN, 14, bytes(7), bytes(0x10))
+    return security.dae(plain, cpu_key, XEX, WHEN, 14, bytes(7), bytes(0x10))
 
 
 class TellingOpenFromSealed(unittest.TestCase):
@@ -73,8 +76,8 @@ class TellingOpenFromSealed(unittest.TestCase):
 class WhatOpens(unittest.TestCase):
 
     def test_a_crl_opens_under_its_console_s_key_and_not_another_s(self):
-        self.assertTrue(security.opens("crl.bin", a_crl(), KEY))
-        self.assertFalse(security.opens("crl.bin", a_crl(OTHER), KEY))
+        self.assertTrue(security.opens("crl.bin", a_crl(), KEY, XEX))
+        self.assertFalse(security.opens("crl.bin", a_crl(OTHER), KEY, XEX))
 
     def test_a_dae_opens_record_by_record_and_may_be_mixed(self):
         """0x41E1CA: each record open, or under the console's key or the shipped."""
@@ -84,20 +87,27 @@ class WhatOpens(unittest.TestCase):
         mixed = plain[:first] + sealed[first:]
         for blob in (sealed, plain, mixed):
             with self.subTest(len(blob)):
-                self.assertTrue(security.opens("dae.bin", blob, KEY))
-        self.assertFalse(security.opens("dae.bin", a_dae(OTHER), KEY))
+                self.assertTrue(security.opens("dae.bin", blob, KEY, XEX))
+        self.assertFalse(security.opens("dae.bin", a_dae(OTHER), KEY, XEX))
+
+    def test_a_crl_or_dae_the_console_s_key_cannot_open_opens_under_the_xex_key(self):
+        """0x402020, 0x402210: the key the 1BL key derives is the second one tried."""
+        for name, blob in (("crl.bin", a_crl(XEX)), ("dae.bin", a_dae(XEX))):
+            with self.subTest(name):
+                self.assertTrue(security.opens(name, blob, KEY, XEX))
+                self.assertFalse(security.opens(name, blob, KEY, OTHER))
 
     def test_a_dae_sealed_from_open_records_seals_the_same_as_from_sealed_ones(self):
         """Whatever state it came in, what goes into the image is the same."""
         mixed = a_dae(clear=True)[:0x400] + a_dae()[0x400:]
-        self.assertEqual(security.dae(mixed, KEY, WHEN, 14, bytes(7), bytes(0x10)),
+        self.assertEqual(security.dae(mixed, KEY, XEX, WHEN, 14, bytes(7), bytes(0x10)),
                          a_dae())
 
     def test_an_open_crl_seals_the_same_as_a_sealed_one(self):
         iv, key = bytes(0x10), bytes(range(3, 0x13))
         self.assertEqual(
-            security.crl(a_crl(clear=True), KEY, WHEN, 14, iv, key, clear=True),
-            security.crl(a_crl(), KEY, WHEN, 14, iv, key),
+            security.crl(a_crl(clear=True), KEY, XEX, WHEN, 14, iv, key, clear=True),
+            security.crl(a_crl(), KEY, XEX, WHEN, 14, iv, key),
         )
 
 
@@ -116,8 +126,8 @@ class TheKeyvaultStyleTwo(unittest.TestCase):
 
     def test_an_extended_that_does_not_verify_is_not_opened(self):
         sealed = security.extended(None, b"HEADHEAD", OTHER)
-        self.assertFalse(security.opens("extended.bin", sealed, KEY))
-        self.assertTrue(security.opens("extended.bin", sealed, OTHER))
+        self.assertFalse(security.opens("extended.bin", sealed, KEY, XEX))
+        self.assertTrue(security.opens("extended.bin", sealed, OTHER, XEX))
 
 
 class TheStamp(unittest.TestCase):
@@ -136,28 +146,30 @@ class AFileHandedInBesideTheBuild(unittest.TestCase):
 
     def test_the_wrong_length_is_made_up_clean(self):
         """0x41D6B4 and 0x41D9BF: "is not the correct size!"."""
-        self.assertEqual(security.taken_beside("extended.bin", bytes(0x10), KEY),
+        self.assertEqual(security.taken_beside("extended.bin", bytes(0x10), KEY, XEX),
                          ("clean", False))
-        self.assertEqual(security.taken_beside("secdata.bin", bytes(0x3FF), KEY),
+        self.assertEqual(security.taken_beside("secdata.bin", bytes(0x3FF), KEY, XEX),
                          ("clean", False))
 
     def test_an_extended_no_key_opens_is_made_up_clean(self):
         sealed = security.extended(None, b"HEADHEAD", OTHER)
-        self.assertEqual(security.taken_beside("extended.bin", sealed, KEY),
+        self.assertEqual(security.taken_beside("extended.bin", sealed, KEY, XEX),
                          ("clean", False))
 
     def test_a_crl_or_dae_no_key_opens_goes_in_as_it_stands(self):
         for name, blob in (("crl.bin", a_crl(OTHER)), ("dae.bin", a_dae(OTHER))):
             with self.subTest(name):
-                self.assertEqual(security.taken_beside(name, blob, KEY)[0], "as is")
+                self.assertEqual(security.taken_beside(name, blob, KEY, XEX)[0],
+                                 "as is")
 
     def test_the_rest_is_used_and_says_whether_it_came_open(self):
-        self.assertEqual(security.taken_beside("crl.bin", a_crl(), KEY), ("use", False))
-        self.assertEqual(security.taken_beside("crl.bin", a_crl(clear=True), KEY),
+        self.assertEqual(security.taken_beside("crl.bin", a_crl(), KEY, XEX),
+                         ("use", False))
+        self.assertEqual(security.taken_beside("crl.bin", a_crl(clear=True), KEY, XEX),
                          ("use", True))
-        self.assertEqual(security.taken_beside("secdata.bin", bytes(0x400), KEY),
+        self.assertEqual(security.taken_beside("secdata.bin", bytes(0x400), KEY, XEX),
                          ("use", True))
-        self.assertEqual(security.taken_beside("odd.bin", b"anything", KEY),
+        self.assertEqual(security.taken_beside("odd.bin", b"anything", KEY, XEX),
                          ("use", False))
 
 

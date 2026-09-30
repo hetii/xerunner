@@ -284,7 +284,8 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
             os.makedirs(config.dump_to, exist_ok=True)
             flash = server.flash()
             kept = os.path.join(config.dump_to, name)
-            _keep(config.dump_to, info, material, flash, image.raw, name)
+            _keep(config.dump_to, info, material, flash, image.raw, name,
+                  settings.xex_key)
         if not config.no_write:
             server.write_flash(image.raw)
         if config.no_write or config.no_avatar:
@@ -304,18 +305,19 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
     return kept
 
 
-def decrypt_securityfile(name: str, blob: bytes, cpu_key: bytes) -> bytes:
+def decrypt_securityfile(name: str, blob: bytes, cpu_key: bytes,
+                         xex_key: bytes) -> bytes:
     """A console's security file in the clear, headers as they were, as `-d` keeps it
     for build mode to take up later -- each measured against the original's copy:
     crl.bin with its file key unwrapped at 0x130, each dae.bin record opened,
     extended.bin and secdata.bin behind their nonce, fcrt.bin behind its 0x140 bytes of
     header."""
     if name == "crl.bin":
-        body, _master, file_key = formats.decrypt_crl(blob, cpu_key)
+        body, _master, file_key = formats.decrypt_crl(blob, cpu_key, xex_key)
         return blob[:formats.WRAPPED_KEY_AT] + file_key + body
     if name == "dae.bin":
-        return b"".join(header + body
-                        for header, body, _master in formats.decrypt_dae(blob, cpu_key))
+        records = formats.decrypt_dae(blob, cpu_key, xex_key)
+        return b"".join(header + body for header, body, _master in records)
     if name == "extended.bin":
         return blob[:formats.NONCE_LENGTH] + formats.decrypt_extended(blob, cpu_key)
     if name == "secdata.bin":
@@ -326,7 +328,7 @@ def decrypt_securityfile(name: str, blob: bytes, cpu_key: bytes) -> bytes:
 
 
 def _keep(where: str, info: ConsoleInfo, material: ConsoleMaterial, flash: bytes,
-          image: bytes, name: str) -> None:
+          image: bytes, name: str, xex_key: bytes) -> None:
     """What `-d` keeps, as the original keeps it: the image, the console's flash and
     bootloaders as read, its keyvault and SMC opened, its security files opened, its
     settings blobs and settings, the fuses, the public keys and an options.ini --
@@ -340,7 +342,8 @@ def _keep(where: str, info: ConsoleInfo, material: ConsoleMaterial, flash: bytes
         out["fbldrs.bin"] = material.bootloaders
     for file in SECURITY:
         if file in material.files:
-            out[file] = decrypt_securityfile(file, material.files[file], cpu)
+            out[file] = decrypt_securityfile(file, material.files[file], cpu,
+                                             xex_key)
     out.update(material.mobiles)
     if material.statistics is not None:
         out["Statistics.settings"] = material.statistics

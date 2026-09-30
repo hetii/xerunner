@@ -34,10 +34,6 @@ from . import aes
 from .rc4 import rc4
 from .keys import hmacsha
 
-# The generic key a release ships crl.bin and dae.bin under. Not a secret: the XEX key,
-# which the original prints at startup and keeps beside the CPU key at 0x47A12C.
-XEX_KEY = bytes.fromhex("20B185A59D28FDC340583FBB0896BF91")
-
 # The layout of a signed record, which crl.bin is one of and dae.bin a chain of.
 IV_AT = 0x120
 WRAPPED_KEY_AT = 0x130
@@ -121,11 +117,11 @@ def _unwrapped(blob: bytes, master: bytes) -> bytes:
     return aes.decrypt_aesecb(aes.aeskey(master), blob[WRAPPED_KEY_AT:BODY_AT])
 
 
-def decrypt_crl(blob: bytes, cpu_key: bytes) -> tuple:
+def decrypt_crl(blob: bytes, cpu_key: bytes, xex_key: bytes) -> tuple:
     """A crl.bin's body in the clear: `(body, master key, file key)` -- the master that
-    opened it, the console's or the XEX key, and the file key it unwrapped -- or
+    opened it, the console's or the xex key, and the file key it unwrapped -- or
     ValueError where neither opens it."""
-    for master in (cpu_key, XEX_KEY):
+    for master in (cpu_key, xex_key):
         file_key = _unwrapped(blob, master)
         body = aes.decrypt_aescbc(file_key, blob[BODY_AT:],
                                   blob[IV_AT:IV_AT + aes.BLOCK])
@@ -164,24 +160,24 @@ def records(blob: bytes) -> list:
     return out
 
 
-def _decrypt_dae_record(record: bytes, cpu_key: bytes) -> tuple:
+def _decrypt_dae_record(record: bytes, cpu_key: bytes, xex_key: bytes) -> tuple:
     """One record's body in the clear and the key that opened it -- None for a record
     already in the clear -- or ValueError.
 
     In the clear if the header's hash vouches for it as it stands; otherwise opened
-    under the console's key and then the XEX key, each with its own zero vector, and
+    under the console's key and then the xex key, each with its own zero vector, and
     taken when the hash vouches (0x41E1CA).
     """
     if vouched(record, record[DAE_BODY_AT:], DAE_BODY_AT):
         return record[DAE_BODY_AT:], None
-    for master in (cpu_key, XEX_KEY):
+    for master in (cpu_key, xex_key):
         body = aes.decrypt_aescbc(master, record[DAE_BODY_AT:], bytes(aes.BLOCK))
         if vouched(record, body, DAE_BODY_AT):
             return body, master
     raise ValueError("neither key opens this dae.bin")
 
 
-def decrypt_dae(blob: bytes, cpu_key: bytes) -> list:
+def decrypt_dae(blob: bytes, cpu_key: bytes, xex_key: bytes) -> list:
     """Every record of a dae.bin in the clear, in order: `(header, body, master key)`,
     the header being the record's first 0x130 bytes. Record by record, because each
     has its own zero vector; ValueError where any one does not open, and where the
@@ -194,7 +190,7 @@ def decrypt_dae(blob: bytes, cpu_key: bytes) -> list:
     out = []
     for at, length in found:
         record = blob[at:at + length]
-        body, master = _decrypt_dae_record(record, cpu_key)
+        body, master = _decrypt_dae_record(record, cpu_key, xex_key)
         out.append((record[:DAE_BODY_AT], body, master))
     return out
 
