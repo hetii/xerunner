@@ -84,6 +84,11 @@ the code makes the decision:
   afterwards. So is a `[rawpatch]` offset in a file list that is not a number: the
   original reads `f0000` as 0 and writes the file over the flash header. --
   `config/base.py`, `check_number`; `release/recipe.py`, `Recipe.raw_patches`
+- **`client`: a failed action is not followed by `-s` or `-reboot`.** The original says
+  "avatar data skipped, unable to load data!" (or "compatibility data skipped") and
+  still shuts the console down or reboots it; a reboot takes DashLaunch's server out of
+  memory before the failure can be put right. Here the run stops with the error and
+  the console is left as it is. -- `client/client.py`, `run_client`
 - **A MAC address is taken in three written forms and no other:** `002248F10102`,
   `00:22:48:F1:01:02` and `00-22-48-F1-01-02`, the same in options.ini and after `-o`.
   The original refuses the dashes on the command line, garbles them in options.ini
