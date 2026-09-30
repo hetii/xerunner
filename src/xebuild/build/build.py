@@ -1325,7 +1325,12 @@ class Build:
         page = self.header(slots, self.stated_version, len(smc))
         # Zeros from the page to the SMC, on every reference image.
         out.put(0, page + bytes(smc_at - len(page)))
-        net_kd = self.dump.net_kd if self.dump is not None else None
+        # Read in the same step as the statistics (0x414300 beside 0x414050), which
+        # the loader skips under `nomobile` or where no fsroot was found (0x417C5B,
+        # 0x417C62) -- measured: no netKd under nomobile.
+        dump = self.dump
+        net_kd = (dump.net_kd if dump is not None and dump.fsroot_found
+                  and not self.config.nomobile else None)
         if net_kd:
             # "Inserting netKd data from dump into header": as many bytes as the block
             # states, at 0x80 -- see `Dump.net_kd`. Only a block inside the first page

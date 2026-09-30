@@ -277,10 +277,12 @@ class Dump:
     @property
     def fsroot_found(self) -> bool:
         """Whether the scan found the filesystem's table. The original finds the
-        mobiles, Statistics.settings and Manufacturing.data in the same scan and takes
-        none of them from a dump where the table is not found -- measured with every
-        table page erased, and on an eMMC dump with both anchors zeroed: "ERROR! Could
-        not find fsroot!", and nothing "adding from previous parse"."""
+        mobiles in the same scan (0x415230), and where it finds no table it skips the
+        steps after it as well (0x417C5B): the netKd block (0x414300),
+        Statistics.settings and Manufacturing.data (0x414050) and the security files
+        (0x417DD7). Measured
+        with every table page erased, and on an eMMC dump with both anchors zeroed:
+        "ERROR! Could not find fsroot!", and nothing "adding from previous parse"."""
         return "fsroot" in self.image.blobs
 
     @property
