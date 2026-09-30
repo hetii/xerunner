@@ -7,14 +7,16 @@ against the original's recordings of the real 17559 system update.
 import os
 import shutil
 import struct
+import io
 import hashlib
 import tempfile
 import unittest
+import contextlib
 
 from xebuild.network import ServerError
 from xebuild.release.container import intact
 from xebuild.release.manifest import Manifest
-from xebuild.cli.command import UsageError, parse_client
+from xebuild.cli.command import parse_client
 from xebuild.client.sysdata import avatar_items, send_avatars, send_compatibility
 
 KERNEL = 0x20449700
@@ -247,16 +249,19 @@ class SendingTheHardDiskData(unittest.TestCase):
 class TheClientSwitches(unittest.TestCase):
 
     def test_e_and_c_take_a_directory(self):
-        self.assertEqual(parse_client(["-e", "su/"])[0],
+        self.assertEqual(parse_client(["-e", "su/"]),
                          {"action": "avatar", "directory": "su/"})
-        self.assertEqual(parse_client(["-c", "compat"])[0],
+        self.assertEqual(parse_client(["-c", "compat"]),
                          {"action": "compatibility", "directory": "compat"})
 
     def test_without_one_or_beside_another_action_they_are_refused(self):
-        with self.assertRaisesRegex(UsageError, "not enough arguments"):
-            parse_client(["-e"])
-        with self.assertRaisesRegex(UsageError, "already set"):
-            parse_client(["-r", "f.bin", "-c", "compat"])
+        for argv, said in ((["-e"], "expected one argument"),
+                           (["-r", "f.bin", "-c", "compat"], "not allowed with")):
+            with (self.subTest(argv=argv),
+                  contextlib.redirect_stderr(io.StringIO()) as err,
+                  self.assertRaises(SystemExit)):
+                parse_client(argv)
+            self.assertIn(said, err.getvalue())
 
 
 if __name__ == "__main__":

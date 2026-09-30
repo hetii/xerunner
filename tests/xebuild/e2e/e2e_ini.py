@@ -71,6 +71,9 @@ class EachCaseAsTheOriginalDidIt(unittest.TestCase):
                     with contextlib.redirect_stderr(io.StringIO()), \
                             contextlib.redirect_stdout(io.StringIO()):
                         status = main(argv)
+                except SystemExit as ended:
+                    # argparse ends a line it refuses with an exit of its own.
+                    status = ended.code
                 finally:
                     os.chdir(here)
                 with open(os.path.join(one, "original.txt"), errors="replace") as h:

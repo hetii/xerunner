@@ -39,6 +39,13 @@ is held against. Where the original is **certainly wrong** -- its own usage, or 
 code, says what was meant -- the fault is not copied. Each one is described in full where
 the code makes the decision:
 
+- **Every mode's command line is read by argparse.** The descriptions, examples and
+  legends are the original's words, the layout around them argparse's; `-h` is `-?`'s
+  alias, and a refusal is argparse's own sentence with exit status 2. So `-s -noenter`
+  keeps the `-noenter` (the original steps past the word after `-s`, 0x419FB8), a
+  switch it does not know is refused (the original takes `-x` for the image's name),
+  a switch short of its word is refused (`-d -noenter`), and client says one sentence
+  for `-s` beside `-reboot` in either order. -- `cli/command.py`
 - **`update -nowrite`, `-noava`, `-noreeb`, `-clean` do not eat the word after them.** The
   original's handlers skip it too (`add ebx, 1` at 0x404F10 and beside), so
   `-noava -noreeb` reboots. -- `cli/command.py`, `parse_update`
