@@ -724,7 +724,8 @@ class WhatABuildProducesForARealConsole(unittest.TestCase):
                 sealed = bytes(image.flat[head.smc_at:head.smc_at + head.smc_size])
                 with open(os.path.join(where, "smc.bin"), "xb") as handle:
                     handle.write(decrypt_smc(sealed))
-                plain = formats.decrypt_crl(image.read("crl.bin"), cpu)[0]
+                plain = formats.decrypt_crl(image.read("crl.bin"), cpu,
+                                            BuildConfig().xex_key)[0]
                 one = Build(BuildConfig(image_type=kind, console=board,
                                         per_build=where),
                             Material(where), self.release)
@@ -870,7 +871,8 @@ class WhatTheOriginalBuiltFromEachCell(unittest.TestCase):
         """The build's clock, out of its crl.bin -- or its secdata.bin, where the
         crl.bin was one handed in that no key opens and so went in as it stood."""
         try:
-            plain = formats.decrypt_crl(image.read("crl.bin"), self.cpu)[0]
+            plain = formats.decrypt_crl(image.read("crl.bin"), self.cpu,
+                                            BuildConfig().xex_key)[0]
         except ValueError:
             sealed = image.read("secdata.bin")
             plain = rc4(hmacsha(self.cpu, sealed[:0x10]), sealed[0x10:])[0x10:]

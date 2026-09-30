@@ -326,11 +326,11 @@ class ADaeThatIsNotAChainOfRecords(unittest.TestCase):
 
     def test_no_record_at_all_does_not_open(self):
         with self.assertRaisesRegex(ValueError, "expected header"):
-            formats.decrypt_dae(bytes(range(256)) * 0x40, bytes(16))
+            formats.decrypt_dae(bytes(range(256)) * 0x40, bytes(16), bytes(16))
 
     def test_bytes_left_after_the_records_do_not_open(self):
         with self.assertRaisesRegex(ValueError, "expected header"):
-            formats.decrypt_dae(self.a_record() + b"junk" * 0x60, bytes(16))
+            formats.decrypt_dae(self.a_record() + b"junk" * 0x60, bytes(16), bytes(16))
 
     def test_where_the_records_tile_the_file_the_walk_finds_them_all(self):
         blob = self.a_record() + self.a_record(0x170)
