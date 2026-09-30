@@ -89,6 +89,11 @@ the code makes the decision:
   still shuts the console down or reboots it; a reboot takes DashLaunch's server out of
   memory before the failure can be put right. Here the run stops with the error and
   the console is left as it is. -- `client/client.py`, `run_client`
+- **With no `-d` the per-build directory is `data/`.** The original says "you did not
+  specify per build directory! Using 17559/" and looks for the console's files in the
+  release's own directory, where there are none; this says "Using ./data/", where
+  J-Runner keeps them. `-d 17559` gives the original's choice. -- `build/build.py`,
+  `build_image`
 - **`client` takes one action per run, in any order.** The original refuses a second
   action with "option flag %s on command line but option was already set!" -- except
   `-keys` and `-p`, which it lets in after another action and runs, dropping the first
