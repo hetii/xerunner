@@ -7,10 +7,12 @@ bytes. The names and the formats here are that table.
 
 Naming an option without a value is the same as setting it true, and a value that starts
 `0x` is hexadecimal where anything else is decimal. `macid` is the exception the usage
-names: it is hexadecimal either way, with or without separators.
+names: it is hexadecimal either way, in one of three written forms.
 
 Update mode has no `-o`, so this class is inherited only by the modes that do.
 """
+
+import re
 
 from .base import BaseConfig
 
@@ -445,7 +447,20 @@ class OptionsConfig(BaseConfig):
 
     @macid.setter
     def macid(self, given):
-        self["macid"] = None if given is None else self.check_hex("macid", given, 6)
+        """Written one of three ways and no other: `002248F10102`,
+        `00:22:48:F1:01:02` or `00-22-48-F1-01-02` -- one separator between every two
+        digits, or none. The same in options.ini and on the command line. The original
+        takes the first two and refuses the dash, which means the same to a reader."""
+        if given is None or isinstance(given, (bytes, bytearray)):
+            self["macid"] = None if given is None else self.check_hex("macid", given, 6)
+            return
+        text = str(given).strip()
+        pair = "[0-9A-Fa-f]{2}"
+        form = "(?:%s){6}|%s([:-])%s(?:\\1%s){4}" % (pair, pair, pair, pair)
+        if not re.fullmatch(form, text):
+            raise ValueError("macid is written 002248F10102, 00:22:48:F1:01:02 or "
+                             "00-22-48-F1-01-02, and this is %r" % (given,))
+        self["macid"] = self.check_hex("macid", text, 6)
 
     @property
     def dvdkey(self) -> bytes | None:

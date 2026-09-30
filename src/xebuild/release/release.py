@@ -23,10 +23,12 @@ logger = logging.getLogger(__name__)
 class Release:
     """One release directory, and `common/` beside it."""
 
-    def __init__(self, where: str, common: str = ""):
+    def __init__(self, where: str, common: str = "", one_bl_key: bytes | None = None):
         if not os.path.isdir(where):
             raise ValueError("%s is not a directory" % where)
         self.where = where
+        # What the container's CF opens under; with none, its CF and CG stay sealed.
+        self.one_bl_key = one_bl_key
         self._container = False
         self._files = {}
         self.common = common or os.path.join(os.path.dirname(where.rstrip("/\\")),
@@ -47,11 +49,16 @@ class Release:
         return self._files[path]
 
     def recipe(self, image_type, ext: str = "") -> Recipe:
-        """The file list for an image type, which names itself."""
+        """The file list for an image type, which names itself.
+
+        One with no `[version]` label is refused, as the original refuses it: "could
+        not find label [version] in file list ini" (0x40952E), measured.
+        """
         name = image_type.file_list(ext)
-        return Recipe(
-            self._read(self.where, name).decode("utf-8", "replace")
-        )
+        found = Recipe(self._read(self.where, name).decode("utf-8", "replace"))
+        if "version" not in found.sections:
+            raise ValueError("could not find label [version] in file list ini")
+        return found
 
     def bootloader(self, listed) -> bytes:
         """One bootloader the recipe names, from wherever that release keeps it.
@@ -71,7 +78,10 @@ class Release:
             if path:
                 return self._checked(listed, self._read(path))
         if listed.kind in ("CF", "CG") and self.container is not None:
-            cf, cg = self.container.stages
+            if self.one_bl_key is None:
+                raise ValueError("you need to specify 1BL key! The update's CF opens "
+                                 "under no other.")
+            cf, cg = self.container.stages(self.one_bl_key)
             return self._checked(listed, cf if listed.kind == "CF" else cg)
         raise ValueError(
             "%s is named by the file list and is in neither %s nor %s"

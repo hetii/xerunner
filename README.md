@@ -81,7 +81,40 @@ the code makes the decision:
   speed or temperature outside its range unused ("out of range ... not using"), clamps
   `cfldv` to 32 -- `cfldv=288` passes silently as 32 -- and writes `-o cputemp=abc`
   through as whatever it makes of it. A value nobody asked for is a fault nobody can see
-  afterwards. -- `config/base.py`, `check_number`
+  afterwards. So is a `[rawpatch]` offset in a file list that is not a number: the
+  original reads `f0000` as 0 and writes the file over the flash header. --
+  `config/base.py`, `check_number`; `release/recipe.py`, `Recipe.raw_patches`
+- **`client`: a failed action is not followed by `-s` or `-reboot`.** The original says
+  "avatar data skipped, unable to load data!" (or "compatibility data skipped") and
+  still shuts the console down or reboots it; a reboot takes DashLaunch's server out of
+  memory before the failure can be put right. Here the run stops with the error and
+  the console is left as it is. -- `client/client.py`, `run_client`
+- **With no `-d` the per-build directory is `data/`.** The original says "you did not
+  specify per build directory! Using 17559/" and looks for the console's files in the
+  release's own directory, where there are none; this says "Using ./data/", where
+  J-Runner keeps them. `-d 17559` gives the original's choice. -- `build/build.py`,
+  `build_image`
+- **A dump with no CF behind its chain is refused.** It is what a flash read after
+  `glitch.ecc` was written looks like. The original warns "could not find a non-zero CF
+  LDV to use, setting it to 1 but that may be incorrect!", takes a static pairing and
+  builds -- measured on such a read of a console whose LDV is 13. Here: "this flash
+  keeps no CF slot behind its chain, so its LDV and pairing cannot be read."
+  -- `chain/chain.py`, `Chain._opened_slots`
+- **An `-a` patch that is missing, or not a whole number of words, is refused.** The
+  original skips it ("... not found, skipping") and builds without it. One that does not
+  fit the patch set's 0x4000 bytes is skipped with an error here too, as there.
+  -- `build/build.py`, `Build._with_addons`
+- **`client` takes one action per run, in any order.** The original refuses a second
+  action with "option flag %s on command line but option was already set!" -- except
+  `-keys` and `-p`, which it lets in after another action and runs, dropping the first
+  without a word: `-e su/ -keys` dumps the keys and sends no avatar data, `-r out.bin -p`
+  updates the patches and reads nothing. Here each of those is refused as well, with the
+  same sentence. -- `cli/command.py`, `parse_client`
+- **A MAC address is taken in three written forms and no other:** `002248F10102`,
+  `00:22:48:F1:01:02` and `00-22-48-F1-01-02`, the same in options.ini and after `-o`.
+  The original refuses the dashes on the command line, garbles them in options.ini
+  ("invalid length macid '00:-2:2-:48:...'") and builds without the address, and takes
+  forms like `0022:48F1:0102`. -- `config/options.py`, `OptionsConfig.macid`
 - **A kv.bin that is neither 0x4000 nor 0x3FF0 bytes is refused.** The original says
   "kv.bin is not the correct size! Skipping verification and encryption!" and writes the
   file into the image unsealed, which gives the console a keyvault it cannot open.

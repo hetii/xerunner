@@ -242,7 +242,6 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
     where the image was kept, which is only with a `dump_to`. `when` is the build's
     clock, as build mode's is, for reproducing one."""
     address = config.address or find()
-    release = Release(config.data or "data")
     with Server(address, port) as server:
         # The original hangs up without a QUIT in update mode, whether it finishes or
         # stops -- measured with `-nowrite -noreeb`, where the stand-in saw the
@@ -266,6 +265,7 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
             cpu_key=info.cpu_key.hex(), one_bl_key=info.one_bl_key.hex(),
             firmware_ext=config.firmware_ext, section_ext=config.section_ext,
             append=config.append)
+        release = Release(config.data or "data", one_bl_key=settings.one_bl_key)
         build = BuildUpdate(settings, None, release)
         material = collect(server, info, build.recipe,
                            os.path.dirname(os.path.abspath(config.data or "data")),

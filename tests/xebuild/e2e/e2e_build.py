@@ -9,6 +9,7 @@ import random
 import shutil
 import tempfile
 import unittest
+import functools
 
 from typing import ClassVar
 from xebuild.chain import Chain
@@ -16,6 +17,7 @@ from xebuild.crypto import formats
 from xebuild.crypto.rc4 import rc4
 from xebuild.boards import for_name
 from xebuild.release import Release
+from ..test_chain import ONE_BL_KEY
 from xebuild.chain.stage import Stage
 from xebuild.config import BuildConfig
 from xebuild.crypto.keys import hmacsha
@@ -24,6 +26,11 @@ from xebuild.image.settings import checksum
 from xebuild.crypto.formats import decrypt_smc
 from xebuild.imagetypes import for_name as type_for
 from xebuild.build import Build, Material, layout, security
+
+# Every build and release here is handed the 1BL key, as J-Runner's options.ini
+# hands it to the original.
+Release = functools.partial(Release, one_bl_key=ONE_BL_KEY)
+BuildConfig = functools.partial(BuildConfig, one_bl_key=ONE_BL_KEY)
 
 
 def references() -> tuple:

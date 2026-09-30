@@ -9,6 +9,7 @@ import unittest
 from xebuild.crypto import smc
 from xebuild.crypto.rc4 import rc4
 from xebuild.boards import for_name
+from ..test_chain import ONE_BL_KEY
 from xebuild.image import Dump, Image
 from xebuild.crypto.keys import hmacsha
 from xebuild.chain import Chain, Fields, sealing
@@ -25,7 +26,7 @@ class AConsoleSOwnChain(unittest.TestCase):
             raise unittest.SkipTest("XEBUILD_DUMP and XEBUILD_CPUKEY are not both set")
         board, bigffs = for_name(os.environ.get("XEBUILD_DUMP_BOARD", "trinity"))
         with open(where, "rb") as handle:
-            cls.dump = Dump(handle.read(), board, bigffs)
+            cls.dump = Dump(handle.read(), board, bigffs, one_bl_key=ONE_BL_KEY)
         cls.cpu_key = bytes.fromhex(key)
         cls.chain = cls.dump.chain
 
@@ -54,7 +55,7 @@ class AConsoleSOwnChain(unittest.TestCase):
         """It is sealed under the key every console carries, which is why extract
         mode can read a pairing out of a dump it holds no key for."""
         slot = self.chain.slot
-        plain = slot.head + rc4(hmacsha(sealing.ONE_BL_KEY, slot.nonce), slot.body)
+        plain = slot.head + rc4(hmacsha(ONE_BL_KEY, slot.nonce), slot.body)
         self.assertEqual(Fields.in_cf(plain).pairing, self.chain.console.pairing)
 
     def test_the_field_in_cb_b_ties_the_chain_to_the_smc_beside_it(self):
@@ -110,12 +111,12 @@ class AgainstAnImageTheOriginalBuilt(unittest.TestCase):
         cls.board = board
         cls.cpu_key = bytes.fromhex(key)
         with open(dump, "rb") as handle:
-            cls.dump = Dump(handle.read(), board, bigffs)
+            cls.dump = Dump(handle.read(), board, bigffs, one_bl_key=ONE_BL_KEY)
         with open(where, "rb") as handle:
             cls.image = Image(handle.read(), board.flash)
 
     def test_the_fields_it_wrote_are_the_fields_this_writes(self):
-        chain = Chain(self.image, self.board)
+        chain = Chain(self.image, self.board, ONE_BL_KEY)
         stages, keys = chain.stages, chain.keys(self.cpu_key)
         at = sealing.binding_at(stages)
         theirs = chain.plain(stages[at], keys[at])[:0x20]
@@ -128,7 +129,7 @@ class AgainstAnImageTheOriginalBuilt(unittest.TestCase):
     def test_every_stage_of_it_reseals_to_the_bytes_it_holds(self):
         """RC4 is symmetric, so this is the whole of writing a stage, and it is
         checked against an image rather than asserted."""
-        chain = Chain(self.image, self.board)
+        chain = Chain(self.image, self.board, ONE_BL_KEY)
         for stage, key in zip(chain.stages, chain.keys(self.cpu_key), strict=True):
             if key is None:
                 continue
