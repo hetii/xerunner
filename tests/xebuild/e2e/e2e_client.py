@@ -87,7 +87,7 @@ class EachActionAsTheOriginalDidIt(unittest.TestCase):
         before = set(os.listdir(work))
         stand_in = stand_in or StandIn(serve)
         stand_in.start()
-        settings, _flags = parse_client(argv)
+        settings = parse_client(argv)
         here = os.getcwd()
         os.chdir(work)
         stand_in.refused = None

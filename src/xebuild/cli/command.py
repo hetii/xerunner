@@ -1,17 +1,18 @@
 """xeBuild's command line, and what each switch sets: build mode's here, and the other
-three modes' further down, each with its own usage.
+three modes' further down, each with its own switches.
 
-The grammar is the original's, as its usage states it and as measured on it:
+Every mode's switches are read by argparse, which also prints each mode's help for `-?`
+and refuses a switch it does not know, or one short of its words. The descriptions of
+the switches, the examples and the legends are the original's words; the layout around
+them is argparse's.
 
     xeBuild [mode] -t <type> [<switch> [<switch>...]] <out.bin>
 
-The mode is optional and build is the default. Every switch but four takes the word
-after it; `-v`, `-noenter`, `-norandom` and `-?` stand alone. `-s` is the one whose word
-is optional, and it takes the next word whatever that is -- `-s -noenter` loses the
-`-noenter`, measured on the original -- so a word beginning with a dash leaves the hash
-file's name to be made up. `-o`, `-a` and `-8` may be given more than once, and one
-`-o` may carry several settings separated by `;`, each `name` alone meaning true. What
-is left over is the image's name, the last of it if more than one word is.
+The mode is optional and build is the default. `-s` is the one switch whose word is
+optional. `-o`, `-a` and `-8` may be given more than once, and one `-o` may carry
+several settings separated by `;`, each `name` alone meaning true. The first word
+without a switch names the image; a later one is passed over with a warning. `-v1`,
+`-v2` and `-v0` are taken for `-v`, so a J-Runner that asks for a level still runs.
 
 The per-build directory's `options.ini` is read first and the command line goes over it,
 which is the order `BuildConfig` keeps; with no `-d` that directory is `./data/`, as
@@ -22,6 +23,7 @@ import os
 import sys
 import time
 import logging
+import argparse
 
 from ..ini import write_su_ini
 from ..client import run_client
@@ -35,30 +37,99 @@ from ..config import BuildConfig, ClientConfig, ExtractConfig, IniConfig, \
 
 logger = logging.getLogger(__name__)
 
-USAGE = """\
-Usage    :
+
+class LogFormatter(logging.Formatter):
+    """Every line as `[ 15:45:28 ] (w): message`, the level by its first letter. On a
+    terminal the brackets and parentheses are light yellow, the time light green, and
+    the letter and the message the level's own colour; in a file or a pipe there is no
+    colour at all."""
+
+    def __init__(self, colour: bool):
+        super().__init__("%(stamp)s %(text)s")
+        self.colour = colour
+
+    def format(self, record) -> str:
+        when = self.formatTime(record, "%H:%M:%S")
+        letter, said = record.levelname[0].lower(), record.getMessage()
+        if self.colour:
+            shade = {"DEBUG": "\033[2m", "INFO": "\033[32m", "WARNING": "\033[33m",
+                     "ERROR": "\033[31m", "CRITICAL": "\033[1;31m"}
+            level = shade.get(record.levelname, "")
+            record.stamp = ("\033[93m[\033[0m \033[92m%s\033[0m \033[93m] (\033[0m"
+                            "%s%s\033[0m\033[93m):\033[0m" % (when, level, letter))
+            record.text = "%s%s\033[0m" % (level, said)
+        else:
+            record.stamp, record.text = "[ %s ] (%s):" % (when, letter), said
+        return super().format(record)
+
+
+def main(argv=None) -> int:
+    """Any mode from a command line; the exit status the shell gets back."""
+    argv = sys.argv[1:] if argv is None else argv
+    # INFO for every mode, before any switch is read -- some say things themselves;
+    # `-v` then takes it a level down, to what the original shows only with it.
+    handler = logging.StreamHandler()
+    handler.setFormatter(LogFormatter(handler.stream.isatty()))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    mode = argv[0] if argv[:1] and argv[0] in ("build", "extract", "client", "update",
+                                                "ini") else "build"
+    rest = argv[1:] if argv[:1] == [mode] else argv
+    parse_mode = {"build": parse_build, "client": parse_client, "update": parse_update,
+                  "extract": parse_extract, "ini": parse_ini}[mode]
+    # Help, and a line argparse refuses, end the program inside the parse; from here
+    # on it is a run.
+    settings = parse_mode(rest)
+    logger.info("started %s", time.strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("cmd: %s", " ".join([os.path.basename(sys.argv[0]), *argv]))
+    run = {"build": _build, "client": _client, "update": _update, "extract": _extract,
+           "ini": _ini}[mode]
+    return run(settings)
+
+
+def _parser(prog: str, example: str, legend: str = "") -> argparse.ArgumentParser:
+    """A mode's argparse: its own `-?` for help, the original's examples above the
+    switches and its legend below them, both as written, and no abbreviated switches,
+    which the original does not take."""
+    parser = argparse.ArgumentParser(
+        prog=prog, description=example, epilog=legend or None, add_help=False,
+        allow_abbrev=False, formatter_class=argparse.RawTextHelpFormatter)
+    return parser
+
+
+def _verbose(parser: argparse.ArgumentParser, process: str) -> None:
+    """`-v`, and `-v0`, `-v1`, `-v2` taken for it without being listed."""
+    parser.add_argument("-v", dest="verbose", action="store_true",
+                        help="shows more info during %s process" % process)
+    parser.add_argument("-v0", "-v1", "-v2", dest="verbose", action="store_true",
+                        help=argparse.SUPPRESS)
+
+
+def _options(text: str) -> dict:
+    """One `-o`'s settings: `name` or `name=value`, several separated by `;`.
+
+    Only the thirty-one options are reachable this way; a switch's own setting is not
+    an option, and a name that is not one is refused.
+    """
+    known = {name for name, door in vars(OptionsConfig).items()
+             if isinstance(door, property)}
+    out = {}
+    for piece in text.split(";"):
+        name, sign, value = piece.strip().partition("=")
+        name = name.strip().lower()
+        if not name:
+            continue
+        if name not in known:
+            raise ValueError("%s is not an option" % name)
+        out[name] = value.strip() if sign else True
+    return out
+
+
+def parse_build(argv) -> dict:
+    """`BuildConfig`'s settings, by its own names, from build mode's switches."""
+    parser = _parser("xeBuild", """\
+examples:
    xeBuild [mode] -t <type> [<switch> [<switch>...]] <out.bin>
-
-Example  :
-   xeBuild -t retail -c trinity -d files -b 0102...0f -p 0102...0f out.bin
-
-Switches:
-   -t <type>: retail, jtag, glitch, glitch2, glitch2m, devkit (defaults to retail)
-   -p <key> : 32 character CPU hex key (override, can be elsewhere)
-   -b <key> : 32 character 1BL hex key (override, can be elsewhere)
-   -c <con> : console type
-   -d <dir> : per build files directory
-   -f <dir> : use different data dir and file lists
-   -s <file>: outputs SHA-1 of final image to <file>, if <file> is not provided an auto generated name is used
-   -o <opt> : set xeBuild options
-   -a <name>: append patches
-   -i <ext> : adds _<ext> into firmware ini and patches file names
-   -r <ext> : adds _<ext> into ini bl section name and patches file names
-   -8 <pat> : adds raw patch to NAND just before finalizing
-   -v       : shows more info during build process
-   -noenter : suppresses prompt for enter key when finished
-   -?       : shows this info
-
+   xeBuild -t retail -c trinity -d files -b 0102...0f -p 0102...0f out.bin""", """\
 legend:
 [mode]      : build, extract, client, update - defaults to build if not present
 <con>       = xenon, zephyr, falcon, jasper, jaspersb, jasper256,
@@ -94,70 +165,98 @@ GLITCH only = patchsmc
       file will load based from the -f directory, or absolute path if drive letter is found
       add 0x to offset to specify hexadecimal, otherwise it will be read as decimal
       example: -8 myfile.bin,0x12345
-      example: -8 myfile.bin,0x12345;myotherfile.bin,0x54321"""  # noqa: E501
+      example: -8 myfile.bin,0x12345;myotherfile.bin,0x54321""")  # noqa: E501
+    add = parser.add_argument
+    add("-t", dest="image_type", metavar="<type>",
+        help="retail, jtag, glitch, glitch2, glitch2m, devkit (defaults to retail)")
+    add("-p", dest="cpu_key", metavar="<key>",
+        help="32 character CPU hex key (override, can be elsewhere)")
+    add("-b", dest="one_bl_key", metavar="<key>",
+        help="32 character 1BL hex key (override, can be elsewhere)")
+    add("-c", dest="console", metavar="<con>", help="console type")
+    add("-d", dest="per_build", metavar="<dir>", help="per build files directory")
+    add("-f", dest="data", metavar="<dir>",
+        help="use different data dir and file lists")
+    add("-s", dest="sha_file", metavar="<file>", nargs="?", const=True,
+        help="outputs SHA-1 of final image to <file>, if <file> is not provided an "
+             "auto generated name is used")
+    add("-o", dest="options", metavar="<opt>", action="append", default=[],
+        help="set xeBuild options")
+    add("-a", dest="append", metavar="<name>", action="append", default=[],
+        help="append patches")
+    add("-i", dest="firmware_ext", metavar="<ext>",
+        help="adds _<ext> into firmware ini and patches file names")
+    add("-r", dest="section_ext", metavar="<ext>",
+        help="adds _<ext> into ini bl section name and patches file names")
+    add("-8", dest="raw_patches", metavar="<pat>", action="append", default=[],
+        help="adds raw patch to NAND just before finalizing")
+    _verbose(parser, "build")
+    add("-noenter", dest="no_enter", action="store_true",
+        help="suppresses prompt for enter key when finished")
+    add("-norandom", dest="no_random", action="store_true",
+        help="draws nothing, keeping the values the original was compiled with")
+    add("-?", "-h", action="help", help="shows this info")
+    add("out", metavar="<out.bin>", nargs="*",
+        help="optional, overrides auto built output image name")
+    if not argv:
+        parser.print_help()
+        parser.exit(2, "%s: error: invalid command line, you need to specify "
+                       "parameters!\n" % parser.prog)
+    found = vars(parser.parse_intermixed_args(argv))
+    options = {}
+    for text in found.pop("options"):
+        try:
+            options.update(_options(text))
+        except ValueError as why:
+            parser.error(str(why))
+    append, raw, out = found.pop("append"), found.pop("raw_patches"), found.pop("out")
+    settings = {name: value for name, value in found.items()
+                if value is not None and value is not False}
+    if settings.pop("verbose", False):
+        settings["verbose"] = 1
+    # The first word without a switch names the image; a later one is passed over
+    # (0x41A981).
+    for _excess in out[1:]:
+        logger.warning("command line has excess parameters without switches!")
+    settings.update(options)
+    if append:
+        settings["append"] = tuple(append)
+    if raw:
+        settings["raw_patches"] = ";".join(raw)
+    if out:
+        settings["out"] = out[0]
+    return settings
 
 
-EXTRACT_USAGE = """\
-Usage   :
-   xeBuild extract <switch> <input NAND image>
-
-Examples:
-   xeBuild extract -v nanddump.bin
-
-Switches:
-   -noenter : suppresses prompt for enter key when finished
-   -v       : shows more info during extract process
-   -?       : shows this help
-
+def parse_extract(argv) -> dict:
+    """`config.ExtractConfig`'s settings from extract mode's switches: `-v`,
+    `-noenter` and the image, which is all its usage names."""
+    parser = _parser("xeBuild extract", """\
+examples:
+   xeBuild extract -v nanddump.bin""", """\
 legend:
-<dir>       = path, absolute or relative, to a directory - do not terminate with /"""
+<dir>       = path, absolute or relative, to a directory - do not terminate with /""")
+    parser.add_argument("-noenter", dest="no_enter", action="store_true",
+                        help="suppresses prompt for enter key when finished")
+    _verbose(parser, "extract")
+    parser.add_argument("-?", "-h", action="help", help="shows this help")
+    parser.add_argument("image", metavar="<input NAND image>")
+    found = parser.parse_args(argv)
+    return {"image": found.image, "verbose": int(found.verbose),
+            "no_enter": found.no_enter}
 
 
-# Ini mode's own usage, the original's words (0x418240); its main usage does not name
-# the mode at all.
-INI_USAGE = """\
-Usage   :
-   xeBuild ini [systeUpdateConPath]
+def parse_client(argv) -> dict:
+    """`config.ClientConfig`'s settings from client mode's switches.
 
-Examples:
-   xeBuild ini ./16547/
-   xeBuild ini c:\\16547\\$SystemUpdate
-   xeBuild ini z:\\someWeirdPath\\su20076000_00000000
-      when specifying path, either provide relative path or full path
-      to either the SU container, a folder with $SystemUpdate folder in it,
-      or a folder with flash update named 'su20076000_00000000' in it.
-      Hash data will be output to the folder with the SU in it named _SU.ini"""
-
-
-CLIENT_USAGE = """\
-Usage   :
-   xeBuild client <switch> [<option>]
-
-Examples:
+    One action and what rides with it, as the original's own note has it: "stacking
+    commands is not possible with the exception of v, noenter, ip, s and reboot" -- the
+    actions are one mutually exclusive group. A reboot supersedes a shutdown.
+    """
+    parser = _parser("xeBuild client", """\
+examples:
    xeBuild client -r nanddump.bin
-   xeBuild client -w nandflash.bin -ip 192.168.2.100
-
-Switches:
-   -i             : connects to console and shows some info about it
-*  -i <d>         : collects console information into folder <d>, usually enough for build mode
-   -r <f>         : dumps system area of NAND to <f>
-   -w <f>         : writes system area of NAND from <f>
-   -e <d>         : format partition and send avatar/kinect data to HDD from <d>, must match running kernel
-   -c <d>         : format partition and send xbox compatibility data to HDD from <d>
-   -p             : will attempt to automatically update patches based on running kernel version
-   -p <f>         : update patches with <f>
-   -rb <f> <b> <l>: read series of blocks starting at <b> for <l>
-   -wb <f> <b>    : write series of blocks starting at <b> for the number of blocks in <f>
-   -eb <b>        : attempt to erase a single block, even if marked bad on console
-   -bp <f> <o>    : binary patch NAND with contents of <f> to logical offset <o>
-*  -keys          : will attempt to dump RSA and 1BL keys from console
-   -s             : shutdown console
-   -ip <add>      : force attempt to connect to addr (ie: -i 192.168.0.100)
-   -noenter       : suppresses prompt for enter key when finished
-   -reboot        : causes the console to hard reboot
-   -v             : shows more info during client process
-   -?             : shows this help
-
+   xeBuild client -w nandflash.bin -ip 192.168.2.100""", """\
 legend:
 <add>    = without this option network will be scanned for server broadcast beacon
            If provided the correct format is an IPv4 address like 192.168.0.100
@@ -170,33 +269,90 @@ notes:
 * functions not fully supported with older patch versions, use with caution.
 - client mode tends to operate on a single command basis, stacking commands.
   is not possible with the exception of v, noenter, ip, s and reboot.
-- patch update (-p) will retain any addon patches already on the console."""  # noqa: E501
+- patch update (-p) will retain any addon patches already on the console.""")
+    one = parser.add_mutually_exclusive_group()
+    one.add_argument("-i", dest="info", metavar="<d>", nargs="?", const=True,
+                     help="connects to console and shows some info about it\n"
+                          "* <d>: collects console information into folder <d>, "
+                          "usually enough for build mode")
+    one.add_argument("-r", dest="read", metavar="<f>",
+                     help="dumps system area of NAND to <f>")
+    one.add_argument("-w", dest="write", metavar="<f>",
+                     help="writes system area of NAND from <f>")
+    one.add_argument("-e", dest="avatar", metavar="<d>",
+                     help="format partition and send avatar/kinect data to HDD from "
+                          "<d>, must match running kernel")
+    one.add_argument("-c", dest="compatibility", metavar="<d>",
+                     help="format partition and send xbox compatibility data to HDD "
+                          "from <d>")
+    one.add_argument("-p", dest="patches", metavar="<f>", nargs="?", const=True,
+                     help="will attempt to automatically update patches based on "
+                          "running kernel version\n<f>: update patches with <f>")
+    one.add_argument("-rb", dest="read_blocks", metavar=("<f>", "<b>", "<l>"), nargs=3,
+                     help="read series of blocks starting at <b> for <l>")
+    one.add_argument("-wb", dest="write_blocks", metavar=("<f>", "<b>"), nargs=2,
+                     help="write series of blocks starting at <b> for the number of "
+                          "blocks in <f>")
+    one.add_argument("-eb", dest="erase_block", metavar="<b>",
+                     help="attempt to erase a single block, even if marked bad on "
+                          "console")
+    one.add_argument("-bp", dest="binary_patch", metavar=("<f>", "<o>"), nargs=2,
+                     help="binary patch NAND with contents of <f> to logical offset "
+                          "<o>")
+    one.add_argument("-keys", dest="keys", action="store_true",
+                     help="* will attempt to dump RSA and 1BL keys from console")
+    parser.add_argument("-s", dest="shutdown", action="store_true",
+                        help="shutdown console")
+    parser.add_argument("-ip", dest="address", metavar="<add>",
+                        help="force attempt to connect to addr (ie: -i 192.168.0.100)")
+    parser.add_argument("-noenter", dest="no_enter", action="store_true",
+                        help="suppresses prompt for enter key when finished")
+    parser.add_argument("-reboot", dest="reboot", action="store_true",
+                        help="causes the console to hard reboot")
+    _verbose(parser, "client")
+    parser.add_argument("-?", "-h", action="help", help="shows this help")
+    found = vars(parser.parse_args(argv))
+    # Each action by its name, and the words it takes after it.
+    takes = {"info": ("directory",), "read": ("file",), "write": ("file",),
+             "avatar": ("directory",), "compatibility": ("directory",),
+             "patches": ("file",), "read_blocks": ("file", "block", "length"),
+             "write_blocks": ("file", "block"), "erase_block": ("block",),
+             "binary_patch": ("file", "offset"), "keys": ()}
+    settings = {}
+    for name, words in takes.items():
+        given = found.pop(name)
+        if given is None or given is False:
+            continue
+        settings["action"] = name.replace("_", "-")
+        values = given if isinstance(given, list) else [given]
+        paired = zip(words, values, strict=False)
+        settings.update((word, value) for word, value in paired if value is not True)
+    if found["shutdown"] and found["reboot"]:
+        logger.warning("shutdown superseded by reboot, ignoring -s in favor of "
+                       "-reboot")
+        found["shutdown"] = False
+    settings.update((name, value) for name, value in found.items()
+                    if value is not None and value is not False)
+    if settings.pop("verbose", False):
+        settings["verbose"] = 1
+    return settings
 
 
-UPDATE_USAGE = """\
-Usage   :
-   xeBuild update <switch> [<option>]
+def parse_update(argv) -> dict:
+    """`config.UpdateConfig`'s settings from update mode's switches.
 
-Examples:
+    `-nowrite` implies `-noava` and `-noreeb`, as the original sets all three for it
+    (0x404F13). Each of `-nowrite`, `-noava`, `-noreeb` and `-clean` stands alone
+    here, which is what the usage says; the original's handlers also skip the word
+    after them (`add ebx, 1` at 0x404F10, 0x404FA8, 0x405005, 0x40526C), so
+    `-noava -noreeb` reboots and `-noreeb -clean` fetches what `-clean` should leave --
+    both measured. A deliberate divergence: a switch that eats its neighbour is a
+    fault, not a behaviour anyone asks for.
+    """
+    parser = _parser("xeBuild update", """\
+examples:
    xeBuild update -f 16197 -a nofcrt
-   xeBuild update -f 16203 -d myflash -ip 192.168.2.100
-
-Switches:
-   -f <dir> : use different data dir and file lists
-   -d <dir> : dumps NAND and other data to <dir> before flashing
-   -a <name>: append patches
-   -ip <add>: force attempt to connect to addr
-   -i <ext> : adds _<ext> into firmware ini and patches file names
-   -r <ext> : adds _<ext> into ini bl section name and patches file names
-   -nowrite : will not write anything to console flash or HDD
-              without -d results of update are not kept anywhere
-   -noava   : will not send avatar data if available and HDD present
-   -clean   : secdata, extended and statistics will not be retrieved from console
-   -noreeb  : do not automatically reboot console after writes are completed
-   -noenter : suppresses prompt for enter key when finished
-   -v       : shows more info during update process
-   -?       : shows this help
-
+   xeBuild update -f 16203 -d myflash -ip 192.168.2.100""", """\
 legend:
 <name>      = name.bin contents will be appended to hv/kernel patches
 
@@ -204,161 +360,67 @@ legend:
 <ext>       = using this option would cause the builder to look for _glitch_<ext>.ini instead of _glitch.ini
               and patches_jasper_<ext>.bin instead of patches_jasper.bin
 <add>       = without this option network will be scanned for server broadcast beacon
-              If provided the correct format is an IPv4 address like 192.168.0.100"""  # noqa: E501
-
-
-class UsageError(ValueError):
-    """A command line the original would answer with its usage."""
-
-
-def _options(text: str) -> dict:
-    """One `-o`'s settings: `name` or `name=value`, several separated by `;`.
-
-    Only the thirty-one options are reachable this way; a switch's own setting is not
-    an option, and the original answers an unknown name with its usage.
-    """
-    known = {name for name, door in vars(OptionsConfig).items()
-             if isinstance(door, property)}
-    out = {}
-    for piece in text.split(";"):
-        name, sign, value = piece.strip().partition("=")
-        name = name.strip().lower()
-        if not name:
-            continue
-        if name not in known:
-            raise UsageError("%s is not an option" % name)
-        out[name] = value.strip() if sign else True
-    return out
-
-
-def parse(argv) -> tuple:
-    """`(mode, settings, flags)` from a command line.
-
-    `settings` are `BuildConfig`'s, by its own names, ready to hand over. `flags` are
-    what belongs to the run rather than the image: `help`.
-    """
-    rest = list(argv)
-    if not rest:
-        raise UsageError("invalid command line, you need to specify parameters!")
-    mode = "build"
-    if rest[0] in ("build", "extract", "client", "update"):
-        mode = rest.pop(0)
-    named = {"-t": "image_type", "-c": "console", "-p": "cpu_key", "-b": "one_bl_key",
-             "-d": "per_build", "-f": "data", "-i": "firmware_ext",
-             "-r": "section_ext"}
-    settings, options, append, raw, out = {}, {}, [], [], []
-    flags = {"help": False}
-    while rest:
-        one = rest.pop(0)
-        if one.startswith("-v"):
-            # The third character is the level: none, a space or 1 is one, 2 is two, 0
-            # leaves it be -- anything else is taken and ignored, as the original does.
-            level = {"": 1, " ": 1, "1": 1, "2": 2}.get(one[2:3])
-            if level is not None:
-                settings["verbose"] = level
-            continue
-        if one == "-noenter":
-            settings["no_enter"] = True
-        elif one == "-norandom":
-            settings["no_random"] = True
-        elif one == "-?":
-            flags["help"] = True
-            break
-        elif one == "-s":
-            taken = rest.pop(0) if rest else ""
-            settings["sha_file"] = True if not taken or taken.startswith("-") \
-                else taken
-        elif one in named or one in ("-o", "-a", "-8"):
-            if not rest:
-                raise UsageError("%s needs a value" % one)
-            value = rest.pop(0)
-            if one == "-o":
-                options.update(_options(value))
-            elif one == "-a":
-                append.append(value)
-            elif one == "-8":
-                raw.append(value)
-            else:
-                settings[named[one]] = value
-                if one == "-p":
-                    logger.info("CPU key overridden from command line, not looking for "
-                                "cpukey.txt")
-                elif one == "-b":
-                    logger.info("1BL key overridden from command line, not looking for "
-                                "1blkey.txt")
-        elif one.startswith("-"):
-            raise UsageError("%s is not a switch" % one)
-        elif out:
-            # The first word without a switch names the image; a later one is
-            # passed over (0x41A981).
-            logger.warning("command line has excess parameters without switches!")
-        else:
-            out.append(one)
-    settings.update(options)
+              If provided the correct format is an IPv4 address like 192.168.0.100""")  # noqa: E501
+    add = parser.add_argument
+    add("-f", dest="data", metavar="<dir>",
+        help="use different data dir and file lists")
+    add("-d", dest="dump_to", metavar="<dir>",
+        help="dumps NAND and other data to <dir> before flashing")
+    add("-a", dest="append", metavar="<name>", action="append", default=[],
+        help="append patches")
+    add("-ip", dest="address", metavar="<add>", help="force attempt to connect to addr")
+    add("-i", dest="firmware_ext", metavar="<ext>",
+        help="adds _<ext> into firmware ini and patches file names")
+    add("-r", dest="section_ext", metavar="<ext>",
+        help="adds _<ext> into ini bl section name and patches file names")
+    add("-nowrite", dest="no_write", action="store_true",
+        help="will not write anything to console flash or HDD\n"
+             "without -d results of update are not kept anywhere")
+    add("-noava", dest="no_avatar", action="store_true",
+        help="will not send avatar data if available and HDD present")
+    add("-clean", dest="clean", action="store_true",
+        help="secdata, extended and statistics will not be retrieved from console")
+    add("-noreeb", dest="no_reboot", action="store_true",
+        help="do not automatically reboot console after writes are completed")
+    add("-noenter", dest="no_enter", action="store_true",
+        help="suppresses prompt for enter key when finished")
+    _verbose(parser, "update")
+    add("-?", "-h", action="help", help="shows this help")
+    found = vars(parser.parse_args(argv))
+    if found["no_write"]:
+        found.update(no_avatar=True, no_reboot=True)
+    append = found.pop("append")
+    settings = {name: value for name, value in found.items()
+                if value is not None and value is not False}
+    if settings.pop("verbose", False):
+        settings["verbose"] = 1
     if append:
         settings["append"] = tuple(append)
-    if raw:
-        settings["raw_patches"] = ";".join(raw)
-    if out:
-        settings["out"] = out[0]
-    return mode, settings, flags
+    return settings
 
 
-class LogFormatter(logging.Formatter):
-    """Every line as `[ 15:45:28 ] (w): message`, the level by its first letter. On a
-    terminal the brackets and parentheses are light yellow, the time light green, and
-    the letter and the message the level's own colour; in a file or a pipe there is no
-    colour at all."""
-
-    def __init__(self, colour: bool):
-        super().__init__("%(stamp)s %(text)s")
-        self.colour = colour
-
-    def format(self, record) -> str:
-        when = self.formatTime(record, "%H:%M:%S")
-        letter, said = record.levelname[0].lower(), record.getMessage()
-        if self.colour:
-            shade = {"DEBUG": "\033[2m", "INFO": "\033[32m", "WARNING": "\033[33m",
-                     "ERROR": "\033[31m", "CRITICAL": "\033[1;31m"}
-            level = shade.get(record.levelname, "")
-            record.stamp = ("\033[93m[\033[0m \033[92m%s\033[0m \033[93m] (\033[0m"
-                            "%s%s\033[0m\033[93m):\033[0m" % (when, level, letter))
-            record.text = "%s%s\033[0m" % (level, said)
-        else:
-            record.stamp, record.text = "[ %s ] (%s):" % (when, letter), said
-        return super().format(record)
+def parse_ini(argv) -> dict:
+    """`config.IniConfig`'s settings from ini mode's one path."""
+    parser = _parser("xeBuild ini", """\
+examples:
+   xeBuild ini ./16547/
+   xeBuild ini c:\\16547\\$SystemUpdate
+   xeBuild ini z:\\someWeirdPath\\su20076000_00000000
+      when specifying path, either provide relative path or full path
+      to either the SU container, a folder with $SystemUpdate folder in it,
+      or a folder with flash update named 'su20076000_00000000' in it.
+      Hash data will be output to the folder with the SU in it named _SU.ini""")
+    parser.add_argument("system_update", metavar="systeUpdateConPath")
+    parser.add_argument("-?", "-h", action="help", help="shows this help")
+    return {"system_update": parser.parse_args(argv).system_update}
 
 
-def main(argv=None) -> int:
-    """Build mode from a command line; the exit status the shell gets back."""
-    argv = sys.argv[1:] if argv is None else argv
-    # INFO for every mode, before any switch is read -- some say things themselves;
-    # `-v` then takes it a level down, to what the original shows only with it.
-    handler = logging.StreamHandler()
-    handler.setFormatter(LogFormatter(handler.stream.isatty()))
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
-    logger.info("started %s", time.strftime("%Y-%m-%d %H:%M:%S"))
-    logger.info("cmd: %s", " ".join([os.path.basename(sys.argv[0]), *argv]))
-    if argv and argv[0] == "client":
-        return _client(argv[1:])
-    if argv and argv[0] == "update":
-        return _update(argv[1:])
-    if argv and argv[0] == "ini":
-        return _ini(argv[1:])
-    try:
-        mode, settings, flags = parse(argv)
-    except UsageError as why:
-        print("ERROR: %s" % why, file=sys.stderr)
-        print(USAGE, file=sys.stderr)
-        return 2
-    if mode == "extract":
-        return _extract(settings, flags)
-    if flags["help"]:
-        print(USAGE)
-        return 0
-    if mode != "build":
-        print("ERROR: %s mode is not implemented here" % mode, file=sys.stderr)
-        return 2
+def _build(settings: dict) -> int:
+    """Build mode from its settings."""
+    if "cpu_key" in settings:
+        logger.info("CPU key overridden from command line, not looking for cpukey.txt")
+    if "one_bl_key" in settings:
+        logger.info("1BL key overridden from command line, not looking for 1blkey.txt")
     if settings.get("verbose"):
         logging.getLogger().setLevel(logging.DEBUG)
     where = settings.get("per_build") or "data"
@@ -380,32 +442,18 @@ def main(argv=None) -> int:
     return 0
 
 
-def _extract(settings: dict, flags: dict) -> int:
-    """Extract mode: `-v`, `-noenter` and the image, which is all its usage names.
-
-    Its report is what it is for, so it is shown whatever `-v` says.
-    """
-    if flags["help"]:
-        print(EXTRACT_USAGE)
-        return 0
-    extra = set(settings) - {"verbose", "no_enter", "out"}
-    if extra or "out" not in settings:
-        why = ("%s is not a setting extract mode takes" % sorted(extra)[0] if extra
-               else "not enough info provided to carry out command!")
-        print("ERROR: %s" % why, file=sys.stderr)
-        print(EXTRACT_USAGE, file=sys.stderr)
-        return 2
-    if settings.get("verbose"):
+def _extract(settings: dict) -> int:
+    """Extract mode from its settings. Its report is what it is for, so it is shown
+    whatever `-v` says."""
+    if settings["verbose"]:
         logging.getLogger().setLevel(logging.DEBUG)
     try:
-        config = ExtractConfig(image=settings["out"],
-                               verbose=settings.get("verbose", 0),
-                               no_enter=settings.get("no_enter", False))
-        found = extract_image(config)
+        config = ExtractConfig(**settings)
+        extracted = extract_image(config)
     except (ValueError, OSError) as why:
         logger.critical("Loading dump failed: %s", why)
         return 1
-    if found is None:
+    if extracted is None:
         logger.critical("Loading dump failed!")
         return 1
     if not config.no_enter and sys.stdin.isatty():
@@ -413,103 +461,8 @@ def _extract(settings: dict, flags: dict) -> int:
     return 0
 
 
-def parse_client(argv) -> tuple:
-    """`(settings, flags)` for `config.ClientConfig` from client mode's switches.
-
-    One action and what rides with it, as the original's own note has it: "stacking
-    commands is not possible with the exception of v, noenter, ip, s and reboot" --
-    a second action is refused, "option flag %s on command line but option was
-    already set!", and one short of its words, "not enough arguments provided!".
-    """
-    rest, settings, flags = list(argv), {}, {"help": False}
-    # The action each switch names and the words it takes after it.
-    takes = {"-i": ("info", ()), "-r": ("read", ("file",)),
-             "-w": ("write", ("file",)),
-             "-rb": ("read-blocks", ("file", "block", "length")),
-             "-wb": ("write-blocks", ("file", "block")),
-             "-eb": ("erase-block", ("block",)), "-keys": ("keys", ())}
-    while rest:
-        one = rest.pop(0)
-        if one.startswith("-v"):
-            settings["verbose"] = 1
-        elif one == "-noenter":
-            settings["no_enter"] = True
-        elif one == "-s":
-            # A reboot supersedes a shutdown in either order, and says which it saw
-            # first -- measured, both orders, the wire ending in REEB.
-            if settings.get("reboot"):
-                logger.warning("reboot has already been set on command line, "
-                               "ignoring -s")
-            else:
-                settings["shutdown"] = True
-        elif one == "-reboot":
-            if settings.pop("shutdown", False):
-                logger.warning("shutdown superseded by reboot, ignoring -s in favor of "
-                               "-reboot")
-            settings["reboot"] = True
-        elif one == "-?":
-            flags["help"] = True
-            break
-        elif one == "-ip":
-            if not rest:
-                raise UsageError("option flag -ip on command line but no argument "
-                                 "provided!")
-            settings["address"] = rest.pop(0)
-        elif one in takes:
-            if "action" in settings:
-                raise UsageError("option flag %s on command line but option was "
-                                 "already set!" % one)
-            action, words = takes[one]
-            settings["action"] = action
-            for word in words:
-                if not rest or rest[0].startswith("-"):
-                    raise UsageError("option flag %s on command line not enough "
-                                     "arguments provided!" % one)
-                settings[word] = rest.pop(0)
-            # `-i` takes a directory when a word follows it.
-            if one == "-i" and rest and not rest[0].startswith("-"):
-                settings["directory"] = rest.pop(0)
-        elif one == "-p":
-            if "action" in settings:
-                raise UsageError("option flag -p on command line but option was "
-                                 "already set!")
-            settings["action"] = "patches"
-            if rest and not rest[0].startswith("-"):
-                settings["file"] = rest.pop(0)
-        elif one in ("-e", "-c"):
-            if "action" in settings:
-                raise UsageError("option flag %s on command line but option was "
-                                 "already set!" % one)
-            if not rest or rest[0].startswith("-"):
-                raise UsageError("option flag %s on command line not enough "
-                                 "arguments provided!" % one)
-            settings["action"] = "avatar" if one == "-e" else "compatibility"
-            settings["directory"] = rest.pop(0)
-        elif one == "-bp":
-            if "action" in settings:
-                raise UsageError("option flag -bp on command line but option was "
-                                 "already set!")
-            if len(rest) < 2 or any(word.startswith("-") for word in rest[:2]):
-                raise UsageError("option flag -bp on command line not enough "
-                                 "arguments provided!")
-            settings["action"] = "binary-patch"
-            settings["file"], settings["offset"] = rest.pop(0), rest.pop(0)
-        else:
-            raise UsageError("%s is not a client switch" % one)
-    return settings, flags
-
-
-def _client(argv) -> int:
-    """Client mode from its own switches."""
-    try:
-        settings, flags = parse_client(argv)
-    except UsageError as why:
-        print("ERROR: %s" % why, file=sys.stderr)
-        print(CLIENT_USAGE, file=sys.stderr)
-        return 2
-    if flags["help"]:
-        print(CLIENT_USAGE)
-        return 0
+def _client(settings: dict) -> int:
+    """Client mode from its settings."""
     if settings.get("verbose"):
         logging.getLogger().setLevel(logging.DEBUG)
     try:
@@ -523,81 +476,8 @@ def _client(argv) -> int:
     return 0
 
 
-def parse_update(argv) -> tuple:
-    """`(settings, flags)` for `config.UpdateConfig` from update mode's switches.
-
-    `-nowrite` implies `-noava` and `-noreeb`, as the original sets all three for it
-    (0x404F13). Each of `-nowrite`, `-noava`, `-noreeb` and `-clean` stands alone
-    here, which is what the usage says; the original's handlers also skip the word
-    after them (`add ebx, 1` at 0x404F10, 0x404FA8, 0x405005, 0x40526C), so
-    `-noava -noreeb` reboots and `-noreeb -clean` fetches what `-clean` should leave --
-    both measured. A deliberate divergence: a switch that eats its neighbour is a
-    fault, not a behaviour anyone asks for.
-    """
-    rest, settings, flags = list(argv), {}, {"help": False}
-    takes = {"-f": "data", "-d": "dump_to", "-ip": "address", "-i": "firmware_ext",
-             "-r": "section_ext"}
-    appended = []
-    while rest:
-        one = rest.pop(0)
-        if one == "-?":
-            flags["help"] = True
-            break
-        if one.startswith("-v"):
-            settings["verbose"] = 1
-        elif one == "-noenter":
-            settings["no_enter"] = True
-        elif one == "-nowrite":
-            settings.update(no_write=True, no_avatar=True, no_reboot=True)
-        elif one == "-noava":
-            settings["no_avatar"] = True
-        elif one == "-noreeb":
-            settings["no_reboot"] = True
-        elif one == "-clean":
-            settings["clean"] = True
-        elif one in takes or one == "-a":
-            if not rest:
-                raise UsageError("option flag %s on command line but no argument "
-                                 "provided!" % one)
-            if one == "-a":
-                appended.append(rest.pop(0))
-            else:
-                settings[takes[one]] = rest.pop(0)
-        else:
-            raise UsageError("unknown option '%s' provided on command line!" % one)
-    if appended:
-        settings["append"] = tuple(appended)
-    return settings, flags
-
-
-def _ini(argv) -> int:
-    """Ini mode: one path and nothing else, not `-noenter` either -- any other count
-    of words gets its usage, measured. What it says is what it is for, so it is
-    shown whatever the verbosity."""
-    if len(argv) != 1:
-        print(INI_USAGE, file=sys.stderr)
-        return 2
-    try:
-        write_su_ini(IniConfig(system_update=argv[0]))
-    except (ValueError, OSError) as why:
-        logger.critical("Error loading SU! %s", why)
-        return 1
-    if sys.stdin.isatty():
-        input("press <enter> to quit...")
-    return 0
-
-
-def _update(argv) -> int:
-    """Update mode from its own switches."""
-    try:
-        settings, flags = parse_update(argv)
-    except UsageError as why:
-        print("ERROR: %s" % why, file=sys.stderr)
-        print(UPDATE_USAGE, file=sys.stderr)
-        return 2
-    if flags["help"]:
-        print(UPDATE_USAGE)
-        return 0
+def _update(settings: dict) -> int:
+    """Update mode from its settings."""
     if settings.get("verbose"):
         logging.getLogger().setLevel(logging.DEBUG)
     try:
@@ -610,5 +490,18 @@ def _update(argv) -> int:
         logger.info("image built path: %s", os.path.relpath(
             os.path.abspath(kept), os.path.dirname(os.path.abspath(sys.argv[0]))))
     if not config.no_enter and sys.stdin.isatty():
+        input("press <enter> to quit...")
+    return 0
+
+
+def _ini(settings: dict) -> int:
+    """Ini mode from its settings. What it says is what it is for, so it is shown
+    whatever the verbosity."""
+    try:
+        write_su_ini(IniConfig(**settings))
+    except (ValueError, OSError) as why:
+        logger.critical("Error loading SU! %s", why)
+        return 1
+    if sys.stdin.isatty():
         input("press <enter> to quit...")
     return 0
