@@ -93,6 +93,11 @@ def run_client(config, port: int = PORT) -> None:
             logger.info("erased block %#x", config.block)
         elif action is not None:
             raise ValueError("%s is not an action this implements yet" % action)
+        # Reached only when the action worked: a failed one raises above and the
+        # shutdown or reboot asked for is not sent. The original sends it anyway after
+        # "avatar data skipped" or "compatibility data skipped" -- measured -- and a
+        # reboot then takes DashLaunch's server out of memory before the failure can
+        # be put right. A deliberate divergence.
         if config.shutdown:
             logger.info("sending shutdown command")
             server.shut_down()
