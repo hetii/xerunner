@@ -194,7 +194,7 @@ class Build:
 
         Off the dump's CF whenever there is a dump -- "setting pairing data from image
         to 0x780227". With none, `-norandom` leaves the three bytes the original stores
-        one at a time at 0x41BA43, "initializing static pairing value", and otherwise
+        one at a time at 0x41AA43, "initializing static pairing value", and otherwise
         they are drawn with everything else.
 
         Zeros for a zero-paired build -- see `zero_paired` -- whatever the dump says.
