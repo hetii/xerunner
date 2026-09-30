@@ -39,6 +39,9 @@ USAGE = """\
 Usage    :
    xeBuild [mode] -t <type> [<switch> [<switch>...]] <out.bin>
 
+Example  :
+   xeBuild -t retail -c trinity -d files -b 0102...0f -p 0102...0f out.bin
+
 Switches:
    -t <type>: retail, jtag, glitch, glitch2, glitch2m, devkit (defaults to retail)
    -p <key> : 32 character CPU hex key (override, can be elsewhere)
@@ -46,8 +49,7 @@ Switches:
    -c <con> : console type
    -d <dir> : per build files directory
    -f <dir> : use different data dir and file lists
-   -s <file>: outputs SHA-1 of final image to <file>, if <file> is not provided an auto
-              generated name is used
+   -s <file>: outputs SHA-1 of final image to <file>, if <file> is not provided an auto generated name is used
    -o <opt> : set xeBuild options
    -a <name>: append patches
    -i <ext> : adds _<ext> into firmware ini and patches file names
@@ -55,25 +57,60 @@ Switches:
    -8 <pat> : adds raw patch to NAND just before finalizing
    -v       : shows more info during build process
    -noenter : suppresses prompt for enter key when finished
-   -norandom: draws nothing, keeping the values the original was compiled with
    -?       : shows this info
 
-[mode] is build, the default, or extract, client or update, each with usage of its own.
-<opt> example: -o macid=00:22:48:F1:01:02;gameregion=0x00FF;nomobile
-<pat> example: -8 myfile.bin,0x12345;myotherfile.bin,0x54321"""
+legend:
+[mode]      : build, extract, client, update - defaults to build if not present
+<con>       = xenon, zephyr, falcon, jasper, jaspersb, jasper256,
+              jasper512, jasperbb, jasperbigffs, trinity, trinitybb, trinitybigffs
+              corona, corona4g, winchester, winchester4g
+<dir>       = path, absolute or relative, to a directory - do not terminate with /
+<key>       = 128 bit key in hexadecimal representation
+<name>      = name.bin contents will be appended to hv/kernel patches
+
+<out.bin>   = optional, overrides auto built output image name
+<ext>       = using this option would cause the builder to look for _glitch_<ext>.ini instead of _glitch.ini
+              and patches_jasper_<ext>.bin instead of patches_jasper.bin
+<opt> various options can be specified on the command line, see perbox sample ini for descriptions
+      listed below, ALL are available to all image types
+      the others can be specified but are only used for that specific image type
+ALL         = nomobile noremap noecdremap nosecurity nosusecurity nandmu smcnocheck cputemp=
+ALL         = gputemp= edramtemp= overcputemp= overgputemp= overedramtemp= cpufan= gpufan=
+ALL         = avregion= gameregion= dvdregion= macid= cfldv=
+JTAG/GLITCH = smcnoeject smcnoblink cygnos demon xellbutton= xellbutton2= dvdkey=
+JTAG only   = nodvd olddvd dualboot=
+GLITCH only = patchsmc
+      options noted above with an = are expected to be followed with a value
+      specifying one of the options without an = is the same as setting TRUE in the ini
+         any value assigned to it will be ignored.
+      note that command line options take precedence over any values set in perbox ini
+      and that only values preceded with 0x will be interpreted as hex, MAC is the only exception
+      example: -o macid=00:22:48:F1:01:02;gameregion=0x00FF;nomobile
+      example: -o macid=00:22:48:F1:01:02 -o gameregion=0x00FF -o nomobile
+      example: -o macid=002248F10102 -o gameregion=255 -o nomobile
+<pat>       = optional, <pat> consists of filename.ext,offset
+      patches NAND image with file contents just before combining spare and finalizing ecc
+      offset is the raw offset without spare data
+      file will load based from the -f directory, or absolute path if drive letter is found
+      add 0x to offset to specify hexadecimal, otherwise it will be read as decimal
+      example: -8 myfile.bin,0x12345
+      example: -8 myfile.bin,0x12345;myotherfile.bin,0x54321"""  # noqa: E501
 
 
 EXTRACT_USAGE = """\
-Usage    :
+Usage   :
    xeBuild extract <switch> <input NAND image>
 
-Example  :
+Examples:
    xeBuild extract -v nanddump.bin
 
 Switches:
-   -v       : shows more info during extract process
    -noenter : suppresses prompt for enter key when finished
-   -?       : shows this info"""
+   -v       : shows more info during extract process
+   -?       : shows this help
+
+legend:
+<dir>       = path, absolute or relative, to a directory - do not terminate with /"""
 
 
 # Ini mode's own usage, the original's words (0x418240); its main usage does not name
@@ -102,19 +139,18 @@ Examples:
 
 Switches:
    -i             : connects to console and shows some info about it
-   -i <d>         : collects console information into folder <d>, usually enough for
-                    build mode
+*  -i <d>         : collects console information into folder <d>, usually enough for build mode
    -r <f>         : dumps system area of NAND to <f>
    -w <f>         : writes system area of NAND from <f>
+   -e <d>         : format partition and send avatar/kinect data to HDD from <d>, must match running kernel
+   -c <d>         : format partition and send xbox compatibility data to HDD from <d>
+   -p             : will attempt to automatically update patches based on running kernel version
+   -p <f>         : update patches with <f>
    -rb <f> <b> <l>: read series of blocks starting at <b> for <l>
-   -wb <f> <b>    : write series of blocks starting at <b> for the number of blocks in
-                    <f>
+   -wb <f> <b>    : write series of blocks starting at <b> for the number of blocks in <f>
    -eb <b>        : attempt to erase a single block, even if marked bad on console
    -bp <f> <o>    : binary patch NAND with contents of <f> to logical offset <o>
-   -keys          : will attempt to dump RSA and 1BL keys from console
-   -e <d>         : format partition and send avatar/kinect data to HDD from <d>, must
-                    match running kernel
-   -c <d>         : format partition and send xbox compatibility data to HDD from <d>
+*  -keys          : will attempt to dump RSA and 1BL keys from console
    -s             : shutdown console
    -ip <add>      : force attempt to connect to addr (ie: -i 192.168.0.100)
    -noenter       : suppresses prompt for enter key when finished
@@ -122,11 +158,19 @@ Switches:
    -v             : shows more info during client process
    -?             : shows this help
 
-   -p             : will attempt to automatically update patches based on running
-                    kernel version
-   -p <f>         : update patches with <f>
-
-<b>, <l> and <o> are hexadecimal."""
+legend:
+<add>    = without this option network will be scanned for server broadcast beacon
+           If provided the correct format is an IPv4 address like 192.168.0.100
+<f>      = path, absolute or relative, to a file
+<d>      = path, absolute or relative, to a directory - do not terminate with /
+<b>      = hexadecimal block number
+<l>      = hexadecimal number of blocks
+<o>      = hexadecimal logical offset (spare data not considered) in flash
+notes:
+* functions not fully supported with older patch versions, use with caution.
+- client mode tends to operate on a single command basis, stacking commands.
+  is not possible with the exception of v, noenter, ip, s and reboot.
+- patch update (-p) will retain any addon patches already on the console."""  # noqa: E501
 
 
 UPDATE_USAGE = """\
@@ -151,7 +195,16 @@ Switches:
    -noreeb  : do not automatically reboot console after writes are completed
    -noenter : suppresses prompt for enter key when finished
    -v       : shows more info during update process
-   -?       : shows this help"""
+   -?       : shows this help
+
+legend:
+<name>      = name.bin contents will be appended to hv/kernel patches
+
+<dir>       = path, absolute or relative, to a directory - do not terminate with \\
+<ext>       = using this option would cause the builder to look for _glitch_<ext>.ini instead of _glitch.ini
+              and patches_jasper_<ext>.bin instead of patches_jasper.bin
+<add>       = without this option network will be scanned for server broadcast beacon
+              If provided the correct format is an IPv4 address like 192.168.0.100"""  # noqa: E501
 
 
 class UsageError(ValueError):
