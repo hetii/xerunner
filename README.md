@@ -89,6 +89,12 @@ the code makes the decision:
   still shuts the console down or reboots it; a reboot takes DashLaunch's server out of
   memory before the failure can be put right. Here the run stops with the error and
   the console is left as it is. -- `client/client.py`, `run_client`
+- **`client` takes one action per run, in any order.** The original refuses a second
+  action with "option flag %s on command line but option was already set!" -- except
+  `-keys` and `-p`, which it lets in after another action and runs, dropping the first
+  without a word: `-e su/ -keys` dumps the keys and sends no avatar data, `-r out.bin -p`
+  updates the patches and reads nothing. Here each of those is refused as well, with the
+  same sentence. -- `cli/command.py`, `parse_client`
 - **A MAC address is taken in three written forms and no other:** `002248F10102`,
   `00:22:48:F1:01:02` and `00-22-48-F1-01-02`, the same in options.ini and after `-o`.
   The original refuses the dashes on the command line, garbles them in options.ini
