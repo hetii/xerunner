@@ -7,12 +7,16 @@ release directory, and it checks every bootloader the release names against the 
 the release states for it, which is a proof that needs no other tool.
 """
 
+import os
+import shutil
 import struct
 import hashlib
 import binascii
+import tempfile
 import unittest
 
 from xebuild.boards import for_name
+from xebuild.imagetypes import for_name as type_for
 from xebuild.release.recipe import Listed, canonical
 from xebuild.release import Container, Patches, Recipe, Release
 
@@ -110,6 +114,63 @@ class AFileList(unittest.TestCase):
     def test_nothing_is_read_as_a_stage_that_is_not_one(self):
         listed = Recipe("[flashfs]\ndash.xex,d2089a4c\n").firmware[0]
         self.assertEqual(listed.kind, "")
+
+
+class AReleaseSFileList(unittest.TestCase):
+    """`Release.recipe`, off a release directory made up in the test."""
+
+    def test_one_with_no_version_label_is_refused(self):
+        """Measured: "could not find label [version] in file list ini" (0x40952E)."""
+        where = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, where)
+        kind = type_for("glitch2")
+        with open(os.path.join(where, kind.file_list("")), "w") as handle:
+            handle.write("[trinitybl]\ncba_9188.bin,5a76752d\n")
+        with self.assertRaisesRegex(ValueError, r"label \[version\]"):
+            Release(where).recipe(kind)
+        with open(os.path.join(where, kind.file_list("")), "w") as handle:
+            handle.write("[version]\n17559\n\n[trinitybl]\ncba_9188.bin,5a76752d\n")
+        self.assertEqual(Release(where).recipe(kind).version, "17559")
+
+
+class WhatAListSaysBeyondItsFiles(unittest.TestCase):
+    """Measured on made-up lists against the original."""
+
+    def test_a_raw_patch_offset_is_decimal_unless_it_starts_0x(self):
+        found = Recipe("[rawpatch]\na.bin,100000\nb.bin,0x100000\nc.bin,0X10\n")
+        self.assertEqual(found.raw_patches,
+                         (("a.bin", 100000), ("b.bin", 0x100000), ("c.bin", 0x10)))
+
+    def test_a_raw_patch_with_no_offset_or_none_that_reads_is_refused(self):
+        for line in ("a.bin", "a.bin,", "a.bin,f0000"):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                Recipe("[rawpatch]\n%s\n" % line).raw_patches  # noqa: B018
+
+    def test_labels_are_matched_as_written(self):
+        """0x409567 compares bytes: [VERSION] and [FlashFS] are not labels to it."""
+        found = Recipe("[VERSION]\n17559\n[FlashFS]\ndash.xex,0\n")
+        self.assertEqual(found.version, "")
+        with self.assertRaisesRegex(ValueError, r"label \[flashfs\]"):
+            found.firmware  # noqa: B018
+
+    def test_flashfs_and_security_are_both_required(self):
+        with self.assertRaisesRegex(ValueError, r"label \[security\]"):
+            Recipe("[flashfs]\ndash.xex,0\n").security  # noqa: B018
+        self.assertEqual(Recipe("[security]\ncrl.bin\n").security[0].name, "crl.bin")
+        with self.assertRaisesRegex(ValueError, "greater than 21 chars"):
+            Recipe("[security]\n%s.bin\n" % ("s" * 18)).security  # noqa: B018
+
+    def test_an_empty_raw_patch_section_is_an_entry_without_an_offset(self):
+        with self.assertRaisesRegex(ValueError, "missing offset info"):
+            Recipe("[rawpatch]\n[flashfs]\n").raw_patches  # noqa: B018
+        self.assertEqual(Recipe("[flashfs]\n").raw_patches, ())
+
+    def test_a_firmware_name_past_21_characters_is_refused(self):
+        self.assertEqual(len(Recipe("[flashfs]\n%s.xex,0\n" % ("b" * 17)).firmware), 1)
+        with self.assertRaisesRegex(ValueError, "greater than 21 chars"):
+            Recipe("[flashfs]\n%s.xex,0\n" % ("c" * 18)).firmware  # noqa: B018
+        listed = Recipe("[flashfs]\n1838-fs\\deviceselector.xex,0\n").firmware
+        self.assertEqual(len(listed), 1)
 
 
 class TheFormAChecksumCovers(unittest.TestCase):

@@ -10,6 +10,7 @@ import unittest
 
 from xebuild.boards import for_name
 from xebuild.release import Release
+from ..test_chain import ONE_BL_KEY
 from xebuild.imagetypes import ALL as TYPES, for_name as type_for
 
 
@@ -24,7 +25,7 @@ class AgainstTheRealRelease(unittest.TestCase):
         where = os.environ.get("XEBUILD_RELEASE_DIR", "")
         if not where or not os.path.isdir(where):
             raise unittest.SkipTest("XEBUILD_RELEASE_DIR does not name a release")
-        cls.release = Release(where)
+        cls.release = Release(where, one_bl_key=ONE_BL_KEY)
 
     def test_every_bootloader_it_names_is_the_one_it_vouches_for(self):
         checked = empty = 0

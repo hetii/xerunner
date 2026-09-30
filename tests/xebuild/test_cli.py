@@ -52,6 +52,14 @@ class ReadingACommandLine(unittest.TestCase):
         self.assertTrue(config.cygnos)
         self.assertEqual((config.xellbutton, config.cfldv), ("power", 10))
 
+    def test_the_first_bare_word_names_the_image_and_a_later_one_is_ignored(self):
+        """Measured: `one.bin two.bin` builds one.bin, and warns of the other."""
+        with self.assertLogs("xebuild.cli.command", "WARNING") as said:
+            settings = parse(["-t", "retail", "one.bin", "two.bin"])[1]
+        self.assertEqual(settings["out"], "one.bin")
+        self.assertEqual(len(said.output), 1)
+        self.assertIn("excess parameters", said.output[0])
+
     def test_s_takes_the_next_word_whatever_it_is(self):
         """`-s -noenter` loses the switch, as the original's does, and makes a name."""
         self.assertEqual(parse(["-s", "hash.txt"])[1], {"sha_file": "hash.txt"})

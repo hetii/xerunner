@@ -50,11 +50,14 @@ class Chain:
 
     `image` is anything that answers `flat` and `header` -- an `Image` or a `Dump`'s --
     and `board` says which console, which settles the fat regime and the slot stride.
+    `one_bl_key` is the key the first CB and every CF open under; with none, nothing
+    opens.
     """
 
-    def __init__(self, image, board):
+    def __init__(self, image, board, one_bl_key: bytes | None = None):
         self.image = image
         self.board = board
+        self.one_bl_key = one_bl_key
 
     @property
     def flat(self) -> bytes:
@@ -97,13 +100,16 @@ class Chain:
 
     def _opened_slots(self) -> tuple:
         """Every slot with what it says, since which one counts is in the contents."""
+        if self.one_bl_key is None:
+            raise ValueError("you need to specify 1BL key! A CF opens under no other.")
         found = tuple(
             (one, Fields.in_cf(one.head + decrypt_bootloader(
-                one.body, hmacsha(sealing.ONE_BL_KEY, one.nonce))))
+                one.body, hmacsha(self.one_bl_key, one.nonce))))
             for one in self.slots
         )
         if not found:
-            raise ValueError("this image keeps no CF slot behind its chain")
+            raise ValueError("this flash keeps no CF slot behind its chain, so its LDV "
+                             "and pairing cannot be read.")
         return found
 
     @property
@@ -158,7 +164,9 @@ class Chain:
         take that pass does not open under it, which is a question a reader can settle
         by looking. A stage sealed the ordinary way therefore reads exactly as before.
         """
-        plain = sealing.keys(self.stages, cpu_key)
+        if self.one_bl_key is None:
+            return (None,) * len(self.stages)
+        plain = sealing.keys(self.stages, self.one_bl_key, cpu_key)
         at = sealing.binding_at(self.stages)
         if at >= 0 or not cpu_key or len(self.stages) < 2:
             return plain
@@ -167,7 +175,7 @@ class Chain:
         if key is None or sealing.looks_open(stage.tag,
                                              decrypt_bootloader(stage.body, key)):
             return plain
-        return sealing.keys(self.stages, cpu_key, second_pass_at=1)
+        return sealing.keys(self.stages, self.one_bl_key, cpu_key, second_pass_at=1)
 
     def opened(self, stage: Stage, key: bytes) -> bytes:
         """One stage's body with the cipher run over it, whatever state it was in."""

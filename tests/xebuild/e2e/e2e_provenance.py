@@ -15,14 +15,21 @@ import shutil
 import hashlib
 import tempfile
 import unittest
+import functools
 
 from .standin import StandIn
 from xebuild.image import Image
 from xebuild.boards import for_name
 from xebuild.release import Release
+from ..test_chain import ONE_BL_KEY
 from xebuild.update import run_update
 from xebuild.build import Build, Material
 from xebuild.config import BuildConfig, UpdateConfig
+
+# Every build and release here is handed the 1BL key, as J-Runner's options.ini
+# hands it to the original.
+Release = functools.partial(Release, one_bl_key=ONE_BL_KEY)
+BuildConfig = functools.partial(BuildConfig, one_bl_key=ONE_BL_KEY)
 
 NAMES = ("xenonclatin.xtt", "xenonjklatin.xtt", "ximedic.xex")
 LAUNCH = b"L" * 0x1000

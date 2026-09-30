@@ -235,6 +235,10 @@ def parse(argv) -> tuple:
                                 "1blkey.txt")
         elif one.startswith("-"):
             raise UsageError("%s is not a switch" % one)
+        elif out:
+            # The first word without a switch names the image; a later one is
+            # passed over (0x41A981).
+            logger.warning("command line has excess parameters without switches!")
         else:
             out.append(one)
     settings.update(options)
@@ -243,7 +247,7 @@ def parse(argv) -> tuple:
     if raw:
         settings["raw_patches"] = ";".join(raw)
     if out:
-        settings["out"] = out[-1]
+        settings["out"] = out[0]
     return mode, settings, flags
 
 

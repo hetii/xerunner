@@ -142,8 +142,8 @@ class Build:
                 self._dump = False
                 return None
             bigffs = self.config.bigffs if own is self.console else False
-            self._dump = Dump(raw, own, bigffs, remap=not self.config.noremap,
-                              ecd=not self.config.noecdremap)
+            self._dump = Dump(raw, own, bigffs, ecd=not self.config.noecdremap,
+                              one_bl_key=self.config.one_bl_key)
         return self._dump or None
 
     @property
@@ -508,6 +508,10 @@ class Build:
         word after it says how many bytes the files brought -- their own lengths added
         up, 00 00 0C F8 for `xl_usb`'s 3320 and 00 00 0D 14 with `hvFixKeys` as well.
         Nothing else in the image moves. A file is `bin/<name>.bin` of the release.
+
+        The set is built in a buffer of 0x4000 bytes, and a file that would take it past
+        that is left out and the rest still go in (0x428BB4) -- measured with twelve
+        `xl_usb`: five fit, seven are refused room.
         """
         if not self.config.append:
             return listed
@@ -516,8 +520,12 @@ class Build:
         brought = 0
         for name in self.config.append:
             extra = self.release.option(name).raw
+            extra = extra[:-4] if extra.endswith(end) else extra
+            if len(body) + len(extra) > 0x4000:
+                logger.error("could not append %s into patches, not enough room!", name)
+                continue
             brought += len(extra)
-            body += extra[:-4] if extra.endswith(end) else extra
+            body += extra
         return body + end + brought.to_bytes(4, "big")
 
     def _slot_lead(self) -> bytes:
@@ -611,7 +619,7 @@ class Build:
         stages = [Stage(out, at) for at in offsets]
         for stage, nonce in zip(stages, self._nonces(stages), strict=True):
             stage.nonce = nonce
-        keys = sealing.keys(stages, self.config.cpu_key or b"",
+        keys = sealing.keys(stages, self.config.one_bl_key, self.config.cpu_key or b"",
                             self._second_pass_at(stages))
         binds = self._wears_console(stages, which)
         if binds >= 0:
@@ -855,7 +863,7 @@ class Build:
         # out with nothing of the console in it, measured.
         jtag_first = self.image_type.name == "jtag" and which == 0
         if which < len(pairs) - 1 or jtag_first:
-            return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN)
+            return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN, self.config.one_bl_key)
         # The pairing goes in only where a chain binds to the console. A chain with
         # no CB_B binds nowhere, and its CF carries three zeros there and the lockdown
         # value all the same -- measured on a fat glitch image, the one such chain this
@@ -866,8 +874,8 @@ class Build:
             for chain in (0, 1) if self._chain_files(chain)
         )
         update.with_console(cf, which, self.pairing if binds else bytes(3), self.ldv,
-                            self.config.cpu_key)
-        return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN)
+                            self.config.cpu_key, self.config.one_bl_key)
+        return update.sealed(cf, cg, cg_nonce, SEAL_ALIGN, self.config.one_bl_key)
 
     def _update_pairs(self) -> list:
         """The CF/CG pairs the file list names, in order: one, or a JTAG image's two.
@@ -1007,13 +1015,18 @@ class Build:
 
     @property
     def _console_statistics(self) -> bytes | None:
-        """The console's Statistics block, or None with no dump."""
-        return self.dump.statistics if self.dump is not None else None
+        """The console's Statistics block, or None with no dump or one whose table was
+        not found -- see `Dump.fsroot_found`."""
+        if self.dump is None or not self.dump.fsroot_found:
+            return None
+        return self.dump.statistics
 
     @property
     def _console_manufacturing(self) -> bytes | None:
-        """The console's Manufacturing block, or None where it keeps none."""
-        if self.dump is None or not self.dump.manufacturing_written:
+        """The console's Manufacturing block, or None where it keeps none or its table
+        was not found -- see `Dump.fsroot_found`."""
+        if (self.dump is None or not self.dump.fsroot_found
+                or not self.dump.manufacturing_written):
             return None
         return self.dump.manufacturing
 
@@ -1243,6 +1256,12 @@ class Build:
         # Refused here, before anything is laid, as the original does.
         if self.console is None:
             raise ValueError("you need to specify console type!")
+        # The original has no 1BL key of its own; with none handed in it cannot open a
+        # bootloader and stops at "critical bootloader files are missing". Said here
+        # for what it is.
+        if self.config.one_bl_key is None:
+            raise ValueError("you need to specify 1BL key! (-b, 1blkey.txt where the "
+                             "tool runs, or 1blkey in options.ini)")
         out = Image.blank(self.flash, self.bigffs)
         where, spills = self._system_area(out)
         placed, table_at = self._filesystem(out, where, spills, when)
@@ -1313,7 +1332,12 @@ class Build:
         page = self.header(slots, self.stated_version, len(smc))
         # Zeros from the page to the SMC, on every reference image.
         out.put(0, page + bytes(smc_at - len(page)))
-        net_kd = self.dump.net_kd if self.dump is not None else None
+        # Read in the same step as the statistics (0x414300 beside 0x414050), which
+        # the loader skips under `nomobile` or where no fsroot was found (0x417C5B,
+        # 0x417C62) -- measured: no netKd under nomobile.
+        dump = self.dump
+        net_kd = (dump.net_kd if dump is not None and dump.fsroot_found
+                  and not self.config.nomobile else None)
         if net_kd:
             # "Inserting netKd data from dump into header": as many bytes as the block
             # states, at 0x80 -- see `Dump.net_kd`. Only a block inside the first page
@@ -1368,8 +1392,12 @@ class Build:
         # The file list's own `[rawpatch]` first -- a devkit list names two, "(1)" and
         # "(2)" in the original's log -- and then `-8`'s. Each line is a name and an
         # offset, which the list keeps where a checksum would be.
-        listed = [(one.name, one.crc) for one in self.recipe.raw_patches]
-        for name, at in listed + list(self.config.raw_patches):
+        patches = list(self.recipe.raw_patches) + list(self.config.raw_patches)
+        # Sixteen slots between the list and `-8`, and one more is refused: "16 of 16
+        # [rawpatch] slots are already full!", measured from either side.
+        if len(patches) > 16:
+            raise ValueError("16 of 16 [rawpatch] slots are already full!")
+        for name, at in patches:
             # "[rawpatch]": raw bytes into the flat image, "just before combining spare
             # and finalizing ecc". The spare's fields are already settled by then, so a
             # patch over erased flash leaves its pages' fields erased and only the code
@@ -1435,7 +1463,6 @@ class Build:
                            "another flash; nothing is remapped")
             return
         for block, stand_in in moves.items():
-            logger.debug("remapping block %#x to block %#x", block, stand_in)
             out.retire(block, stand_in)
 
     def _jtag_regions(self, out: Image, where: dict, second: bytes) -> None:
@@ -1512,11 +1539,12 @@ class Build:
         parse them at all (0x417C62) -- and what the material holds still goes in,
         measured."""
         out = dict(self.material.mobiles)
-        if self.dump is not None and not self.config.nomobile:
-            for name in self.dump.image.blobs:
+        dump = self.dump
+        if dump is not None and not self.config.nomobile and dump.fsroot_found:
+            for name in dump.image.blobs:
                 if name.startswith("Mobile") and name not in out:
                     logger.warning("%s found, adding from previous parse", name)
-                    out[name] = self.dump.image.blob(name)
+                    out[name] = dump.image.blob(name)
         return out
 
     def _settings(self) -> list:
@@ -1785,8 +1813,8 @@ def build_image(config, when: int | None = None) -> str:
     Returns where the image went. `when` is the build's clock, for reproducing one.
     """
     if config.per_build is None:
-        logger.info("you did not specify per build directory! Using ./data/")
-    release = Release(config.data or "data")
+        logger.warning("you did not specify per build directory! Using ./data/")
+    release = Release(config.data or "data", one_bl_key=config.one_bl_key)
     one = Build(config, Material(config.per_build or "data"), release)
     image = one.image(when)
     out = config.out or one.auto_name()

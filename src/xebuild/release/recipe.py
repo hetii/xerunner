@@ -179,7 +179,9 @@ class Recipe:
             if not line:
                 continue
             if line.startswith("[") and line.endswith("]"):
-                name = line[1:-1].strip().lower()
+                # Labels are matched as written (0x409567 compares bytes): the
+                # original refuses [VERSION], [TRINITYBL] and [FlashFS] -- measured.
+                name = line[1:-1].strip()
                 self.sections.setdefault(name, [])
                 continue
             if name:
@@ -210,7 +212,7 @@ class Recipe:
     def stages(self, board, ext: str = "") -> tuple:
         """The bootloaders this release names for that console, in order."""
         section = self.section_for(board, ext)
-        found = self._listed(section.lower())
+        found = self._listed(section)
         if not found:
             raise ValueError(
                 "could not find label [%s] in file list ini" % section
@@ -223,8 +225,23 @@ class Recipe:
 
     @property
     def firmware(self) -> tuple:
-        """The files that go into the image's filesystem."""
-        return self._listed("flashfs")
+        """The files that go into the image's filesystem.
+
+        A name of more than 21 characters stops the build as the list is read, whether
+        or not the file is there: "file in [flashfs] has greater than 21 chars in it's
+        name!" (0x40A965), measured with 22 and with 34. The name is the file's own,
+        without the directory before it: 1838's devkit list names `1838-fs\
+        deviceselector.xex`, 26 in all, and builds.
+        """
+        if "flashfs" not in self.sections:
+            raise ValueError("could not find label [flashfs] in file list ini")
+        found = self._listed("flashfs")
+        # 0x40A2B9: the part after the last '/', or '\' where there is none
+        # (0x40A85E), against 0x15.
+        if any(len(one.plain) > 21 for one in found):
+            raise ValueError("file in [flashfs] has greater than 21 chars in it's "
+                             "name!")
+        return found
 
     @property
     def security(self) -> tuple:
@@ -232,17 +249,50 @@ class Recipe:
 
         They come off the console rather than out of the release, so there would be
         nothing for a release to vouch for.
+
+        The label is required, as `[flashfs]` is: the original looks for both across
+        the whole list (0x40A09C, 0x40A3E6) and stops where either is missing -- with
+        the one sentence it has, "could not find label [flashfs]" (0x40A941), which
+        is wrong for this one and is not copied. A name here is held to 21 characters
+        whole (0x40A87D).
         """
-        return self._listed("security")
+        if "security" not in self.sections:
+            raise ValueError("could not find label [security] in file list ini")
+        found = self._listed("security")
+        if any(len(one.name) > 21 for one in found):
+            raise ValueError("file in [security] has greater than 21 chars in it's "
+                             "name!")
+        return found
 
     @property
     def raw_patches(self) -> tuple:
-        """Patches applied to the image itself, where a release names any.
+        """Patches applied to the image itself, where a release names any, as (name,
+        offset) pairs.
 
-        None of the nine releases on this bench does, so nothing here has ever been
-        exercised against a real one; it is read because the original reads it.
+        None of the nine releases on this bench does; what is read here was measured
+        on made-up lists and read in the parser (0x409ED0). The offset goes through
+        the one number parser `-o` and `-8` use (0x421860), decimal unless it starts
+        `0x`: `rp.bin,100000` goes to 0x186A0. The sixteen slots are one counter with
+        `-8`'s (0x4C8FE0). The original takes `f0000` as 0 and writes
+        over the flash header; that is refused here, as `-8` refuses it.
         """
-        return self._listed("rawpatch")
+        # The label is followed by at least one entry (0x409F20 reads one before it
+        # looks for another): an empty section is an entry with no offset.
+        if "rawpatch" in self.sections and not self.sections["rawpatch"]:
+            raise ValueError("an entry in [rawpatch] is missing offset info!")
+        out = []
+        for line in self.sections.get("rawpatch", ()):
+            name, sign, at = line.partition(",")
+            at = at.strip()
+            if not sign or not at:
+                raise ValueError("an entry in [rawpatch] is missing offset info!")
+            try:
+                out.append((name.strip(), int(at, 16) if at[:2].lower() == "0x"
+                            else int(at, 10)))
+            except ValueError:
+                raise ValueError("[rawpatch] %s states %r where an offset should be"
+                                 % (name.strip(), at)) from None
+        return tuple(out)
 
     def __repr__(self) -> str:
         return "Recipe(%s, %d sections)" % (self.version or "no version",

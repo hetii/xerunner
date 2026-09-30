@@ -15,15 +15,15 @@ twenty-one. The thirty-one `-o` settings come from a third table and are declare
 
 import logging
 
-from ..chain import sealing
 from .. import boards, imagetypes
 from .options import OptionsConfig
+from .onebl import OneBlKeyConfig
 from .release import ReleaseConfig
 
 logger = logging.getLogger(__name__)
 
 
-class BuildConfig(ReleaseConfig, OptionsConfig):
+class BuildConfig(ReleaseConfig, OptionsConfig, OneBlKeyConfig):
     """What to build, from what, and for which console.
 
     `ini` names an `options.ini` to read. What it sets goes in first and what is given
@@ -36,7 +36,6 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
         self.image_type = "retail"
         self.console = None
         self.cpu_key = None
-        self.one_bl_key = None
         self.per_build = None
         self.sha_file = None
         self.raw_patches = ()
@@ -180,26 +179,6 @@ class BuildConfig(ReleaseConfig, OptionsConfig):
     @cpu_key.setter
     def cpu_key(self, key):
         self["cpu_key"] = None if key is None else self.check_hex("cpu_key", key, 16)
-
-    @property
-    def one_bl_key(self) -> bytes | None:
-        """The 1BL key, sixteen bytes, the same on every console."""
-        return self["one_bl_key"]
-
-    @one_bl_key.setter
-    def one_bl_key(self, key):
-        """Sixteen bytes that sum as the 1BL key does: the original adds them up and
-        stops a build whose sum is not 0x983 -- "1BL key 0x0011... does not appear to
-        be correct!" -- measured, and it checks a key from each place it takes one
-        (0x41B740)."""
-        if key is None:
-            self["one_bl_key"] = None
-            return
-        given = self.check_hex("one_bl_key", key, 16)
-        if sealing.key_sum(given) != sealing.key_sum(sealing.ONE_BL_KEY):
-            raise ValueError("1BL key 0x%s does not appear to be correct!"
-                             % given.hex().upper())
-        self["one_bl_key"] = given
 
     @property
     def per_build(self) -> str | None:

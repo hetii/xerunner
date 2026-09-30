@@ -19,7 +19,8 @@ from xebuild.config.base import BaseConfig
 from xebuild.config.network import NetworkConfig
 from xebuild.config.options import OptionsConfig
 from xebuild.config.release import ReleaseConfig
-from xebuild.config import BuildConfig, ClientConfig, ExtractConfig, UpdateConfig
+from xebuild.config import IniConfig, UpdateConfig
+from xebuild.config import BuildConfig, ClientConfig, ExtractConfig
 
 OPTIONS = sorted(set(OptionsConfig()) - set(BaseConfig()))
 SWITCHES = ("nodvd", "olddvd", "cygnos", "demon", "nomobile", "smcnocheck", "noremap",
@@ -161,6 +162,18 @@ class WhatBuildModeTakes(unittest.TestCase):
                         BuildConfig(**{field: wrong})
         with self.assertRaisesRegex(ValueError, "does not appear to be correct"):
             BuildConfig(one_bl_key="00112233445566778899aabbccddeeff")
+
+    def test_a_1bl_key_passes_both_of_the_original_s_checks_or_none(self):
+        """The sum, and the sum of the xex key made from it (0x41B740): two bytes
+        swapped keep the first and fail the second, measured."""
+        real = "DD88AD0C9ED669E7B56794FB68563EFA"
+        for config in (BuildConfig, IniConfig):
+            with self.subTest(config=config.__name__):
+                made = config(one_bl_key=real)
+                self.assertEqual(made.one_bl_key, bytes.fromhex(real))
+                for wrong in ("88DDAD0C9ED669E7B56794FB68563EFA", real[::-1]):
+                    with self.assertRaisesRegex(ValueError, "does not appear"):
+                        config(one_bl_key=wrong)
 
     def test_a_directory_that_is_read_has_to_be_there(self):
         made = BuildConfig(data=self.where, per_build=self.where)
@@ -338,15 +351,17 @@ class TheOptions(unittest.TestCase):
         self.assertIsNone(BuildConfig().xellbutton2)
         self.assertIsNone(BuildConfig().dualboot)
 
-    def test_a_mac_address_is_six_bytes_however_it_is_written(self):
-        # The original takes `:` and refuses `-`; a dash reads as a colon here.
+    def test_a_mac_address_is_written_one_of_three_ways(self):
+        # The original takes the first two and refuses `-`, which reads the same.
         wanted = bytes.fromhex("002248F10102")
         for written in ("00:22:48:F1:01:02", "002248F10102", "00-22-48-f1-01-02"):
             with self.subTest(written=written):
                 self.assertEqual(BuildConfig(macid=written).macid, wanted)
         self.assertIsNone(BuildConfig().macid)
-        for wrong in ("0022", "zz" * 6, "00:22:48:F1:01"):
-            with self.assertRaises(ValueError):
+        for wrong in ("0022", "zz" * 6, "00:22:48:F1:01", "0022:48F1:0102",
+                      "00:22-48:F1:01:02", "00 22 48 F1 01 02", "00.22.48.F1.01.02",
+                      "002248F1010203", ":00:22:48:F1:01:02"):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
                 BuildConfig(macid=wrong)
 
     def test_a_dvd_key_is_sixteen(self):
@@ -414,14 +429,22 @@ class TheIni(unittest.TestCase):
         self.assertIsNone(BuildConfig(ini=self.ini).cpu_key)
 
     def test_the_command_line_beats_it(self):
-        # The 1BL key's bytes the other way round: the same sum, another key.
-        other = bytes.fromhex("DD88AD0C9ED669E7B56794FB68563EFA")[::-1].hex()
-        made = BuildConfig(ini=self.ini, patchsmc=False, console="corona",
-                           one_bl_key=other, cfldv=1)
+        made = BuildConfig(ini=self.ini, patchsmc=False, console="corona", cfldv=1)
         self.assertFalse(made.patchsmc)
         self.assertEqual(made.console.name, "corona")
-        self.assertEqual(made.one_bl_key, bytes.fromhex(other))
         self.assertEqual(made.cfldv, 1)
+
+    def test_a_1bl_key_on_the_command_line_leaves_the_ini_s_unread(self):
+        """There is one real key, so the command line's winning is shown by an ini whose
+        key would be refused: it is never looked at."""
+        ini = os.path.join(self.where, "bad1bl.ini")
+        with open(ini, "w") as handle:
+            handle.write("1blkey = 88DDAD0C9ED669E7B56794FB68563EFA\n")
+        real = "DD88AD0C9ED669E7B56794FB68563EFA"
+        self.assertEqual(BuildConfig(ini=ini, one_bl_key=real).one_bl_key,
+                         bytes.fromhex(real))
+        with self.assertRaisesRegex(ValueError, "does not appear to be correct"):
+            BuildConfig(ini=ini)
 
     def test_what_it_does_not_name_keeps_its_default(self):
         self.assertEqual(BuildConfig(ini=self.ini).image_type.name, "retail")

@@ -185,9 +185,11 @@ def faulty(raw: bytes, flash, whole: int | None = None, ecd: bool = True) -> str
 class Dump:
     """One console's flash, with its blocks in the order the console reads them."""
 
-    def __init__(self, raw: bytes, board, bigffs: bool = False,
-                 remap: bool = True, ecd: bool = True):
+    def __init__(self, raw: bytes, board, bigffs: bool = False, ecd: bool = True,
+                 one_bl_key: bytes | None = None):
         self.board = board
+        # What its CFs open under; with none its pairing and lockdown value stay sealed.
+        self.one_bl_key = one_bl_key
         self.flash = board.flash
         # The original drops these blocks and this keeps them -- see `image.order`.
         step = PAGE + board.flash.spare.length if board.flash.spare is not None else 0
@@ -197,7 +199,13 @@ class Dump:
                            block * step * board.flash.spare.pages_a_block)
             logger.warning("this is likely caused by previously using jaspersb on a "
                            "jasper type console!")
-        self.image = Image(logical(raw, board.flash, remap, ecd), board.flash, bigffs)
+        self.image = Image(logical(raw, board.flash), board.flash, bigffs)
+        if not self.fsroot_found:
+            logger.error("Could not find fsroot! The dump's filesystem table is "
+                         "gone, so none of this console's own files are taken from "
+                         "it: crl.bin, dae.bin, extended.bin, fcrt.bin, secdata.bin, "
+                         "Mobile*.dat, Statistics.settings and Manufacturing.data come "
+                         "from the update, are made up clean or are left out")
         if not self.header.keyvault_at:
             logger.warning("KeyVault cannot be at 0x0, trying 0x4000")
         if self.header.smc_at not in (0x800, 0x1000):
@@ -274,6 +282,17 @@ class Dump:
         return self.smc_config is not None
 
     @property
+    def fsroot_found(self) -> bool:
+        """Whether the scan found the filesystem's table. The original finds the
+        mobiles in the same scan (0x415230), and where it finds no table it skips the
+        steps after it as well (0x417C5B): the netKd block (0x414300),
+        Statistics.settings and Manufacturing.data (0x414050) and the security files
+        (0x417DD7). Measured
+        with every table page erased, and on an eMMC dump with both anchors zeroed:
+        "ERROR! Could not find fsroot!", and nothing "adding from previous parse"."""
+        return "fsroot" in self.image.blobs
+
+    @property
     def statistics(self) -> bytes:
         """`Statistics.settings`, the block the dashboard keeps its counters in."""
         at, length = self.flash.smc_config - self.flash.round_to, 0x1000
@@ -340,7 +359,7 @@ class Dump:
     def chain(self):
         """This console's bootloader chain."""
         from ..chain import Chain
-        return Chain(self.image, self.board)
+        return Chain(self.image, self.board, self.one_bl_key)
 
     @property
     def pairing(self) -> bytes:
