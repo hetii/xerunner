@@ -1279,3 +1279,38 @@ class ADumpWhoseTableIsNotFound(unittest.TestCase):
         self.assertEqual(Build._mobiles(stand), {"MobileB.dat": b"b"})
         self.assertEqual(Build._console_statistics.fget(stand), b"s")
         self.assertEqual(Build._console_manufacturing.fget(stand), b"m")
+
+
+class ADumpSNetKdBlock(unittest.TestCase):
+    """A devkit dump's netKd goes into the header at 0x80 -- "Inserting netKd data from
+    dump into header" -- read in the step the statistics are read in (0x414300 beside
+    0x414050), which the loader skips under `nomobile` and with no fsroot (0x417C5B)."""
+
+    NET_KD = b"\xca\x4a" + bytes(10) + (0x28).to_bytes(4, "big") + b"\x5a" * 0x18
+
+    def laid(self, found: bool = True, nomobile: bool = False) -> dict:
+        placed = {}
+
+        class Out:
+            def put(self, at, body):
+                placed[at] = bytes(body)
+
+            def mark(self, at, length):
+                pass
+
+        stand = types.SimpleNamespace(
+            smc=lambda: bytes(0x3000), header=lambda *_: bytes(PAGE),
+            keyvault=lambda: bytes(0x4000), stated_version=0,
+            dump=types.SimpleNamespace(net_kd=self.NET_KD, fsroot_found=found),
+            config=types.SimpleNamespace(nomobile=nomobile))
+        Build._head_lay(stand, Out(), 0, b"", 0)
+        return placed
+
+    def test_it_goes_in_at_0x80(self):
+        self.assertEqual(self.laid().get(0x80), self.NET_KD)
+
+    def test_not_under_nomobile_measured(self):
+        self.assertNotIn(0x80, self.laid(nomobile=True))
+
+    def test_not_from_a_dump_with_no_fsroot(self):
+        self.assertNotIn(0x80, self.laid(found=False))
