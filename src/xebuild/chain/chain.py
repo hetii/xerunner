@@ -103,7 +103,8 @@ class Chain:
             for one in self.slots
         )
         if not found:
-            raise ValueError("this image keeps no CF slot behind its chain")
+            raise ValueError("this flash keeps no CF slot behind its chain, so its LDV "
+                             "and pairing cannot be read.")
         return found
 
     @property

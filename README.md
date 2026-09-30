@@ -94,6 +94,16 @@ the code makes the decision:
   release's own directory, where there are none; this says "Using ./data/", where
   J-Runner keeps them. `-d 17559` gives the original's choice. -- `build/build.py`,
   `build_image`
+- **A dump with no CF behind its chain is refused.** It is what a flash read after
+  `glitch.ecc` was written looks like. The original warns "could not find a non-zero CF
+  LDV to use, setting it to 1 but that may be incorrect!", takes a static pairing and
+  builds -- measured on such a read of a console whose LDV is 13. Here: "this flash
+  keeps no CF slot behind its chain, so its LDV and pairing cannot be read."
+  -- `chain/chain.py`, `Chain._opened_slots`
+- **An `-a` patch that is missing, or not a whole number of words, is refused.** The
+  original skips it ("... not found, skipping") and builds without it. One that does not
+  fit the patch set's 0x4000 bytes is skipped with an error here too, as there.
+  -- `build/build.py`, `Build._with_addons`
 - **`client` takes one action per run, in any order.** The original refuses a second
   action with "option flag %s on command line but option was already set!" -- except
   `-keys` and `-p`, which it lets in after another action and runs, dropping the first
