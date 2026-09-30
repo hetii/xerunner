@@ -146,6 +146,25 @@ class WhatAListSaysBeyondItsFiles(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 Recipe("[rawpatch]\n%s\n" % line).raw_patches  # noqa: B018
 
+    def test_labels_are_matched_as_written(self):
+        """0x409567 compares bytes: [VERSION] and [FlashFS] are not labels to it."""
+        found = Recipe("[VERSION]\n17559\n[FlashFS]\ndash.xex,0\n")
+        self.assertEqual(found.version, "")
+        with self.assertRaisesRegex(ValueError, r"label \[flashfs\]"):
+            found.firmware  # noqa: B018
+
+    def test_flashfs_and_security_are_both_required(self):
+        with self.assertRaisesRegex(ValueError, r"label \[security\]"):
+            Recipe("[flashfs]\ndash.xex,0\n").security  # noqa: B018
+        self.assertEqual(Recipe("[security]\ncrl.bin\n").security[0].name, "crl.bin")
+        with self.assertRaisesRegex(ValueError, "greater than 21 chars"):
+            Recipe("[security]\n%s.bin\n" % ("s" * 18)).security  # noqa: B018
+
+    def test_an_empty_raw_patch_section_is_an_entry_without_an_offset(self):
+        with self.assertRaisesRegex(ValueError, "missing offset info"):
+            Recipe("[rawpatch]\n[flashfs]\n").raw_patches  # noqa: B018
+        self.assertEqual(Recipe("[flashfs]\n").raw_patches, ())
+
     def test_a_firmware_name_past_21_characters_is_refused(self):
         self.assertEqual(len(Recipe("[flashfs]\n%s.xex,0\n" % ("b" * 17)).firmware), 1)
         with self.assertRaisesRegex(ValueError, "greater than 21 chars"):
