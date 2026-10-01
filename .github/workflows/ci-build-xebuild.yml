@@ -91,7 +91,7 @@ jobs:
             --product-version="$RELEASE" \
             --product-name=xebuild \
             --file-description="A NAND image builder for the Xbox 360" \
-            --output-filename=dist/xebuild.exe \
+            --output-filename=dist/xeBuild.exe \
             --remove-output \
             launcher/xebuild_main.py
 
@@ -100,15 +100,17 @@ jobs:
         run: |
           # What runs here is the compiled program itself, on build mode's own `-?`,
           # which prints the help and ends with 0: an exe that cannot print it did
-          # not get built whole.
+          # not get built whole. The name it is given is the original's own, the one
+          # jrunner looks for under its own directory and the one a `-d data` beside
+          # it is measured against.
           ls -l dist
-          ./dist/xebuild.exe -\? > "$RUNNER_TEMP/help.txt"
+          ./dist/xeBuild.exe -\? > "$RUNNER_TEMP/help.txt"
           head -n 3 "$RUNNER_TEMP/help.txt"
 
       - uses: actions/upload-artifact@v4
         with:
           name: xebuild-${{ inputs.release }}-win-x64
-          path: dist/xebuild.exe
+          path: dist/xeBuild.exe
           if-no-files-found: error
           # The onefile payload is already compressed, so zipping it again spends
           # the runner's time for nothing.

@@ -65,6 +65,12 @@ class LogFormatter(logging.Formatter):
 
 def main(argv=None) -> int:
     """Any mode from a command line; the exit status the shell gets back."""
+    # The tool runs from where it is, not from where it was called: the original takes
+    # every relative name against the directory its own file is in, measured on the
+    # original under wine with the caller in a directory of its own, handed `-d data`
+    # and `-f 17559` as bare names, and finding the release and the data directory
+    # beside the exe. Nothing else anchors a path here, so this is where it happens.
+    os.chdir(os.path.dirname(os.path.abspath(sys.argv[0])))
     argv = sys.argv[1:] if argv is None else argv
     # INFO for every mode, before any switch is read -- some say things themselves;
     # `-v` then takes it a level down, to what the original shows only with it.
