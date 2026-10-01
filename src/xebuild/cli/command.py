@@ -74,7 +74,14 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     # INFO for every mode, before any switch is read -- some say things themselves;
     # `-v` then takes it a level down, to what the original shows only with it.
-    handler = logging.StreamHandler()
+    # The log goes to stdout, which is what the original writes to: measured on the
+    # original under wine, whose lines reach the log window of the tool that starts
+    # it, and that tool redirects stdout alone -- Classes/xebuild.cs:1227 sets
+    # RedirectStandardOutput and nothing for stderr, and its OutputDataReceived
+    # prints what arrives there. On stderr a line goes to the console the child was
+    # started in instead of anywhere the caller reads. The formatter asks the stream
+    # whether it is a terminal, and stdout is what it asks now.
+    handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(LogFormatter(handler.stream.isatty()))
     logging.basicConfig(level=logging.INFO, handlers=[handler])
     mode = argv[0] if argv[:1] and argv[0] in ("build", "extract", "client", "update",
