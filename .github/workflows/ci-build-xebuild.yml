@@ -72,10 +72,19 @@ jobs:
           # binary and not as data, so --include-package-data leaves them out; they
           # have to arrive in the dist where jtag/loaders.py looks for them, which is
           # the same place pyproject.toml's package-data puts them for an install.
+          # Nuitka also scans every argument for a '-c' or a '-m' and refuses to start
+          # when it finds one, on the thought that a program given those is a Python
+          # asked to execute itself, and a compiled one would go on doing it forever.
+          # Build mode's console switch is '-c', so the guard ended the exe before it
+          # had read anything: measured, both '-c trinity' and '-t glitch -c trinity
+          # ...' stopped in that refusal. The guard is compiled out here, which is
+          # what its own message asks for; '--deployment' would take out the rest of
+          # Nuitka's checks as well.
           python -m nuitka \
             --mode=onefile \
             --msvc=latest \
             --assume-yes-for-downloads \
+            --no-deployment-flag=self-execution \
             --include-package=xebuild \
             --include-data-files=src/xebuild/jtag/builtin=xebuild/jtag/builtin/=**/*.bin \
             --file-version="$RELEASE" \
