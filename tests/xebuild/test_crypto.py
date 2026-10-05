@@ -179,7 +179,8 @@ class APartBlock(unittest.TestCase):
 
 
 class WhatXeCryptDoesToAKey(unittest.TestCase):
-    """`XeCryptHammingWeight` and `XeCryptUidEccEncode` over the bench console's key."""
+    """`XeCryptHammingWeight` and `XeCryptUidEccEncode` over a key made up with its
+    check bits right: 53 of its 106 key bits set, as every real one has."""
 
     KEY = bytes.fromhex("7E5068DBB3FD03F04E367028D475EEC2")
 
@@ -187,7 +188,7 @@ class WhatXeCryptDoesToAKey(unittest.TestCase):
         self.assertEqual(keys.hammingweight(b"\x00\x01\xff"), 9)
         self.assertEqual(keys.hammingweight(b""), 0)
 
-    def test_a_real_key_s_check_bits_are_already_its_own(self):
+    def test_a_sound_key_s_check_bits_are_already_its_own(self):
         self.assertEqual(keys.uideccencode(self.KEY), self.KEY)
 
     def test_a_key_with_a_bit_changed_comes_back_different(self):

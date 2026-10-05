@@ -33,7 +33,6 @@ BuildConfig = functools.partial(BuildConfig, one_bl_key=ONE_BL_KEY)
 
 NAMES = ("xenonclatin.xtt", "xenonjklatin.xtt", "ximedic.xex")
 LAUNCH = b"L" * 0x1000
-CPU_KEY = "7E5068DBB3FD03F04E367028D475EEC2"
 
 
 def forged(body: bytes, flip_at: int = 0x100, at: int = 0x200) -> bytes:
@@ -86,10 +85,13 @@ class EachCopyAsTheOriginalChoseIt(unittest.TestCase):
         where = os.environ.get("XEBUILD_PROVENANCE", "")
         cls.serve = os.path.join(os.environ.get("XEBUILD_UPDATE", ""), "_serve")
         cls.release = os.environ.get("XEBUILD_ORIGINAL_DIR", "")
+        cls.cpu_key = os.environ.get("XEBUILD_CPUKEY", "")
         if not os.path.isfile(os.path.join(where, "expected.json")) or \
-                not os.path.isdir(cls.serve) or not os.path.isdir(cls.release):
-            raise unittest.SkipTest("XEBUILD_PROVENANCE, XEBUILD_UPDATE or "
-                                    "XEBUILD_ORIGINAL_DIR is not set")
+                not os.path.isdir(cls.serve) or not os.path.isdir(cls.release) or \
+                not cls.cpu_key:
+            raise unittest.SkipTest("XEBUILD_PROVENANCE, XEBUILD_UPDATE, "
+                                    "XEBUILD_ORIGINAL_DIR or XEBUILD_CPUKEY is not "
+                                    "set")
         with open(os.path.join(where, "expected.json")) as handle:
             cls.expected = json.load(handle)
 
@@ -148,7 +150,7 @@ class EachCopyAsTheOriginalChoseIt(unittest.TestCase):
                 with open(os.path.join(data, "nanddump.bin"), "wb") as handle:
                     handle.write(raw)
                 config = BuildConfig(image_type="glitch2", console="trinity",
-                                     cpu_key=CPU_KEY, per_build=data)
+                                     cpu_key=self.cpu_key, per_build=data)
                 image = Build(config, Material(data),
                               Release(os.path.join(work, "17559"))).image(0x5A123457)
                 self.assertEqual(self.chosen(image.raw, copies), self.expected[case])
