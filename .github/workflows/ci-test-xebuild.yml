@@ -1,0 +1,66 @@
+# The tests, run on demand. Nothing runs on every push: the run is started by hand.
+#
+# The end-to-end suite runs on the donor console -- the original builds it from
+# J-Runner's donor files under a key made up for it -- so no console's dump or key is
+# needed here, and none is ever given to this workflow.
+name: Test xebuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: "run the end-to-end suite against the original as well"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: xebuild tests, linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      PYTHONPATH: src
+      # The material is some 8 GB and the runner's /dev/shm is far smaller; its
+      # second disk, /mnt, has the room.
+      XEBUILD_E2E_INPUT: /mnt/xebuild-e2e/input
+      XEBUILD_E2E_OUTPUT: /mnt/xebuild-e2e/output
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff pytest pytest-xdist
+
+      - name: ruff
+        run: ruff check src tests
+
+      - name: unit tests
+        run: python -m unittest discover -s tests -t .
+
+      - name: room for the material
+        if: ${{ inputs.e2e }}
+        run: |
+          sudo mkdir -p /mnt/xebuild-e2e
+          sudo chown "$(id -u):$(id -g)" /mnt/xebuild-e2e
+          df -h /mnt
+          podman --version || docker --version
+
+      - name: the material
+        if: ${{ inputs.e2e }}
+        # The downloads, the container the original runs in, and every recording made
+        # again by the original; conftest.py would do the same, but here its time and
+        # its log are a step of their own.
+        run: python -m tests.xebuild.e2e.bootstrap
+
+      - name: end-to-end tests
+        if: ${{ inputs.e2e }}
+        run: pytest tests/xebuild/e2e -n auto --dist load -q -rfs
