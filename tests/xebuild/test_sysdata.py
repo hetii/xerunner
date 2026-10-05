@@ -258,10 +258,10 @@ class TheClientSwitches(unittest.TestCase):
         for argv, said in ((["-e"], "expected one argument"),
                            (["-r", "f.bin", "-c", "compat"], "not allowed with")):
             with (self.subTest(argv=argv),
-                  contextlib.redirect_stderr(io.StringIO()) as err,
+                  contextlib.redirect_stdout(io.StringIO()) as out,
                   self.assertRaises(SystemExit)):
                 parse_client(argv)
-            self.assertIn(said, err.getvalue())
+            self.assertIn(said, out.getvalue())
 
 
 if __name__ == "__main__":

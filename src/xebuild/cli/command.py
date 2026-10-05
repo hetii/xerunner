@@ -70,7 +70,11 @@ def main(argv=None) -> int:
     # original under wine with the caller in a directory of its own, handed `-d data`
     # and `-f 17559` as bare names, and finding the release and the data directory
     # beside the exe. Nothing else anchors a path here, so this is where it happens.
-    os.chdir(os.path.dirname(os.path.abspath(sys.argv[0])))
+    # Only the compiled exe has a directory of its own to be in: run from Python,
+    # argv[0] is the venv's script or cli/__main__.py, and a name is taken against
+    # the directory the caller is in. Nuitka sets `__compiled__` in what it compiles.
+    if "__compiled__" in globals():
+        os.chdir(os.path.dirname(os.path.abspath(sys.argv[0])))
     argv = sys.argv[1:] if argv is None else argv
     # INFO for every mode, before any switch is read -- some say things themselves;
     # `-v` then takes it a level down, to what the original shows only with it.
@@ -106,6 +110,15 @@ def _parser(prog: str, example: str, legend: str = "") -> argparse.ArgumentParse
     parser = argparse.ArgumentParser(
         prog=prog, description=example, epilog=legend or None, add_help=False,
         allow_abbrev=False, formatter_class=argparse.RawTextHelpFormatter)
+
+    def error(message: str) -> None:
+        # argparse writes a refusal to stderr, and the tool that starts this one reads
+        # stdout alone; the same words, the same exit, on the stream it reads.
+        parser.print_usage(sys.stdout)
+        sys.stdout.write("%s: error: %s\n" % (prog, message))
+        parser.exit(2)
+
+    parser.error = error
     return parser
 
 
@@ -213,8 +226,9 @@ GLITCH only = patchsmc
         help="optional, overrides auto built output image name")
     if not argv:
         parser.print_help()
-        parser.exit(2, "%s: error: invalid command line, you need to specify "
-                       "parameters!\n" % parser.prog)
+        sys.stdout.write("%s: error: invalid command line, you need to specify "
+                         "parameters!\n" % parser.prog)
+        parser.exit(2)
     found = vars(parser.parse_intermixed_args(argv))
     options = {}
     for text in found.pop("options"):

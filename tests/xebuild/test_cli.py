@@ -15,8 +15,8 @@ from xebuild.cli.command import parse_build
 class ReadingACommandLine(unittest.TestCase):
 
     def refused(self, argv):
-        """What argparse says when it refuses a line: its exit, status 2."""
-        with (contextlib.redirect_stderr(io.StringIO()),
+        """What argparse says when it refuses a line: its exit, status 2, on stdout."""
+        with (contextlib.redirect_stdout(io.StringIO()),
               self.assertRaises(SystemExit) as ended):
             parse_build(argv)
         self.assertEqual(ended.exception.code, 2)
