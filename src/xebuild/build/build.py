@@ -1014,9 +1014,10 @@ class Build:
 
     @property
     def _console_statistics(self) -> bytes | None:
-        """The console's Statistics block, or None with no dump or one whose table was
-        not found -- see `Dump.fsroot_found`."""
-        if self.dump is None or not self.dump.fsroot_found:
+        """The console's Statistics block, or None where it keeps none or its table
+        was not found -- see `Dump.fsroot_found`."""
+        if (self.dump is None or not self.dump.fsroot_found
+                or not self.dump.statistics_written):
             return None
         return self.dump.statistics
 

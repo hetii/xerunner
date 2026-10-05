@@ -1263,6 +1263,7 @@ class ADumpWhoseTableIsNotFound(unittest.TestCase):
         image = types.SimpleNamespace(blobs={"MobileB.dat": {}}, blob=lambda name: b"b")
         dump = types.SimpleNamespace(fsroot_found=found, image=image,
                                      statistics=b"s", manufacturing=b"m",
+                                     statistics_written=True,
                                      manufacturing_written=True)
         material = types.SimpleNamespace(mobiles={})
         return types.SimpleNamespace(dump=dump, material=material,
@@ -1279,6 +1280,14 @@ class ADumpWhoseTableIsNotFound(unittest.TestCase):
         self.assertEqual(Build._mobiles(stand), {"MobileB.dat": b"b"})
         self.assertEqual(Build._console_statistics.fget(stand), b"s")
         self.assertEqual(Build._console_manufacturing.fget(stand), b"m")
+
+    def test_an_erased_block_is_not_taken(self):
+        """Measured on an image the original built from donor files: both blocks all
+        0xFF, and the image it built from it kept them erased, spare and all."""
+        stand = self.stand(True)
+        stand.dump.statistics_written = stand.dump.manufacturing_written = False
+        self.assertIsNone(Build._console_statistics.fget(stand))
+        self.assertIsNone(Build._console_manufacturing.fget(stand))
 
 
 class ADumpSNetKdBlock(unittest.TestCase):

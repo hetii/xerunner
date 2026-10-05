@@ -294,7 +294,12 @@ class Dump:
 
     @property
     def statistics(self) -> bytes:
-        """`Statistics.settings`, the block the dashboard keeps its counters in."""
+        """`Statistics.settings`, the block the dashboard keeps its counters in.
+
+        All 0xFF on a console that never wrote one -- an image the original built from
+        donor files has it so -- which is an erased block rather than a missing one;
+        `statistics_written` is that question.
+        """
         at, length = self.flash.smc_config - self.flash.round_to, 0x1000
         return self.image.flat[at : at + length]
 
@@ -348,12 +353,20 @@ class Dump:
     def manufacturing_written(self) -> bool:
         """Whether this console keeps one at all.
 
-        The original decides it from the spare -- an erased block is skipped -- and a
-        flat run has no spare to look at, so this asks whether anything was written
-        there. The two agree on both consoles measured: one is 0xFF throughout and the
-        original reports nothing, the other carries its serial and is reported.
+        The original asks of the block's 0x1000 bytes of data whether every one is
+        0xFF (0x4141C1, its test at 0x410070), and takes it -- "Manufacturing.data
+        found at offset" -- only when not. On both consoles measured, one is 0xFF
+        throughout and nothing is reported, the other carries its serial.
         """
         return set(self.manufacturing) != {0xFF}
+
+    @property
+    def statistics_written(self) -> bool:
+        """Whether this console keeps statistics at all: the same test the original
+        makes of `Manufacturing.data`, made first of this block (0x414172), every byte
+        0xFF or not. Not taken, it is left erased in the image, its spare included --
+        measured on an image the original built from donor files as the dump."""
+        return set(self.statistics) != {0xFF}
 
     @property
     def chain(self):
@@ -408,8 +421,9 @@ class Dump:
                     smc.named, ", a stock image" if smc.clean else "")
         logger.info("smc config at %#x of size %#x, %s", self.flash.smc_config,
                     CONFIG_LENGTH, "sound" if self.smc_config_ok else "not sound")
-        logger.info("statistics at %#x of size %#x",
-                    self.flash.smc_config - self.flash.round_to, len(self.statistics))
+        logger.info("statistics at %#x of size %#x: %s",
+                    self.flash.smc_config - self.flash.round_to, len(self.statistics),
+                    "kept" if self.statistics_written else "none, the block is erased")
         logger.info("manufacturing data at %#x: %s",
                     self.flash.smc_config - 2 * self.flash.round_to,
                     "kept" if self.manufacturing_written
