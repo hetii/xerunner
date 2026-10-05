@@ -444,12 +444,28 @@ examples:
 
 def _build(settings: dict) -> int:
     """Build mode from its settings."""
-    if "cpu_key" in settings:
-        logger.info("CPU key overridden from command line, not looking for cpukey.txt")
-    if "one_bl_key" in settings:
-        logger.info("1BL key overridden from command line, not looking for 1blkey.txt")
     if settings.get("verbose"):
         logging.getLogger().setLevel(logging.DEBUG)
+    # What the original's parser says, with `-v` only, of what it was handed (0x4192A4).
+    if settings.get("no_enter"):
+        logger.debug("<enter> key on completion suppressed")
+    if settings.get("no_random"):
+        logger.debug("disabling random nonces")
+    if "cpu_key" in settings:
+        logger.debug("CPU key overridden from command line, not looking for cpukey.txt")
+    if "one_bl_key" in settings:
+        logger.debug("1BL key overridden from command line, not looking for 1blkey.txt")
+    if "per_build" in settings:
+        logger.debug("per build directory overridden from command line to '%s'",
+                     settings["per_build"])
+    if "data" in settings:
+        logger.debug("data directory overridden from command line to '%s'",
+                     settings["data"])
+    if "firmware_ext" in settings:
+        logger.debug("suffix '%s' added from command line to ini and patches filenames",
+                     settings["firmware_ext"])
+    if "out" in settings:
+        logger.debug("file name overridden from command line to '%s'", settings["out"])
     where = settings.get("per_build") or "data"
     ini = os.path.join(where, "options.ini")
     if "console" not in settings and os.path.isdir(where):

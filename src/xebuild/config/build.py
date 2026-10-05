@@ -33,6 +33,9 @@ class BuildConfig(ReleaseConfig, OptionsConfig, OneBlKeyConfig):
     """
 
     def __init__(self, ini=None, **settings):
+        if "image_type" not in settings:
+            logger.warning("image type not provided, defaulting to build a retail "
+                           "image")
         self.image_type = "retail"
         self.console = None
         self.cpu_key = None

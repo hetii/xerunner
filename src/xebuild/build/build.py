@@ -1813,18 +1813,29 @@ def build_image(config, when: int | None = None) -> str:
 
     Returns where the image went. `when` is the build's clock, for reproducing one.
     """
+    logger.info(config.image_type.text)
     if config.per_build is None:
         logger.warning("you did not specify per build directory! Using ./data/")
     release = Release(config.data or "data", one_bl_key=config.one_bl_key)
     one = Build(config, Material(config.per_build or "data"), release)
     image = one.image(when)
-    out = config.out or one.auto_name()
+    if config.out:
+        out = config.out
+        logger.debug("output name overridden to: %s", out)
+    else:
+        out = one.auto_name()
+        logger.debug("auto image name used: %s", out)
     raw = image.raw
     with open(out, "wb") as handle:
         handle.write(raw)
     logger.info("wrote %s, %#x bytes", out, len(raw))
     if config.sha_file:
         where = out + ".sha1" if config.sha_file is True else config.sha_file
+        if config.sha_file is True:
+            logger.debug("outputting SHA-1 hash of final image to auto file")
+        else:
+            logger.debug("outputting SHA-1 hash of final image to custom file %s",
+                         where)
         with open(where, "w") as handle:
             handle.write("%s *%s\n" % (hashlib.sha1(raw).hexdigest(),
                                          os.path.basename(out)))
