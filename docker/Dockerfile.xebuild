@@ -1,0 +1,42 @@
+# The reference tool, so "does ours agree with xeBuild" can be asked on any machine.
+#
+# Adapted from the J-Runner-with-Extras container
+# (github.com/Kanapkaz/J-Runner-with-Extras-and-docker), which is what runs xeBuild
+# reliably under wine. J-Runner itself is not installed: these tests drive xeBuild.exe
+# directly, and the GUI would only add a .NET runtime nothing here starts.
+#
+# Arch rather than Debian for the reason that repository gives: its wine is current,
+# and the vcredist below is what xeBuild's own runtime needs. Python is there for the
+# stand-in console the client and update recordings run against: it listens on
+# port 49 beside the original, inside the container, where the port is its own.
+FROM archlinux
+
+ENV DISPLAY=:0 \
+    TERM=xterm \
+    WINEARCH=wow64 \
+    WINEPREFIX=/root/.wine \
+    WINEDEBUG=-all,-err+winedevice
+
+WORKDIR /root/
+
+# `system.reg` is not written the moment a wine process exits, so each step waits for
+# it to change before the next runs. Without that the finished image does not know
+# what was installed -- see serverfault.com/questions/1082578.
+RUN printf "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> /etc/pacman.conf \
+    && pacman -Syyu --noconfirm \
+    && pacman -S --noconfirm wine wine-mono xorg-server-xvfb python \
+    && (nohup Xvfb "$DISPLAY" -screen 0 1024x768x24 >/dev/null 2>&1 &) \
+    && wait_for_change(){ f=$WINEPREFIX/system.reg; b=$(stat -c %Y "$f" 2>/dev/null); "$@"; \
+         while [ "$(stat -c %Y "$f" 2>/dev/null)" = "$b" ]; do sleep 1; done; } \
+    && LIBGL_ALWAYS_SOFTWARE=1 wait_for_change sh -c 'WINEDLLOVERRIDES=mscoree,mshtml= wineboot -u' \
+    && curl -sSL -o /tmp/vcredist_x86.exe https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x86.exe \
+    && LIBGL_ALWAYS_SOFTWARE=1 wait_for_change wineconsole /tmp/vcredist_x86.exe /q \
+    && killall Xvfb \
+    && pacman -Rns --noconfirm xorg-server-xvfb \
+    && printf "Y\ny\n" | pacman -Scc \
+    && rm -rf /tmp/*.exe /tmp/*.msi /etc/pacman.d/gnupg/S.gpg-agent*
+
+# Nothing is copied in. The work -- xeBuild.exe, the release, the dump -- arrives as a
+# volume, so the image stays independent of what is being compared and the build
+# context stays empty.
+WORKDIR /w
