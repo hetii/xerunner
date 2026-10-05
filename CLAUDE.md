@@ -65,14 +65,9 @@ Log files are out of scope for now; the screen is enough.
 Code, comments, identifiers, log strings, documentation and commit messages are English.
 Discussion is Polish.
 
-## Commits
+## Approval and commits
 
 Author is always Grzegorz Hetman. Never add a Co-Authored-By line.
-
-## Order of work
-
-`boards`, then `config`, then `build`. Each module is reviewed and accepted before the
-next one is started.
 
 **What is approved is what was listed, and nothing beside it.** An approval covers the
 things that were named at the time and no others. Two ways of breaking that, both of
@@ -92,22 +87,6 @@ expires with it; "finish the step" is not permission to commit the step. The wor
 finished, `ruff` and the tests are run, and then it waits with the diff on the screen
 until the user has looked at it. A frozen module additionally needs permission to be
 touched at all, which is a separate question from permission to commit.
-
-## Decisions deliberately left open
-
-**Where `cpukey.txt` and `1blkey.txt` are read.** Not in `BuildConfig` for now. What is
-already measured: both live in the per build directory that `-d` names -- the base
-directory is not searched and neither is `-f` -- and each key has four sources in order,
-the command line (after which the file is not even opened: "CPU key overridden from
-command line, not looking for cpukey.txt"), then the file, then `options.ini`, then the
-refusal "you need to specify CPU key!".
-
-What decides where the reader belongs is how much else the builder fills from that same
-directory. If it turns out to be only these two keys, a reader beside
-`BuildConfig.settings_in_ini` has the same shape and belongs there. If the builder ends
-up reading a family from there -- `nanddump.bin`, `smc.bin`, `kv.bin` and the rest -- then
-the directory is the builder's business and the two keys go with it, so that it is opened
-once, in one place. Decide it when `build` exists and the answer is countable.
 
 ## The surface is checked before anything is proposed
 
@@ -133,6 +112,11 @@ whether to open it. Permission to commit is not permission to edit a frozen modu
 permission to edit one is not permission to commit the result.
 
 ## Decisions already made
+
+**The two keys are read where the original reads them, in `BuildConfig`.** Each comes
+from the command line, then its file, then `options.ini`: `cpukey.txt` in the per build
+directory, `1blkey.txt` in the directory the tool runs in -- the exe's own, as the
+original's. A file whose key fails its check is said and passed over.
 
 **A configuration checks what it was told and invents nothing.** `-f` and `-d` name
 directories that are read, so a value given for either is refused unless the directory is
@@ -161,27 +145,6 @@ over unchanged. The image type defaults to `glitch`, because a console being upd
 way is already hacked and stays that way. Update mode has no `-o`, so every other option
 takes its default -- an image does not record which options built it.
 
-## Before a commit
-
-`ruff check src tests` passes. Its settings live in `pyproject.toml` and the one rule
-left out is explained there. `ruff format` is not run: its output is a different house
-style from what is written here, and reformatting is not checking.
-
-**Two suites, and both are run.** The fast one needs nothing and must show **no skips** --
-a skip there is a fault, not a missing file:
-
-    python -m unittest discover -s tests -t .
-
-The other needs real material -- dumps, a release, images the original built -- and each
-of its tests says through an environment variable what it wants:
-
-    python -m unittest discover -s tests/xebuild/e2e -t . -p 'e2e_*.py'
-
-A test belongs in `e2e/` when it reads something off the disk that this repository does
-not contain. Reference images are made with the original and kept outside the repository;
-where a dump is one the original cannot read on its own, it is handed the keyvault this
-code extracts and then builds a reference for it like any other.
-
 **What `cfldv` becomes when nothing supplies it belongs to `build`.** Zero is not a
 value there, it is the absence of one, so a configuration holds `None`. The original's
 own messages give the order: "LDV was already set to %d" when the ini or `-o` named one,
@@ -205,3 +168,33 @@ real console, whose fuse row 7 reads `fffffffffffff000` and whose CF reports 13.
 to 11 are all available, which is eighty nibbles, while the original's ini describes rows
 7 and 8 and its parser clamps at 32. If a console past 32 ever appears, widening this is
 one number.
+
+## Before a commit
+
+`ruff check src tests` passes. Its settings live in `pyproject.toml` and the one rule
+left out is explained there. `ruff format` is not run: its output is a different house
+style from what is written here, and reformatting is not checking.
+
+**Two suites, and both are run.** The fast one needs nothing and must show **no skips** --
+a skip there is a fault, not a missing file:
+
+    python -m unittest discover -s tests -t .
+
+The other holds this tool against the original xeBuild, through recordings of what the
+original built, wrote, sent and said:
+
+    pytest tests/xebuild/e2e -n auto --dist load
+
+Its material is made, not kept: `tests/xebuild/e2e/bootstrap`, run by `conftest.py`
+before the tests are collected, downloads J-Runner's release and the 17559 system
+update, takes the console from `XEBUILD_E2E_DUMP` and `XEBUILD_E2E_CPUKEY` -- or builds a
+donor console without them -- and runs every case through the original, its clock
+frozen, under wine in `docker/Dockerfile.xebuild`'s container or natively on Windows.
+It writes under `XEBUILD_E2E_INPUT` and the tests' scratch goes under
+`XEBUILD_E2E_OUTPUT`, `/dev/shm/new-material/{input,output}` by default. Run it on both:
+a real console's dump and the donor console each find what the other does not.
+
+A test belongs in `e2e/` when it reads what the original made. A new case is a recipe
+in the bootstrap -- its input made from the console's dump or from public files, never
+a file kept by hand outside the repository -- and nothing a console of the user's alone
+holds, its dump or its key, is written into the tree.

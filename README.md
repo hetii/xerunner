@@ -1,12 +1,67 @@
 # xebuild
 
-A NAND image builder for the Xbox 360.
+A NAND image builder for the Xbox 360: a reimplementation of xeBuild v1.21.810, held
+against the original byte for byte.
 
-    src/xebuild/boards/     every console there is, and the flash fitted to it
-    tests/xebuild/          the tests
+    src/xebuild/
+      cli/          the original's command line, every mode, argparse
+      config/       a run's settings, checked as they are set: BuildConfig, UpdateConfig,
+                    ClientConfig, ExtractConfig, IniConfig
+      build/        building an image: Build, Material, Filesystem, the layout, the
+                    security files
+      update/       update mode over the network: BuildUpdate, ConsoleMaterial
+      client/       client mode's actions on a console, the avatar and compatibility data
+      extract/      taking a dump apart
+      ini/          the _SU.ini of a system update
+      image/        the NAND image: Image, Dump, Header, Directory, Keyvault, SmcConfig
+      chain/        the bootloader chain: Chain, Stage, Fields, its sealing
+      release/      a release's files: Release, Recipe, Patches, the update container
+      imagetypes/   retail, glitch, glitch2, glitch2m, jtag, devkit and the rest
+      boards/       every console there is, and the flash fitted to it
+      smc/          the SMC image
+      jtag/         the loaders the original carries inside itself
+      network/      the console's update server, and its answer to GTIN
+      crypto/       every cipher and key derivation
+    tests/xebuild/  the tests; e2e/ holds the ones against the original
+    docker/         the container the original runs in for the e2e tests
 
-Run the tests with `python3 -m unittest discover -s tests -t .`, after either
-`pip install -e .` or with `src` on `PYTHONPATH`.
+Python 3.14, nothing beyond the standard library.
+
+## Running it
+
+    pip install -e .
+    xebuild -t glitch2 -c trinity -d data -f 17559 out.bin
+    xebuild extract nanddump.bin
+    xebuild client -i -ip 192.168.1.10
+    xebuild update -ip 192.168.1.10 -f 17559
+    xebuild ini su20076000_00000000
+
+`python -m xebuild.cli` does the same without installing; `-?` (or `-h`) after a mode
+prints its usage. A Windows `xeBuild.exe` is built on demand by the GitHub Actions
+workflow `ci-build-xebuild.yml`; like the original, it takes every relative name
+against the directory it is in, which is how J-Runner starts it.
+
+## Tests
+
+The fast suite needs nothing:
+
+    python -m unittest discover -s tests -t .
+
+The end-to-end suite holds this tool against the original:
+
+    pytest tests/xebuild/e2e -n auto --dist load
+
+It needs `pyproject.toml`'s `test` dependency group, podman or docker on Linux (or
+Windows) to run the original, and the network the first time. Everything it reads is made before the tests start by
+`tests/xebuild/e2e/bootstrap`: J-Runner's release and the 17559 system update are
+downloaded and checked, and every recording is made again by the original, its clock
+frozen. The console is the dump `XEBUILD_E2E_DUMP` names under the key
+`XEBUILD_E2E_CPUKEY` (and `XEBUILD_E2E_BOARD` where its SMC does not say enough); with
+none, a donor console the original builds from J-Runner's donor files. What is made goes
+under `XEBUILD_E2E_INPUT`, the tests' scratch under `XEBUILD_E2E_OUTPUT` --
+`/dev/shm/new-material/input` and `.../output` by default -- and is made again only when
+what it came from changes. `python -m tests.xebuild.e2e.bootstrap` makes it without
+running the tests and prints the variables.
 
 ## Where each file comes from
 
@@ -25,7 +80,7 @@ directory is the one `-d` names, `data/` when it is not given; the dump is the
 | `crl.bin`, `dae.bin` | the per build directory; the release's system update container (not under `nosusecurity`); the dump (not under `nosecurity`) |
 | `extended.bin`, `secdata.bin`, `fcrt.bin` | the per build directory; the dump (not under `nosecurity`). `extended.bin` and `secdata.bin` found nowhere are made up clean |
 | `MobileB.dat` to `MobileJ.dat` | the per build directory; the dump (not under `nomobile`) |
-| `Statistics.settings`, `Manufacturing.data` | the per build directory; the dump |
+| `Statistics.settings`, `Manufacturing.data` | the per build directory; the dump, unless its block there is erased (all 0xFF) |
 | `fuses.bin` (JTAG, glitch2m) | the per build directory, taken only at 0x60 bytes; the lines built into the program |
 | the CPU key | `-p`; `cpukey.txt` in the per build directory; `cpukey` in `options.ini`. A key file that fails its check is said and passed over |
 | the 1BL key | `-b`; `1blkey.txt` in the directory the tool runs in (in ini mode its only source); `1blkey` in `options.ini`. A key file that fails its check is said and passed over |
