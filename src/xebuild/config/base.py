@@ -135,14 +135,14 @@ class BaseConfig(dict):
         `OptionsConfig.macid`."""
         if isinstance(given, (bytes, bytearray)):
             if len(given) != length:
-                raise ValueError("%s is %d bytes, not %d" % (what, length, len(given)))
+                raise ValueError("%s is %d bytes, not %d" % (what, len(given), length))
             return bytes(given)
         text = str(given).strip()
         for one in (":", "-", " "):
             text = text.replace(one, "")
         if len(text) != length * 2:
             raise ValueError(
-                "%s is %d bytes, not %d" % (what, length, len(text) // 2)
+                "%s is %d bytes, not %d" % (what, len(text) // 2, length)
             )
         try:
             return bytes.fromhex(text)
