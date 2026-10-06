@@ -15,10 +15,12 @@ twenty-one. The thirty-one `-o` settings come from a third table and are declare
 
 import logging
 
+from ..files import beside
 from .. import boards, imagetypes
 from .options import OptionsConfig
 from .onebl import OneBlKeyConfig
 from .release import ReleaseConfig
+from ..network.info import PUBLIC_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,7 @@ class BuildConfig(ReleaseConfig, OptionsConfig, OneBlKeyConfig):
         self.raw_patches = ()
         self.no_random = False
         self.out = None
+        self.one_bl_pub = None
         # A key the command line does not give comes from its file before the ini, as
         # the original's loader takes it (0x4193F0): cpukey.txt in the per build
         # directory, 1blkey.txt where the tool runs, its name built with no directory
@@ -64,6 +67,8 @@ class BuildConfig(ReleaseConfig, OptionsConfig, OneBlKeyConfig):
             else:
                 logger.warning("%s read from %s", label, found[0])
                 settings[field] = found[1]
+        if settings.get("one_bl_pub") is None:
+            settings["one_bl_pub"] = self.one_bl_pub_in(".")
         if ini is not None:
             logger.debug("read %s", ini)
             found = self.settings_in_ini(ini)
@@ -182,6 +187,50 @@ class BuildConfig(ReleaseConfig, OptionsConfig, OneBlKeyConfig):
     @cpu_key.setter
     def cpu_key(self, key):
         self["cpu_key"] = None if key is None else self.check_hex("cpu_key", key, 16)
+
+    @property
+    def one_bl_pub(self) -> bytes | None:
+        """The 1BL RSA public key, the 0x110 bytes of `1BL_pub.bin`, that a release's
+        CB, CB_A and SB are checked under as they are read; None where there is none,
+        and then they are not checked."""
+        return self["one_bl_pub"]
+
+    @one_bl_pub.setter
+    def one_bl_pub(self, key):
+        """A key whose bytes do not sum to what the original calls good (0x406CFC) is
+        refused: it is not the 1BL key, and a stage checked under it would fail."""
+        if key is None:
+            self["one_bl_pub"] = None
+            return
+        _name, _file, _at, wanted = PUBLIC_KEYS[0]
+        given = self.check_hex("one_bl_pub", key, 0x110)
+        if sum(given) != wanted:
+            raise ValueError("1BL RSA pub key sum %#x is not expected sum of %#x"
+                             % (sum(given), wanted))
+        self["one_bl_pub"] = given
+
+    @staticmethod
+    def one_bl_pub_in(where: str) -> bytes | None:
+        """`1BL_pub.bin` from `where`, as the original takes it from where it runs
+        (0x4190FA), or None. A file whose sum is wrong is said and passed over; one of
+        any size but 0x110 is passed over with nothing said. Measured on both, and on
+        none: each builds as with no key, and checks no stage."""
+        _name, name, _at, wanted = PUBLIC_KEYS[0]
+        path = beside(where, name)
+        if path is None:
+            logger.debug("1BL RSA pub key (%s) not available, signature checks will "
+                         "not be performed", name)
+            return None
+        with open(path, "rb") as handle:
+            key = handle.read()
+        if len(key) != 0x110:
+            return None
+        if sum(key) != wanted:
+            logger.warning("loaded 1BL RSA pub key from file %s but sum %#x is not "
+                           "expected sum of %#x, discarding", path, sum(key), wanted)
+            return None
+        logger.debug("loaded 1BL RSA pub key from file %s", path)
+        return key
 
     @property
     def per_build(self) -> str | None:

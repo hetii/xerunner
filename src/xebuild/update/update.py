@@ -260,12 +260,18 @@ def run_update(config, port: int = PORT, when: int | None = None) -> str | None:
         board, hack = info.image_type
         kind = {"JTAG": "jtag", "Glitch2": "glitch2", "Glitch": "glitch",
                 "Glitch-FAT": "glitch", "Glitch2M": "glitch2m", "": "retail"}[hack]
+        # The stages are checked under the console's own 1BL public key, where it is
+        # good: "1BL RSA pub : good", then "loaded cb_5770.bin, signature check
+        # passed!" in a recording with no 1BL_pub.bin anywhere.
+        _name, _file, at, _wanted = PUBLIC_KEYS[0]
         settings = BuildConfig(
             image_type=kind, console=board.lower(), no_random=True, cfldv=info.ldv,
             cpu_key=info.cpu_key.hex(), one_bl_key=info.one_bl_key.hex(),
+            one_bl_pub=info.public_key(at) if info.key_checks()["1BL"] else None,
             firmware_ext=config.firmware_ext, section_ext=config.section_ext,
             append=config.append)
-        release = Release(config.data or "data", one_bl_key=settings.one_bl_key)
+        release = Release(config.data or "data", one_bl_key=settings.one_bl_key,
+                          one_bl_pub=settings.one_bl_pub)
         build = BuildUpdate(settings, None, release)
         material = collect(server, info, build.recipe,
                            os.path.dirname(os.path.abspath(config.data or "data")),

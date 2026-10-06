@@ -19,6 +19,7 @@ from xebuild.boards import for_name
 from xebuild.imagetypes import for_name as type_for
 from xebuild.release.recipe import Listed, canonical
 from xebuild.release import Container, Patches, Recipe, Release
+from .test_signature import AStageUnderAMadeUpKey
 
 A_LIST = """\
 [version]
@@ -250,6 +251,59 @@ class TheChecksABootloaderPasses(unittest.TestCase):
         body = TheFormAChecksumCovers().a_stage("CE", 0x100)
         with self.assertRaisesRegex(ValueError, "BL magic check CE for CD"):
             Release._checked(self.listed("cd_1.bin", body), body)
+
+
+class TheSignatureABootloaderCarries(unittest.TestCase):
+    """`Release._signature`: a CB, CB_A or SB checked under the 1BL public key as it is
+    read (0x42AA53), on a stage signed under a key made up for it."""
+
+    @classmethod
+    def setUpClass(cls):
+        AStageUnderAMadeUpKey.setUpClass()
+        cls.stage, cls.key = AStageUnderAMadeUpKey.stage, AStageUnderAMadeUpKey.key
+        cls.where = tempfile.mkdtemp()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.where, ignore_errors=True)
+
+    def release(self, key: bytes | None) -> Release:
+        return Release(self.where, one_bl_pub=key)
+
+    def spoilt(self) -> bytes:
+        return self.stage[:0x80] + bytes([self.stage[0x80] ^ 1]) + self.stage[0x81:]
+
+    def test_a_good_one_goes_through_and_is_said(self):
+        for name in ("cb_1.bin", "cba_1.bin", "SB_1.bin"):
+            with self.subTest(name), self.assertLogs("xebuild", "DEBUG") as said:
+                body = self.release(self.key)._signature(Listed(name, "0"), self.stage)
+                self.assertEqual(body, self.stage)
+                self.assertIn("loaded %s, signature check passed!" % name,
+                              "\n".join(said.output))
+
+    def test_a_bad_one_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "loaded cba_1.bin, but signature "
+                                    "check failed! could not read cba_1.bin"):
+            self.release(self.key)._signature(Listed("cba_1.bin", "0"), self.spoilt())
+
+    def test_with_no_key_it_is_taken_unchecked_and_said(self):
+        with self.assertLogs("xebuild", "DEBUG") as said:
+            body = self.release(None)._signature(Listed("cba_1.bin", "0"),
+                                                 self.spoilt())
+        self.assertEqual(body, self.spoilt())
+        self.assertIn("loaded cba_1.bin, could not check signature rsa key not "
+                      "present!", "\n".join(said.output))
+
+    def test_a_cb_b_cd_or_ce_is_not_checked(self):
+        for name in ("cbb_1.bin", "cd_1.bin", "ce_1.bin"):
+            with self.subTest(name), self.assertNoLogs("xebuild", "DEBUG"):
+                self.release(self.key)._signature(Listed(name, "0"), self.spoilt())
+
+    def test_it_is_said_once_a_file(self):
+        release = self.release(self.key)
+        release._signature(Listed("cba_1.bin", "0"), self.stage)
+        with self.assertNoLogs("xebuild", "DEBUG"):
+            release._signature(Listed("cba_1.bin", "0"), self.stage)
 
 
 class APatchFile(unittest.TestCase):

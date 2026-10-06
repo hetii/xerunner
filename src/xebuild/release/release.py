@@ -16,6 +16,7 @@ from ..files import beside
 from .patches import Patches
 from .recipe import Recipe, canonical
 from .container import Container, intact
+from ..crypto.signature import verify_stage
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +24,16 @@ logger = logging.getLogger(__name__)
 class Release:
     """One release directory, and `common/` beside it."""
 
-    def __init__(self, where: str, common: str = "", one_bl_key: bytes | None = None):
+    def __init__(self, where: str, common: str = "", one_bl_key: bytes | None = None,
+                 one_bl_pub: bytes | None = None):
         if not os.path.isdir(where):
             raise ValueError("%s is not a directory" % where)
         self.where = where
         # What the container's CF opens under; with none, its CF and CG stay sealed.
         self.one_bl_key = one_bl_key
+        # What a CB, CB_A and SB are checked under; with none, they are not checked.
+        self.one_bl_pub = one_bl_pub
+        self._signed = set()
         self._container = False
         self._files = {}
         self.common = common or os.path.join(os.path.dirname(where.rstrip("/\\")),
@@ -76,7 +81,7 @@ class Release:
         for where in (self.common, self.where):
             path = beside(where, listed.plain)
             if path:
-                return self._checked(listed, self._read(path))
+                return self._signature(listed, self._checked(listed, self._read(path)))
         if listed.kind in ("CF", "CG") and self.container is not None:
             if self.one_bl_key is None:
                 raise ValueError("you need to specify 1BL key! The update's CF opens "
@@ -119,6 +124,29 @@ class Release:
                              "could not read %s"
                              % (binascii.crc32(canonical(body, listed.kind))
                                 & 0xFFFFFFFF, listed.crc or 0, listed.plain))
+        return body
+
+    def _signature(self, listed, body: bytes) -> bytes:
+        """A CB, CB_A or SB once its signature passes under the 1BL public key, as the
+        original checks it on loading (0x42AA53) -- the three slots it checks, and no
+        CB_B, CD or CE. With no key it is taken unchecked.
+
+        A failed one is refused: "loaded cba_9188.bin, but signature check failed!",
+        then "could not read cba_9188.bin" and "critical bootloader files are missing",
+        measured with one byte of the signature changed and the list's checksum put
+        right for it. Said once a file, however often a build asks for it.
+        """
+        if listed.kind not in ("CB", "CBA", "SB") or listed.plain in self._signed:
+            return body
+        if self.one_bl_pub is None:
+            logger.debug("loaded %s, could not check signature rsa key not present!",
+                         listed.plain)
+        elif verify_stage(body, self.one_bl_pub):
+            logger.debug("loaded %s, signature check passed!", listed.plain)
+        else:
+            raise ValueError("loaded %s, but signature check failed! could not read %s"
+                             % (listed.plain, listed.plain))
+        self._signed.add(listed.plain)
         return body
 
     def patches(self, image_type, board, ext: str = "") -> Patches | None:

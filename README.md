@@ -84,6 +84,7 @@ directory is the one `-d` names, `data/` when it is not given; the dump is the
 | `fuses.bin` (JTAG, glitch2m) | the per build directory, taken only at 0x60 bytes; the lines built into the program |
 | the CPU key | `-p`; `cpukey.txt` in the per build directory; `cpukey` in `options.ini`. A key file that fails its check is said and passed over |
 | the 1BL key | `-b`; `1blkey.txt` in the directory the tool runs in (in ini mode its only source); `1blkey` in `options.ini`. A key file that fails its check is said and passed over |
+| the 1BL RSA public key | `1BL_pub.bin` in the directory the tool runs in; in update mode, the console's own. With none, or one whose sum is wrong (said and passed over), no bootloader's signature is checked and the build goes on; with one, a CB, CB_A or SB whose signature fails is refused |
 | the console | `-c`; a file named after it in the per build directory (`trinity`, `trinity.txt`, ...); `type` in `options.ini` |
 | each option | the command line; `options.ini` in the per build directory |
 
@@ -127,6 +128,11 @@ the code makes the decision:
   0x202 and 0x303 whose sequence byte happens to match. Here the block's data is kept,
   with the original's warning given for exactly the blocks it would have dropped. None of
   the 260 dumps held here has such a block. -- `image/order.py`, `mixed_controller`
+- **`PIRS_pub.bin` and `MAST_pub.bin` are not read.** The original checks the
+  keyvault's and fcrt.bin's signatures with them and only says what it found: a bad one
+  leaves the image as it was, measured. Here neither is checked, and nothing is said.
+  The bootloaders' check under `1BL_pub.bin` is made as the original makes it.
+  -- `config/build.py`, `BuildConfig.one_bl_pub_in`
 - **`-o gpufan=0` leaves the settings block passing its own checksum.** The original
   writes the value and does not recompute the block's head, as it does for `cpufan=0`,
   so its block fails its own sum. -- `image/settings.py`, `set_fan`

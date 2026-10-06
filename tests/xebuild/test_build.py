@@ -174,6 +174,54 @@ class TheTwoKeys(unittest.TestCase):
         self.assertEqual(made.one_bl_key.hex().upper(), self.ONE_BL)
 
 
+class The1BlPublicKey(unittest.TestCase):
+    """`1BL_pub.bin` where the tool runs, as the original takes it (0x4190FA). The key
+    here is made up to the sum the original calls good: the sum is all it checks."""
+
+    GOOD = bytes([115] * 0x10F + [10])
+
+    def found(self, files):
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(a_directory(self, files))
+        return BuildConfig(image_type="retail", per_build=a_directory(self))
+
+    def test_it_is_taken(self):
+        with self.assertLogs("xebuild", "DEBUG") as said:
+            self.assertEqual(self.found({"1BL_pub.bin": self.GOOD}).one_bl_pub,
+                             self.GOOD)
+        self.assertIn("loaded 1BL RSA pub key from file ./1BL_pub.bin",
+                      "\n".join(said.output))
+
+    def test_with_none_there_is_none_and_it_is_said(self):
+        with self.assertLogs("xebuild", "DEBUG") as said:
+            self.assertIsNone(self.found({}).one_bl_pub)
+        self.assertIn("1BL RSA pub key (1BL_pub.bin) not available, signature checks "
+                      "will not be performed", "\n".join(said.output))
+
+    def test_a_wrong_sum_is_said_and_passed_over(self):
+        with self.assertLogs("xebuild", "WARNING") as said:
+            self.assertIsNone(self.found({"1BL_pub.bin": bytes(0x110)}).one_bl_pub)
+        self.assertIn("but sum 0x0 is not expected sum of 0x79c7, discarding",
+                      "\n".join(said.output))
+
+    def test_a_wrong_size_is_passed_over_with_nothing_said(self):
+        for body in (self.GOOD[:0x100], self.GOOD + bytes(16)):
+            with self.subTest(len(body)), self.assertNoLogs("xebuild", "DEBUG"):
+                self.assertIsNone(self.found({"1BL_pub.bin": body}).one_bl_pub)
+
+    def test_one_given_beats_the_file(self):
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(a_directory(self, {"1BL_pub.bin": bytes(0x110)}))
+        self.assertEqual(BuildConfig(image_type="retail", one_bl_pub=self.GOOD)
+                         .one_bl_pub, self.GOOD)
+
+    def test_one_given_with_a_wrong_sum_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "not expected sum of 0x79c7"):
+            BuildConfig(image_type="retail", one_bl_pub=bytes(0x110))
+
+
 class WhichBlockEachFileGets(unittest.TestCase):
     """Packing, and the four things a block can say when it holds no file.
 

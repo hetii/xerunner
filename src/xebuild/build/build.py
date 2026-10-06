@@ -1817,7 +1817,8 @@ def build_image(config, when: int | None = None) -> str:
     logger.info(config.image_type.text)
     if config.per_build is None:
         logger.warning("you did not specify per build directory! Using ./data/")
-    release = Release(config.data or "data", one_bl_key=config.one_bl_key)
+    release = Release(config.data or "data", one_bl_key=config.one_bl_key,
+                      one_bl_pub=config.one_bl_pub)
     one = Build(config, Material(config.per_build or "data"), release)
     image = one.image(when)
     if config.out:
